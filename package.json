@@ -1,0 +1,14 @@
+{
+  "name": "plc-commissioning-hub",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-hosted PLC commissioning status application",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  }
+}
