@@ -3,33 +3,122 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { DatabaseSync } from 'node:sqlite';
 import { openDatabase, verifyPassword } from '../database.js';
 
-test('V2 seeds demo, accounts, config and supports all modules', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'plc-hub-v2-'));
+function temporaryDatabase() {
+  const directory = mkdtempSync(join(tmpdir(), 'plc-hub-v3-'));
   process.env.APP_USER = 'admin';
   process.env.APP_PASSWORD = 'test-password';
-  const repository = openDatabase(join(directory, 'test.db'));
+  return { directory, path: join(directory, 'test.db') };
+}
+
+test('V3 supports overview, ordering, assignment, mentions, audit and deletion rules', () => {
+  const temporary = temporaryDatabase();
+  const repository = openDatabase(temporary.path);
   try {
-    const admin = repository.authenticate('admin');
-    assert.ok(verifyPassword('test-password', admin.password_hash));
-    assert.deepEqual(repository.controllers().map(x => x.code), ['HB522', 'UB512']);
-    assert.equal(repository.config().settings.default_reminder_days, '14');
-    assert.ok(repository.config().categories.some(x => x.name === 'Hardware'));
-    const user = repository.saveUser(null, { username: 'worker', display_name: 'PLC Worker', password: 'secret123', role: 'user' });
-    assert.equal(user.role, 'user');
-    const status = repository.saveStatus(null, { controller: 'HB522', station: 'ST99', function_detail: 'Test API', category: 'Hardware', subcategory: 'Device green' }, admin);
-    assert.equal(repository.saveStatus(status.id, { status: 'Done' }, admin).status, 'Done');
-    const task = repository.saveTask(null, { controller: 'HB522', title: 'Task API', owner: 'PLC Worker', category: 'Hardware', linked_entity_type: 'status', linked_entity_id: status.id, checklist: [{ text: 'Step one', done: true }] }, admin);
-    assert.equal(repository.tasks('HB522').find(x => x.id === task.id).checklist.length, 1);
-    const point = repository.savePoint(null, { controller: 'UB512', title: 'Point API', waiting_for: 'Robot', linked_entity_type: 'status', linked_entity_id: status.id }, admin);
-    assert.ok(point.reminder_date);
-    const note = repository.saveNote(null, { controller: 'HB522', content: 'Long shift note', shift: 'Noc', linked_task_id: task.id }, admin);
-    assert.equal(repository.notes('HB522').find(x => x.id === note.id).author, 'Administrator');
-    const goal = repository.saveGoal(null, { controller: 'HB522', title: 'Goal API', links: [{ entity_type: 'status', entity_id: status.id }, { entity_type: 'task', entity_id: task.id }, { entity_type: 'point', entity_id: point.id }] }, admin);
-    assert.equal(repository.goals('HB522').find(x => x.id === goal.id).links.length, 3);
+    const account = repository.authenticate('admin');
+    const admin = repository.me(account.id);
+    assert.ok(verifyPassword('test-password', account.password_hash));
+    assert.equal(repository.overview().controllers.length, 2);
+
+    const workerRecord = repository.saveUser(null, { username: 'worker', display_name: 'PLC Worker', password: 'secret123', role: 'user' });
+    const worker = repository.me(workerRecord.id);
+    const moderatorRecord = repository.saveUser(null, { username: 'moderator', display_name: 'Moderator', password: 'secret123', role: 'moderator' });
+    assert.equal(moderatorRecord.role, 'moderator');
+
+    const controllerIds = repository.controllers().map(item => item.id).reverse();
+    repository.reorder('controllers', controllerIds);
+    assert.deepEqual(repository.controllers().map(item => item.id), controllerIds);
+
+    const category = repository.saveCategory('task', null, { name: 'Worker category' });
+    const subcategory = repository.saveSubcategory('task', null, { category_id: category.id, name: 'Worker subcategory' });
+    assert.equal(repository.config().task_categories.find(item => item.id === category.id).subcategories[0].id, subcategory.id);
+
+    const task = repository.saveTask(null, {
+      controller: 'HB522', title: 'Worker task', owner_user_id: worker.id, category: category.name,
+      subcategory: subcategory.name, due_date: '2030-01-01', checklist: [{ text: 'Step', done: false }]
+    }, worker);
+    assert.equal(repository.tasks('all', worker).find(item => item.id === task.id).owner_name, 'PLC Worker');
+    assert.equal(repository.audit('task', task.id)[0].action, 'create');
+
+    repository.saveTask(task.id, { ...task, controller: 'UB512', title: 'Changed by admin', checklist: task.checklist }, admin);
+    assert.equal(repository.tasks('all', worker).find(item => item.id === task.id).controller, 'UB512');
+    assert.throws(() => repository.deleteTask(task.id, worker), /Nie możesz usunąć/);
+
+    const point = repository.savePoint(null, {
+      controller: 'HB522', title: 'Mention worker', mentioned_user_ids: [worker.id], owner_user_id: admin.id
+    }, admin);
+    const note = repository.saveNote(null, {
+      controller: 'HB522', content: 'Worker mentioned in shift note', shift: 'Noc', mentioned_user_ids: [worker.id], linked_point_id: point.id
+    }, worker);
+    const summary = repository.mySummary(worker);
+    assert.ok(summary.points.some(item => item.id === point.id));
+    assert.ok(summary.notes.some(item => item.id === note.id));
+    repository.deleteNote(note.id, worker);
+    assert.equal(repository.audit('note', note.id)[0].action, 'delete');
+
+    const ownTask = repository.saveTask(null, { controller: 'HB522', title: 'Untouched own task' }, worker);
+    repository.deleteTask(ownTask.id, worker);
+    assert.equal(repository.audit('task', ownTask.id)[0].action, 'delete');
   } finally {
     repository.close();
-    rmSync(directory, { recursive: true, force: true });
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
+test('V2 database is migrated to V3 without losing records', () => {
+  const temporary = temporaryDatabase();
+  const legacy = new DatabaseSync(temporary.path);
+  legacy.exec(`
+    CREATE TABLE app_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL) STRICT;
+    INSERT INTO app_meta VALUES('schema_version','2');
+    CREATE TABLE users(id INTEGER PRIMARY KEY,username TEXT NOT NULL UNIQUE,display_name TEXT NOT NULL,password_hash TEXT NOT NULL,role TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP) STRICT;
+    CREATE TABLE controllers(id INTEGER PRIMARY KEY,code TEXT NOT NULL UNIQUE,area TEXT NOT NULL DEFAULT '',description TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP) STRICT;
+    CREATE TABLE status_items(id INTEGER PRIMARY KEY,controller_id INTEGER NOT NULL,test_id TEXT NOT NULL UNIQUE,station TEXT NOT NULL,function_detail TEXT NOT NULL,category TEXT NOT NULL DEFAULT '',subcategory TEXT NOT NULL DEFAULT '',milestone TEXT NOT NULL DEFAULT '',criticality TEXT NOT NULL DEFAULT 'Medium',responsible TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'Not started',checked_by TEXT NOT NULL DEFAULT '',checked_on TEXT,environment TEXT NOT NULL DEFAULT '',current_note TEXT NOT NULL DEFAULT '',evidence_link TEXT NOT NULL DEFAULT '',created_by INTEGER,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP) STRICT;
+    CREATE TABLE tasks(id INTEGER PRIMARY KEY,controller_id INTEGER NOT NULL,title TEXT NOT NULL,description TEXT NOT NULL DEFAULT '',station TEXT NOT NULL DEFAULT '',priority TEXT NOT NULL DEFAULT 'Medium',owner TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'To do',due_date TEXT,linked_test_id TEXT,category TEXT NOT NULL DEFAULT '',subcategory TEXT NOT NULL DEFAULT '',start_date TEXT,info_link TEXT NOT NULL DEFAULT '',created_by INTEGER,linked_entity_type TEXT NOT NULL DEFAULT 'status',linked_entity_id INTEGER,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP) STRICT;
+    CREATE TABLE open_points(id INTEGER PRIMARY KEY,controller_id INTEGER NOT NULL,issue_id TEXT NOT NULL UNIQUE,title TEXT NOT NULL,description TEXT NOT NULL DEFAULT '',impact TEXT NOT NULL DEFAULT '',priority TEXT NOT NULL DEFAULT 'Medium',owner TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'Open',waiting_for TEXT NOT NULL DEFAULT '',next_action TEXT NOT NULL DEFAULT '',due_date TEXT,linked_test_id TEXT,category TEXT NOT NULL DEFAULT '',subcategory TEXT NOT NULL DEFAULT '',start_date TEXT,reminder_date TEXT,info_link TEXT NOT NULL DEFAULT '',created_by INTEGER,linked_entity_type TEXT NOT NULL DEFAULT 'status',linked_entity_id INTEGER,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP) STRICT;
+    CREATE TABLE daily_notes(id INTEGER PRIMARY KEY,controller_id INTEGER,note_date TEXT NOT NULL,shift TEXT NOT NULL,author TEXT NOT NULL,type TEXT NOT NULL,content TEXT NOT NULL,created_by INTEGER,linked_task_id INTEGER,linked_status_id INTEGER,linked_point_id INTEGER,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP) STRICT;
+    CREATE TABLE categories(id INTEGER PRIMARY KEY,name TEXT NOT NULL UNIQUE,sort_order INTEGER NOT NULL DEFAULT 0,active INTEGER NOT NULL DEFAULT 1) STRICT;
+    CREATE TABLE subcategories(id INTEGER PRIMARY KEY,category_id INTEGER NOT NULL,name TEXT NOT NULL,sort_order INTEGER NOT NULL DEFAULT 0,active INTEGER NOT NULL DEFAULT 1) STRICT;
+    CREATE TABLE options(id INTEGER PRIMARY KEY,kind TEXT NOT NULL,value TEXT NOT NULL,sort_order INTEGER NOT NULL DEFAULT 0,active INTEGER NOT NULL DEFAULT 1,UNIQUE(kind,value)) STRICT;
+    CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT NOT NULL) STRICT;
+    CREATE TABLE task_checklist(id INTEGER PRIMARY KEY,task_id INTEGER NOT NULL,text TEXT NOT NULL,done INTEGER NOT NULL DEFAULT 0,sort_order INTEGER NOT NULL DEFAULT 0) STRICT;
+    CREATE TABLE goals(id INTEGER PRIMARY KEY,controller_id INTEGER,title TEXT NOT NULL,description TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'Open',due_date TEXT,created_by INTEGER,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP) STRICT;
+    CREATE TABLE goal_links(id INTEGER PRIMARY KEY,goal_id INTEGER NOT NULL,entity_type TEXT NOT NULL,entity_id INTEGER NOT NULL) STRICT;
+    INSERT INTO users(id,username,display_name,password_hash,role) VALUES(1,'legacy','Legacy Admin','salt:00','admin');
+    INSERT INTO controllers(id,code,area,description) VALUES(1,'LEGACY','HB','Legacy controller');
+    INSERT INTO status_items(id,controller_id,test_id,station,function_detail,created_by) VALUES(1,1,'LEG-001','ST01','Legacy test',1);
+    INSERT INTO tasks(id,controller_id,title,category,subcategory,created_by) VALUES(1,1,'Legacy task','Legacy category','Legacy subcategory',1);
+  `);
+  legacy.close();
+
+  const repository = openDatabase(temporary.path);
+  try {
+    const legacyAdmin = repository.me(1);
+    assert.equal(repository.controllers()[0].code, 'LEGACY');
+    assert.equal(repository.status('all', legacyAdmin)[0].test_id, 'LEG-001');
+    const migratedCategory = repository.config().task_categories.find(item => item.name === 'Legacy category');
+    assert.equal(migratedCategory.subcategories[0].name, 'Legacy subcategory');
+    assert.equal(repository.audit('status', 1)[0].action, 'migrate');
+    assert.equal(repository.config().settings.reminder_warning_days, '7');
+  } finally {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
+test('configured controller order survives a database restart', () => {
+  const temporary = temporaryDatabase();
+  let repository = openDatabase(temporary.path);
+  try {
+    const reversed = repository.controllers().map(item => item.id).reverse();
+    repository.reorder('controllers', reversed);
+    repository.close();
+    repository = openDatabase(temporary.path);
+    assert.deepEqual(repository.controllers().map(item => item.id), reversed);
+  } finally {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
   }
 });

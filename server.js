@@ -1,33 +1,238 @@
 import { createServer } from 'node:http';
-import { createReadStream,existsSync,statSync } from 'node:fs';
-import { dirname,extname,join,normalize } from 'node:path';
+import { createReadStream, existsSync, statSync } from 'node:fs';
+import { dirname, extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { openDatabase,verifyPassword } from './database.js';
-const root=dirname(fileURLToPath(import.meta.url)),pub=join(root,'public'),db=openDatabase(process.env.DB_PATH||join(root,'data','plc-status.db')),port=Number(process.env.PORT||3000),sessions=new Map();
-const mime={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.svg':'image/svg+xml'};
-function json(res,code,body,headers={}){res.writeHead(code,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff',...headers});res.end(JSON.stringify(body))}
-async function body(req){let b='';for await(const c of req){b+=c;if(b.length>2e6)throw Object.assign(new Error('Za duże żądanie'),{statusCode:413})}try{return b?JSON.parse(b):{}}catch{throw Object.assign(new Error('Nieprawidłowy JSON'),{statusCode:400})}}
-function cookie(req){return Object.fromEntries((req.headers.cookie||'').split(';').map(x=>x.trim().split('=').map(decodeURIComponent)).filter(x=>x.length===2))}
-function sessionCookie(req,value,maxAge){const https=req.socket.encrypted||String(req.headers['x-forwarded-proto']||'').split(',')[0].trim()==='https';return `plc_session=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${https?'; Secure':''}`}
-function user(req){const s=sessions.get(cookie(req).plc_session);if(!s||s.expires<Date.now()){if(s)sessions.delete(cookie(req).plc_session);return null}return db.me(s.userId)}
-const can=(u,role)=>role==='user'?!!u:role==='moderator'?['admin','moderator'].includes(u?.role):u?.role==='admin';
-function need(u,role='user'){if(!can(u,role))throw Object.assign(new Error(u?'Brak uprawnień':'Zaloguj się'),{statusCode:u?403:401})}
-const id=(path,prefix)=>{const m=path.match(new RegExp(`^${prefix}/(\\d+)$`));return m?Number(m[1]):null};
-async function api(req,res,url){const method=req.method||'GET',p=url.pathname,u=user(req),controller=url.searchParams.get('controller')||'all';
- if(method==='GET'&&p==='/api/health')return json(res,200,{status:'ok'});
- if(method==='POST'&&p==='/api/login'){const x=await body(req),found=db.authenticate(x.username);if(!found||!verifyPassword(x.password||'',found.password_hash))return json(res,401,{error:'Nieprawidłowy login lub hasło'});const token=randomBytes(32).toString('hex');sessions.set(token,{userId:found.id,expires:Date.now()+12*3600e3});return json(res,200,db.me(found.id),{'Set-Cookie':sessionCookie(req,token,43200)})}
- if(method==='POST'&&p==='/api/logout'){const t=cookie(req).plc_session;sessions.delete(t);return json(res,200,{ok:true},{'Set-Cookie':sessionCookie(req,'',0)})}
- need(u); if(method==='GET'&&p==='/api/me')return json(res,200,u);if(method==='GET'&&p==='/api/controllers')return json(res,200,db.controllers());if(method==='GET'&&p==='/api/config')return json(res,200,db.config());if(method==='GET'&&p==='/api/dashboard')return json(res,200,db.dashboard(controller));if(method==='GET'&&p==='/api/users')return json(res,200,db.users());
- const resources=[['/api/status',()=>db.status(controller),(i,x)=>db.saveStatus(i,x,u),i=>db.deleteStatus(i)],['/api/tasks',()=>db.tasks(controller),(i,x)=>db.saveTask(i,x,u),i=>db.deleteTask(i)],['/api/open-points',()=>db.points(controller),(i,x)=>db.savePoint(i,x,u),i=>db.deletePoint(i)],['/api/daily-notes',()=>db.notes(controller,url.searchParams.get('from'),url.searchParams.get('to')),(i,x)=>db.saveNote(i,x,u),i=>db.deleteNote(i)],['/api/goals',()=>db.goals(controller),(i,x)=>db.saveGoal(i,x,u),i=>db.deleteGoal(i)]];
- for(const [path,list,save,remove] of resources){if(p===path){if(method==='GET')return json(res,200,list());if(method==='POST')return json(res,201,save(null,await body(req)))}const n=id(p,path);if(n!==null){if(method==='PATCH')return json(res,200,save(n,await body(req)));if(method==='DELETE'){need(u,'admin');remove(n);res.writeHead(204);return res.end()}}}
- if(p==='/api/users'){need(u,'admin');if(method==='POST')return json(res,201,db.saveUser(null,await body(req)))}let n=id(p,'/api/users');if(n!==null){need(u,'admin');if(method==='PATCH')return json(res,200,db.saveUser(n,await body(req)));if(method==='DELETE'){if(n===u.id)throw Object.assign(new Error('Nie możesz usunąć własnego konta'),{statusCode:400});db.removeUser(n);res.writeHead(204);return res.end()}}
- if(p==='/api/controllers'){need(u,'admin');if(method==='POST')return json(res,201,db.saveController(null,await body(req)))}n=id(p,'/api/controllers');if(n!==null){need(u,'admin');if(method==='PATCH')return json(res,200,db.saveController(n,await body(req)));if(method==='DELETE'){db.removeController(n);res.writeHead(204);return res.end()}}
- const cfg=[['/api/categories','category',db.saveCategory],['/api/subcategories','subcategory',db.saveSubcategory],['/api/options','option',db.saveOption]];for(const [path,type,save] of cfg){if(p===path&&method==='POST'){need(u,'moderator');return json(res,201,save(null,await body(req)))}n=id(p,path);if(n!==null){need(u,'moderator');if(method==='PATCH')return json(res,200,save(n,await body(req)));if(method==='DELETE'){need(u,'admin');db.deleteConfig(type,n);res.writeHead(204);return res.end()}}}
- if(method==='PATCH'&&p.startsWith('/api/settings/')){need(u,'admin');const x=await body(req);db.saveSetting(decodeURIComponent(p.slice(14)),x.value);return json(res,200,{ok:true})}
- return json(res,404,{error:'Nie znaleziono endpointu'})
+import { openDatabase, verifyPassword } from './database.js';
+
+const moduleDir = dirname(fileURLToPath(import.meta.url));
+const publicDir = join(moduleDir, 'public');
+const databasePath = process.env.DB_PATH || join(moduleDir, 'data', 'plc-status.db');
+const port = Number(process.env.PORT || 3000);
+const repository = openDatabase(databasePath);
+const sessions = new Map();
+
+const mimeTypes = {
+  '.html': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png'
+};
+
+function json(response, statusCode, payload, headers = {}) {
+  response.writeHead(statusCode, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    ...headers
+  });
+  response.end(JSON.stringify(payload));
 }
-function staticFile(res,path){const requested=path==='/'?'/index.html':path,n=normalize(requested).replace(/^(\.\.[/\\])+/,'');const f=join(pub,n);if(!f.startsWith(pub)||!existsSync(f)||!statSync(f).isFile())return json(res,404,{error:'Nie znaleziono pliku'});res.writeHead(200,{'Content-Type':mime[extname(f)]||'application/octet-stream','Cache-Control':extname(f)==='.html'?'no-cache':'public,max-age=3600','Content-Security-Policy':"default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'self'; form-action 'self'"});createReadStream(f).pipe(res)}
-export const server=createServer(async(req,res)=>{try{const url=new URL(req.url||'/',`http://${req.headers.host||'localhost'}`);if(url.pathname.startsWith('/api/'))return await api(req,res,url);const publicLoginFiles=['/login.html','/login.js','/styles.css'];if(!user(req)&&!publicLoginFiles.includes(url.pathname))return staticFile(res,'/login.html');return staticFile(res,url.pathname)}catch(e){console.error(e);json(res,Number(e.statusCode)||500,{error:Number(e.statusCode)?e.message:'Nieoczekiwany błąd serwera'})}});
-if(process.argv[1]===fileURLToPath(import.meta.url))server.listen(port,'0.0.0.0',()=>console.log(`PLC Hub on ${port}`));
-function shutdown(){server.close(()=>{db.close();process.exit(0)})}process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);
+
+async function readJson(request) {
+  let content = '';
+  for await (const chunk of request) {
+    content += chunk;
+    if (content.length > 2_000_000) throw Object.assign(new Error('Żądanie jest zbyt duże'), { statusCode: 413 });
+  }
+  if (!content) return {};
+  try { return JSON.parse(content); }
+  catch { throw Object.assign(new Error('Nieprawidłowy JSON'), { statusCode: 400 }); }
+}
+
+function cookies(request) {
+  return Object.fromEntries((request.headers.cookie || '').split(';').map(value => value.trim().split('=').map(decodeURIComponent)).filter(parts => parts.length === 2));
+}
+
+function sessionCookie(request, value, maxAge) {
+  const https = request.socket.encrypted || String(request.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
+  return `plc_session=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${https ? '; Secure' : ''}`;
+}
+
+function currentUser(request) {
+  const token = cookies(request).plc_session;
+  const session = sessions.get(token);
+  if (!session || session.expiresAt < Date.now()) {
+    if (token) sessions.delete(token);
+    return null;
+  }
+  return repository.me(session.userId);
+}
+
+function requireRole(user, role = 'user') {
+  const allowed = role === 'user' ? Boolean(user) : role === 'moderator' ? ['admin', 'moderator'].includes(user?.role) : user?.role === 'admin';
+  if (!allowed) throw Object.assign(new Error(user ? 'Brak uprawnień' : 'Zaloguj się'), { statusCode: user ? 403 : 401 });
+}
+
+function numericId(pathname, prefix) {
+  const match = pathname.match(new RegExp(`^${prefix}/(\\d+)$`));
+  return match ? Number(match[1]) : null;
+}
+
+async function handleApi(request, response, url) {
+  const method = request.method || 'GET';
+  const path = url.pathname;
+  const controller = url.searchParams.get('controller') || 'all';
+  const user = currentUser(request);
+
+  if (method === 'GET' && path === '/api/health') return json(response, 200, { status: 'ok', version: 3 });
+  if (method === 'POST' && path === '/api/login') {
+    const input = await readJson(request);
+    const account = repository.authenticate(input.username);
+    if (!account || !verifyPassword(input.password || '', account.password_hash)) return json(response, 401, { error: 'Nieprawidłowy login lub hasło' });
+    const token = randomBytes(32).toString('hex');
+    sessions.set(token, { userId: account.id, expiresAt: Date.now() + 12 * 60 * 60 * 1000 });
+    return json(response, 200, repository.me(account.id), { 'Set-Cookie': sessionCookie(request, token, 43200) });
+  }
+  if (method === 'POST' && path === '/api/logout') {
+    sessions.delete(cookies(request).plc_session);
+    return json(response, 200, { ok: true }, { 'Set-Cookie': sessionCookie(request, '', 0) });
+  }
+
+  requireRole(user);
+  if (method === 'GET' && path === '/api/me') return json(response, 200, user);
+  if (method === 'GET' && path === '/api/controllers') return json(response, 200, repository.controllers());
+  if (method === 'GET' && path === '/api/users') return json(response, 200, repository.users());
+  if (method === 'GET' && path === '/api/config') return json(response, 200, repository.config());
+  if (method === 'GET' && path === '/api/dashboard') return json(response, 200, repository.dashboard(controller));
+  if (method === 'GET' && path === '/api/overview') return json(response, 200, repository.overview());
+  if (method === 'GET' && path === '/api/my-summary') return json(response, 200, repository.mySummary(user));
+  if (method === 'GET' && path === '/api/audit') {
+    const type = url.searchParams.get('type');
+    const id = Number(url.searchParams.get('id'));
+    return json(response, 200, repository.audit(type, id));
+  }
+
+  const resources = [
+    { path: '/api/status', list: () => repository.status(controller, user), save: (id, body) => repository.saveStatus(id, body, user), remove: id => repository.deleteStatus(id, user), deleteRole: 'admin' },
+    { path: '/api/tasks', list: () => repository.tasks(controller, user), save: (id, body) => repository.saveTask(id, body, user), remove: id => repository.deleteTask(id, user), deleteRole: 'owner' },
+    { path: '/api/open-points', list: () => repository.points(controller, user), save: (id, body) => repository.savePoint(id, body, user), remove: id => repository.deletePoint(id, user), deleteRole: 'admin' },
+    { path: '/api/daily-notes', list: () => repository.notes(controller, url.searchParams.get('from'), url.searchParams.get('to'), user), save: (id, body) => repository.saveNote(id, body, user), remove: id => repository.deleteNote(id, user), deleteRole: 'owner' },
+    { path: '/api/goals', list: () => repository.goals(controller, user), save: (id, body) => repository.saveGoal(id, body, user), remove: id => repository.deleteGoal(id, user), deleteRole: 'admin' }
+  ];
+
+  for (const resource of resources) {
+    if (path === resource.path) {
+      if (method === 'GET') return json(response, 200, resource.list());
+      if (method === 'POST') return json(response, 201, resource.save(null, await readJson(request)));
+    }
+    const id = numericId(path, resource.path);
+    if (id !== null) {
+      if (method === 'PATCH') return json(response, 200, resource.save(id, await readJson(request)));
+      if (method === 'DELETE') {
+        if (resource.deleteRole === 'admin') requireRole(user, 'admin');
+        if (resource.deleteRole === 'owner' && user.role === 'moderator') requireRole(user, 'admin');
+        resource.remove(id);
+        response.writeHead(204);
+        return response.end();
+      }
+    }
+  }
+
+  if (path === '/api/users' && method === 'POST') {
+    requireRole(user, 'admin');
+    return json(response, 201, repository.saveUser(null, await readJson(request)));
+  }
+  let id = numericId(path, '/api/users');
+  if (id !== null) {
+    requireRole(user, 'admin');
+    if (method === 'PATCH') return json(response, 200, repository.saveUser(id, await readJson(request)));
+    if (method === 'DELETE') {
+      if (id === user.id) throw Object.assign(new Error('Nie możesz usunąć własnego konta'), { statusCode: 400 });
+      repository.deleteUser(id);
+      response.writeHead(204);
+      return response.end();
+    }
+  }
+
+  if (path === '/api/controllers' && method === 'POST') {
+    requireRole(user, 'admin');
+    return json(response, 201, repository.saveController(null, await readJson(request)));
+  }
+  id = numericId(path, '/api/controllers');
+  if (id !== null) {
+    requireRole(user, 'admin');
+    if (method === 'PATCH') return json(response, 200, repository.saveController(id, await readJson(request)));
+    if (method === 'DELETE') { repository.deleteController(id); response.writeHead(204); return response.end(); }
+  }
+
+  const configResources = [
+    { path: '/api/categories', scope: 'status', type: 'category', save: (id, body) => repository.saveCategory('status', id, body) },
+    { path: '/api/subcategories', scope: 'status', type: 'subcategory', save: (id, body) => repository.saveSubcategory('status', id, body) },
+    { path: '/api/task-categories', scope: 'task', type: 'task_category', save: (id, body) => repository.saveCategory('task', id, body) },
+    { path: '/api/task-subcategories', scope: 'task', type: 'task_subcategory', save: (id, body) => repository.saveSubcategory('task', id, body) },
+    { path: '/api/options', type: 'option', save: (id, body) => repository.saveOption(id, body) }
+  ];
+  for (const resource of configResources) {
+    if (path === resource.path && method === 'POST') {
+      requireRole(user, 'moderator');
+      return json(response, 201, resource.save(null, await readJson(request)));
+    }
+    id = numericId(path, resource.path);
+    if (id !== null) {
+      requireRole(user, 'moderator');
+      if (method === 'PATCH') return json(response, 200, resource.save(id, await readJson(request)));
+      if (method === 'DELETE') { requireRole(user, 'admin'); repository.deleteConfig(resource.type, id); response.writeHead(204); return response.end(); }
+    }
+  }
+
+  if (method === 'PATCH' && path === '/api/reorder') {
+    const input = await readJson(request);
+    if (['controllers', 'users'].includes(input.kind)) requireRole(user, 'admin');
+    else requireRole(user, 'moderator');
+    repository.reorder(input.kind, input.ids);
+    return json(response, 200, { ok: true });
+  }
+  if (method === 'PATCH' && path.startsWith('/api/settings/')) {
+    requireRole(user, 'admin');
+    const input = await readJson(request);
+    repository.saveSetting(decodeURIComponent(path.slice('/api/settings/'.length)), input.value);
+    return json(response, 200, { ok: true });
+  }
+
+  return json(response, 404, { error: 'Nie znaleziono endpointu' });
+}
+
+function serveStatic(response, pathname) {
+  const requested = pathname === '/' ? '/index.html' : pathname;
+  const normalized = normalize(requested).replace(/^(\.\.[/\\])+/, '');
+  const filePath = join(publicDir, normalized);
+  if (!filePath.startsWith(publicDir) || !existsSync(filePath) || !statSync(filePath).isFile()) return json(response, 404, { error: 'Nie znaleziono pliku' });
+  response.writeHead(200, {
+    'Content-Type': mimeTypes[extname(filePath)] || 'application/octet-stream',
+    'Cache-Control': extname(filePath) === '.html' ? 'no-cache' : 'public,max-age=3600',
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'same-origin',
+    'X-Frame-Options': 'SAMEORIGIN',
+    'Content-Security-Policy': "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'self'; form-action 'self'"
+  });
+  createReadStream(filePath).pipe(response);
+}
+
+export const server = createServer(async (request, response) => {
+  try {
+    const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
+    if (url.pathname.startsWith('/api/')) return await handleApi(request, response, url);
+    const publicLoginFiles = ['/login.html', '/login.js', '/styles.css'];
+    if (!currentUser(request) && !publicLoginFiles.includes(url.pathname)) return serveStatic(response, '/login.html');
+    return serveStatic(response, url.pathname);
+  } catch (error) {
+    const statusCode = Number(error.statusCode) || (String(error.message).includes('UNIQUE constraint') ? 409 : 500);
+    if (statusCode >= 500) console.error(error);
+    return json(response, statusCode, { error: statusCode === 500 ? 'Nieoczekiwany błąd serwera' : error.message });
+  }
+});
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  server.listen(port, '0.0.0.0', () => console.log(`PLC Commissioning Hub V3 running on port ${port}`));
+}
+
+function shutdown() {
+  server.close(() => {
+    repository.close();
+    process.exit(0);
+  });
+}
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);

@@ -1,29 +1,31 @@
-# PLC Commissioning Hub V2
+# PLC Commissioning Hub V3
 
-Samodzielna aplikacja WWW do prowadzenia uruchomienia PLC. Działa na Node.js 24 i SQLite, bez zewnętrznych usług oraz bez zależności npm.
+Samodzielna aplikacja WWW do prowadzenia dużego projektu uruchomienia PLC. Działa na Node.js 24 i SQLite, bez zewnętrznych usług i bez zależności npm.
 
-## Funkcje V2
+## Najważniejsze funkcje V3
 
-- indywidualne konta i role: `admin`, `moderator`, `user`;
-- dynamiczne sterowniki/obszary, kategorie, podkategorie, zmiany, typy notatek i wartości „Oczekiwanie na”;
-- status z grupowaniem według kategorii, podkategorii lub statusu oraz filtrami kolumnowymi;
-- zadania w trzech kolorystycznych etapach, z checklistami, terminami, autorem i powiązaniami;
-- Cele łączące testy, zadania i otwarte punkty;
-- otwarte punkty z terminem, przypomnieniem (domyślnie 14 dni), kategoriami i powiązaniem;
-- dzienne notatki z zakresem dat (domyślnie 14 dni), grupowaniem i trzema typami powiązań;
-- automatyczne pola „Utworzone przez” i „Data utworzenia”.
-
-## Ważne przy aktualizacji z prototypu V1
-
-V2 ma nowy model danych. Przy pierwszym starcie wykrywa bazę V1 i tworzy od nowa schemat V2 z przykładowymi danymi HB522/UB512. Kolejne redeploye zachowują już dane V2 na Railway Volume.
+- konta i role `admin`, `moderator`, `user`;
+- konfigurowalna kolejność sterowników, użytkowników, kategorii, podkategorii i słowników;
+- główny **Overview** z liczbowym i procentowym stanem projektu oraz podziałem na sterowniki;
+- **Moje podsumowanie** z zadaniami przypisanymi, utworzonymi, ogólnymi oraz elementami, w których wspomniano użytkownika;
+- status z kolejnością zgodną z konfiguracją, grupowaniem, filtrami i sortowaniem każdej kolumny;
+- tablica zadań z drag & drop oraz alternatywny widok listy z grupowaniem, filtrami i sortowaniem;
+- osobne kategorie zadań, osoba odpowiedzialna wybierana z kont użytkowników, checklisty, terminy i czas trwania;
+- powiązania zadań ze statusem, otwartym punktem albo dziennikiem;
+- widok alertów dla przedawnionych i zbliżających się przypomnień otwartych punktów;
+- cele z przejrzystą listą powiązań i osobnym oknem wyboru statusów, zadań i otwartych punktów;
+- dzienne notatki z zakresem dat, calendar weeks (poniedziałek–niedziela), grupowaniem i nazwanymi typami powiązań;
+- automatyczne pola autora i daty utworzenia w widoku szczegółowym;
+- historia zmian statusu, zadania, otwartego punktu i notatki: użytkownik, dokładna data oraz zmienione pola;
+- migracja istniejącej bazy V2 do V3 bez kasowania rekordów.
 
 ## Wdrożenie na Railway
 
-Konfiguracja pozostaje taka sama jak w poprzedniej wersji:
+Konfiguracja serwera pozostaje taka sama jak w poprzedniej wersji.
 
-1. Podmień wszystkie pliki w repozytorium GitHub zawartością katalogu `plc-commissioning-hub`.
-2. Wypchnij commit do GitHuba; Railway powinien automatycznie rozpocząć deployment. Możesz też wybrać `Redeploy`.
-3. Pozostaw Railway Volume zamontowany jako:
+1. Rozpakuj paczkę i podmień zawartość repozytorium plikami z katalogu `plc-commissioning-hub`.
+2. Wypchnij commit do GitHuba. Railway uruchomi deployment automatycznie; w razie potrzeby wybierz **Redeploy**.
+3. Pozostaw Railway Volume zamontowany pod ścieżką:
 
    ```text
    /app/data
@@ -35,30 +37,39 @@ Konfiguracja pozostaje taka sama jak w poprzedniej wersji:
    DB_PATH=/app/data/plc-status.db
    ```
 
-5. Ustaw dane pierwszego administratora:
+5. Dla nowej bazy ustaw dane pierwszego administratora:
 
    ```text
    APP_USER=admin
    APP_PASSWORD=ustaw-dlugie-losowe-haslo
    ```
 
-6. Nie ustawiaj ręcznie `PORT`. Railway przekaże go automatycznie.
+6. Nie ustawiaj ręcznie `PORT`. Railway przekaże go do kontenera automatycznie.
 
-`Dockerfile` nie zawiera instrukcji `VOLUME`. Skrypt `docker-entrypoint.sh` po zamontowaniu dysku ustawia prawa do `/app/data`, a aplikacja działa jako użytkownik `node`. To zachowuje wcześniejszą poprawkę błędu SQLite `unable to open database file`.
+`Dockerfile` celowo nie deklaruje `VOLUME`. Skrypt `docker-entrypoint.sh` ustawia prawa do katalogu danych dopiero po zamontowaniu Railway Volume, a następnie uruchamia aplikację jako użytkownik `node`. Zachowuje to wcześniejszą poprawkę błędu SQLite `unable to open database file`.
 
-Po pierwszym udanym uruchomieniu zaloguj się danymi `APP_USER` / `APP_PASSWORD`. Następne konta tworzysz w aplikacji w module **Konfiguracja → Użytkownicy**. Zmiana zmiennych `APP_USER` lub `APP_PASSWORD` po utworzeniu bazy nie zmienia istniejącego konta — hasło edytuje się w aplikacji.
+Po wdrożeniu trzeba zalogować się ponownie, ponieważ sesje są przechowywane w pamięci procesu. Zmiana `APP_USER` albo `APP_PASSWORD` nie zmienia istniejącego konta; po utworzeniu bazy kontami zarządza się w **Konfiguracja → Użytkownicy**.
 
-## Uprawnienia w prototypie
+## Migracja i wariant czystego startu
+
+Przy starcie V3 automatycznie dodaje nowe tabele i kolumny do istniejącej bazy V2. Rekordy pozostają zachowane, a dla danych historycznych tworzony jest pierwszy wpis migracyjny w historii zmian.
+
+Jeżeli podczas fazy koncepcyjnej potrzebny jest całkowicie czysty start, usuń wyłącznie plik `/app/data/plc-status.db` (oraz ewentualne pliki `-wal` i `-shm`) z Railway Volume, a następnie wykonaj redeploy. Aplikacja utworzy nową bazę i dane demonstracyjne. Nie usuwaj całego Volume, jeśli znajdują się na nim inne potrzebne pliki.
+
+## Uprawnienia prototypowe
 
 | Czynność | Administrator | Moderator | Użytkownik |
 |---|:---:|:---:|:---:|
 | Dodawanie i edycja danych roboczych | ✓ | ✓ | ✓ |
-| Usuwanie danych roboczych | ✓ | — | — |
-| Kategorie, podkategorie i słowniki | pełne | dodawanie/edycja | — |
+| Zmiana sterownika w danych roboczych | ✓ | ✓ | ✓ |
+| Usuwanie statusów, punktów i celów | ✓ | — | — |
+| Usunięcie własnej notatki | ✓ | — | ✓ |
+| Usunięcie własnego, niezmienionego przez innych zadania | ✓ | — | ✓ |
+| Kategorie, podkategorie i słowniki | pełne | dodawanie, edycja, kolejność | — |
 | Sterowniki i użytkownicy | pełne | podgląd | — |
-| Ustawienie domyślnego przypomnienia | ✓ | — | — |
+| Ustawienia globalne przypomnień | ✓ | — | — |
 
-To jest wstępna macierz zgodna z założeniem, że dokładne uprawnienia zostaną dopasowane na końcu.
+Jest to nadal wstępna macierz, zgodna z ustaleniem, że szczegółowe uprawnienia zostaną dopracowane na końcu projektu.
 
 ## Lokalny test przez Docker
 
@@ -67,16 +78,16 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Aplikacja: `http://localhost:8080`.
+Aplikacja będzie dostępna pod `http://localhost:8080`.
 
 ## Testy
 
-W Node.js 24+:
+W Node.js 24 lub nowszym:
 
 ```bash
 npm test
 ```
 
-## Dane i backup
+## Dane i kopie zapasowe
 
-Baza znajduje się w jednym pliku wskazanym przez `DB_PATH`. Na Railway jest to `/app/data/plc-status.db`. Nie usuwaj Volume i nie zmieniaj punktu montowania po rozpoczęciu właściwych testów. Przed ważną aktualizacją pobierz kopię pliku bazy lub wykonaj snapshot wolumenu.
+Baza jest pojedynczym plikiem wskazanym przez `DB_PATH`; na Railway jest to `/app/data/plc-status.db`. Przed istotną aktualizacją warto pobrać kopię pliku lub wykonać snapshot Railway Volume.

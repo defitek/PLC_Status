@@ -1,7 +1,64 @@
-<!doctype html><html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#172554"><title>PLC Commissioning Hub</title><link rel="stylesheet" href="/styles.css"><script type="module" src="/app.js"></script></head><body>
-<header class="topbar"><div class="logo">PLC</div><div class="brand"><strong>Commissioning Hub</strong><span>Project status & team workspace</span></div><div class="userbox"><span id="me"></span><button id="logout" class="ghost">Wyloguj</button></div></header>
-<div class="layout"><aside><label class="select-label">Sterownik<select id="controller"><option value="all">Wszystkie sterowniki</option></select></label><nav id="nav">
-<button data-view="status" class="active">▦ <span>Status</span><b id="n-status">0</b></button><button data-view="tasks">✓ <span>Zadania</span><b id="n-tasks">0</b></button><button data-view="goals">◎ <span>Cele</span><b id="n-goals">0</b></button><button data-view="points">! <span>Otwarte punkty</span><b id="n-points">0</b></button><button data-view="notes">▤ <span>Dzienne notatki</span><b id="n-notes">0</b></button><button data-view="settings" id="settings-nav">⚙ <span>Konfiguracja</span></button></nav></aside>
-<main><header class="pagehead"><div><h1 id="title">Status</h1><p id="desc"></p></div><button id="add" class="primary">+ Dodaj</button></header><section id="content"><div class="loading">Ładowanie…</div></section></main></div>
-<dialog id="modal"><form id="form"><header><div><h2 id="modal-title"></h2><p id="modal-subtitle"></p></div><button type="button" class="x" id="close">×</button></header><div id="fields" class="formgrid"></div><footer><button type="button" id="remove" class="danger">Usuń</button><span></span><button type="button" id="cancel" class="secondary">Anuluj</button><button class="primary">Zapisz</button></footer></form></dialog>
-<div id="toast" class="toast"></div><datalist id="people"></datalist></body></html>
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#172554">
+  <title>PLC Commissioning Hub</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="logo">PLC</div>
+    <div class="brand"><strong>Commissioning Hub</strong><span>Project status & team workspace · V3</span></div>
+    <div class="userbox"><span id="me"></span><button id="logout" class="ghost">Wyloguj</button></div>
+  </header>
+  <div class="layout">
+    <aside class="sidebar">
+      <label class="select-label">Sterownik
+        <select id="controller"><option value="all">Wszystkie sterowniki</option></select>
+      </label>
+      <nav id="nav">
+        <button data-view="overview" class="active"><span>◫</span><span>Overview</span></button>
+        <button data-view="mine"><span>◉</span><span>Moje podsumowanie</span></button>
+        <button data-view="status"><span>▦</span><span>Status</span><b id="n-status">0</b></button>
+        <button data-view="tasks"><span>✓</span><span>Zadania</span><b id="n-tasks">0</b></button>
+        <button data-view="goals"><span>◎</span><span>Cele</span><b id="n-goals">0</b></button>
+        <button data-view="points"><span>!</span><span>Otwarte punkty</span><b id="n-points">0</b></button>
+        <button data-view="notes"><span>▤</span><span>Dzienne notatki</span><b id="n-notes">0</b></button>
+        <button data-view="settings" id="settings-nav"><span>⚙</span><span>Konfiguracja</span></button>
+      </nav>
+    </aside>
+    <main>
+      <header class="pagehead">
+        <div><h1 id="title">Overview</h1><p id="desc"></p></div>
+        <button id="add" class="primary">+ Dodaj</button>
+      </header>
+      <section id="content"><div class="loading">Ładowanie…</div></section>
+    </main>
+  </div>
+
+  <dialog id="modal" class="record-dialog">
+    <form id="form">
+      <header class="dialog-head">
+        <div><h2 id="modal-title"></h2><p id="modal-subtitle"></p></div>
+        <button type="button" class="x" id="close">×</button>
+      </header>
+      <div id="record-meta" class="record-meta"></div>
+      <div id="fields" class="formgrid"></div>
+      <section id="audit-section" class="audit-section hidden"><h3>Historia edycji</h3><div id="audit-list"></div></section>
+      <footer class="dialog-actions"><button type="button" id="remove" class="danger">Usuń</button><span></span><button type="button" id="cancel" class="secondary">Anuluj</button><button class="primary">Zapisz</button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="goal-picker" class="picker-dialog">
+    <header class="dialog-head"><div><h2>Wybierz elementy celu</h2><p>Status, zadania i otwarte punkty</p></div><button type="button" class="x" id="picker-close">×</button></header>
+    <div class="picker-tools"><input id="picker-search" type="search" placeholder="Szukaj elementu…"></div>
+    <div id="picker-content" class="picker-content"></div>
+    <footer class="dialog-actions"><span></span><button type="button" class="secondary" id="picker-cancel">Anuluj</button><button type="button" class="primary" id="picker-apply">Zastosuj wybór</button></footer>
+  </dialog>
+
+  <div id="toast" class="toast"></div>
+</body>
+</html>
