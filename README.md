@@ -1,4 +1,4 @@
-# PLC Commissioning Hub V3
+# PLC Commissioning Hub V3.1
 
 Samodzielna aplikacja WWW do prowadzenia dużego projektu uruchomienia PLC. Działa na Node.js 24 i SQLite, bez zewnętrznych usług i bez zależności npm.
 
@@ -17,7 +17,23 @@ Samodzielna aplikacja WWW do prowadzenia dużego projektu uruchomienia PLC. Dzia
 - dzienne notatki z zakresem dat, calendar weeks (poniedziałek–niedziela), grupowaniem i nazwanymi typami powiązań;
 - automatyczne pola autora i daty utworzenia w widoku szczegółowym;
 - historia zmian statusu, zadania, otwartego punktu i notatki: użytkownik, dokładna data oraz zmienione pola;
+- jednorazowy, idempotentny zestaw danych demonstracyjnych do testów dużej listy;
 - migracja istniejącej bazy V2 do V3 bez kasowania rekordów.
+
+## Dane demonstracyjne
+
+Przy pierwszym uruchomieniu tej wersji aplikacja uzupełnia bazę maksymalnie do:
+
+- 100 punktów statusu;
+- 100 zadań z checklistami;
+- 100 otwartych punktów;
+- 100 wpisów w dzienniku;
+- 20 celów z powiązaniami;
+- 6 przykładowych sterowników i 9 dodatkowych użytkowników zespołu.
+
+Rekordy mają różne statusy, kategorie, odpowiedzialnych, terminy, przedawnione i zbliżające się przypomnienia, wzmianki oraz powiązania pomiędzy modułami. Generator zapisuje swój stan w bazie, dlatego restart lub redeploy nie tworzy duplikatów. W istniejącej bazie uzupełniane są tylko brakujące rekordy do limitu — wcześniejsze dane nie są usuwane ani nadpisywane.
+
+Konta o loginach zaczynających się od `demo.` mają losowe, nieudostępniane hasła i służą jako osoby do przypisywania rekordów. Administrator może nadać im własne hasła w konfiguracji, jeśli chce użyć ich do logowania.
 
 ## Wdrożenie na Railway
 
@@ -45,6 +61,15 @@ Konfiguracja serwera pozostaje taka sama jak w poprzedniej wersji.
    ```
 
 6. Nie ustawiaj ręcznie `PORT`. Railway przekaże go do kontenera automatycznie.
+
+Generator można kontrolować opcjonalnymi zmiennymi:
+
+   ```text
+   SEED_DEMO_DATA=true
+   DEMO_DATA_LIMIT=100
+   ```
+
+`DEMO_DATA_LIMIT` jest ograniczany do zakresu 1–100. Ustaw `SEED_DEMO_DATA=false`, jeśli tworzona baza produkcyjna nie powinna otrzymać danych demonstracyjnych.
 
 `Dockerfile` celowo nie deklaruje `VOLUME`. Skrypt `docker-entrypoint.sh` ustawia prawa do katalogu danych dopiero po zamontowaniu Railway Volume, a następnie uruchamia aplikację jako użytkownik `node`. Zachowuje to wcześniejszą poprawkę błędu SQLite `unable to open database file`.
 

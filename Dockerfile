@@ -4,7 +4,7 @@ RUN apk add --no-cache su-exec
 
 WORKDIR /app
 COPY package.json ./
-COPY server.js database.js schema.sql ./
+COPY server.js database.js demo-data.js schema.sql ./
 COPY public ./public
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 

@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { seedDemoData } from './demo-data.js';
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 const TABLES = {
@@ -41,7 +42,9 @@ export function openDatabase(databasePath) {
   db.exec(readFileSync(join(moduleDir, 'schema.sql'), 'utf8'));
   migrateToV3(db);
   seedConfiguration(db);
-  seedDemo(db);
+  if (String(process.env.SEED_DEMO_DATA || 'true').toLowerCase() !== 'false') {
+    seedDemoData(db, hashPassword, process.env.DEMO_DATA_LIMIT || 100);
+  }
   backfillV3(db);
   seedMigrationAudit(db);
   db.prepare("INSERT INTO app_meta(key,value) VALUES('schema_version','3') ON CONFLICT(key) DO UPDATE SET value='3'").run();
@@ -104,10 +107,34 @@ function seedConfiguration(db) {
   const insertTaskCategory = db.prepare('INSERT OR IGNORE INTO task_categories(name,sort_order) VALUES(?,?)');
   taskCategories.forEach((name, index) => insertTaskCategory.run(name, index));
 
-  const hardware = db.prepare("SELECT id FROM categories WHERE name='Hardware'").get();
-  if (hardware) {
-    const insertSubcategory = db.prepare('INSERT OR IGNORE INTO subcategories(category_id,name,sort_order) VALUES(?,?,?)');
-    ['+24V Connection', 'Profinet connection', 'Commissioning status', 'Device green'].forEach((name, index) => insertSubcategory.run(hardware.id, name, index));
+  const statusSubcategories = {
+    Hardware: ['+24V Connection', 'Profinet connection', 'Commissioning status'],
+    'Manual mode': ['Manual drives', 'Local panels'],
+    'Automatic mode': ['Sequence test', 'Cycle with part'],
+    'Startup devices': ['Device green', 'Diagnostic status'],
+    'Startup drives': ['Drive enable', 'Referencing'],
+    Safety: ['Emergency stop', 'Doors and gates'],
+    NiO: ['Error handling'],
+    'Special functions': ['Interfaces'],
+    'Counters / KPI': ['Cycle time']
+  };
+  const insertStatusSubcategory = db.prepare('INSERT OR IGNORE INTO subcategories(category_id,name,sort_order) VALUES(?,?,?)');
+  for (const [categoryName, names] of Object.entries(statusSubcategories)) {
+    const category = db.prepare('SELECT id FROM categories WHERE name=?').get(categoryName);
+    names.forEach((name, index) => insertStatusSubcategory.run(category.id, name, index));
+  }
+
+  const taskSubcategories = {
+    Commissioning: ['Field verification', 'Device startup'],
+    Programming: ['PLC changes', 'HMI changes'],
+    Testing: ['Interface tests', 'Sequence tests'],
+    Documentation: ['As-built', 'Test report'],
+    Coordination: ['Supplier action', 'Production alignment']
+  };
+  const insertTaskSubcategory = db.prepare('INSERT OR IGNORE INTO task_subcategories(category_id,name,sort_order) VALUES(?,?,?)');
+  for (const [categoryName, names] of Object.entries(taskSubcategories)) {
+    const category = db.prepare('SELECT id FROM task_categories WHERE name=?').get(categoryName);
+    names.forEach((name, index) => insertTaskSubcategory.run(category.id, name, index));
   }
 
   if (!db.prepare('SELECT 1 FROM users LIMIT 1').get()) {
@@ -115,63 +142,6 @@ function seedConfiguration(db) {
     const password = process.env.APP_PASSWORD || 'change-me';
     db.prepare('INSERT INTO users(username,display_name,password_hash,role,sort_order) VALUES(?,?,?,?,0)').run(username, 'Administrator', hashPassword(password), 'admin');
   }
-}
-
-function seedDemo(db) {
-  if (db.prepare('SELECT 1 FROM controllers LIMIT 1').get()) return;
-  const userId = db.prepare('SELECT id FROM users ORDER BY id LIMIT 1').get().id;
-  const today = new Date().toISOString().slice(0, 10);
-  const future = days => {
-    const value = new Date();
-    value.setUTCDate(value.getUTCDate() + days);
-    return value.toISOString().slice(0, 10);
-  };
-
-  const addController = db.prepare('INSERT INTO controllers(code,area,description,sort_order) VALUES(?,?,?,?)');
-  addController.run('HB522', 'HB', 'Body line controller', 0);
-  addController.run('UB512', 'UB', 'Underbody controller', 1);
-  const hb = db.prepare("SELECT id FROM controllers WHERE code='HB522'").get().id;
-  const ub = db.prepare("SELECT id FROM controllers WHERE code='UB512'").get().id;
-
-  const addStatus = db.prepare(`INSERT INTO status_items
-    (controller_id,test_id,station,function_detail,category,subcategory,criticality,responsible,responsible_user_id,status,current_note,created_by)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`);
-  addStatus.run(hb, 'HB522-001', '060ABS001', '24 V supplies checked', 'Hardware', '+24V Connection', 'High', 'Administrator', userId, 'Done', 'Sprawdzone na szafie i urządzeniach.', userId);
-  addStatus.run(hb, 'HB522-002', '060ABS001', 'Profinet devices online', 'Hardware', 'Profinet connection', 'Critical', 'Administrator', userId, 'In progress', 'Pozostał jeden robot.', userId);
-  addStatus.run(hb, 'HB522-003', '180ABS001', 'Automatic cycle with part', 'Automatic mode', '', 'Critical', 'Administrator', userId, 'Ready to test', 'Czeka na detal.', userId);
-  addStatus.run(ub, 'UB512-001', '010FMS001', 'Safety chain', 'Safety', '', 'Critical', 'Administrator', userId, 'Blocked', 'Brak potwierdzenia z Electrical.', userId);
-  addStatus.run(ub, 'UB512-002', '020ABS001', 'Manual functions', 'Manual mode', '', 'Medium', 'Administrator', userId, 'Done', 'Wszystkie napędy OK.', userId);
-
-  const taskResult = db.prepare(`INSERT INTO tasks
-    (controller_id,title,description,station,priority,owner,owner_user_id,status,start_date,due_date,category,subcategory,info_link,linked_entity_type,linked_entity_id,created_by)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-      hb, 'Dokończyć test Profinet', 'Sprawdzić brakujące urządzenie.', '060ABS001', 'High', 'Administrator', userId,
-      'In progress', today, future(1), 'Testing', 'Interface tests', 'https://example.com', 'status', 2, userId
-    );
-  const taskId = Number(taskResult.lastInsertRowid);
-  db.prepare('INSERT INTO task_checklist(task_id,text,done,sort_order) VALUES(?,?,?,?)').run(taskId, 'Sprawdzić nazwę urządzenia', 1, 0);
-  db.prepare('INSERT INTO task_checklist(task_id,text,done,sort_order) VALUES(?,?,?,?)').run(taskId, 'Potwierdzić komunikację', 0, 1);
-
-  const pointResult = db.prepare(`INSERT INTO open_points
-    (controller_id,issue_id,title,description,impact,priority,owner,owner_user_id,status,waiting_for,next_action,start_date,due_date,reminder_date,category,subcategory,linked_entity_type,linked_entity_id,created_by)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-      ub, 'OP-001', 'Brak potwierdzenia safety', 'Niepełny handshake z Electrical.', 'Blokuje automat.', 'Critical',
-      'Administrator', userId, 'Waiting', 'Electrical', 'Wspólny test I/O.', today, future(2), future(14), 'Safety', '', 'status', 4, userId
-    );
-  const pointId = Number(pointResult.lastInsertRowid);
-
-  db.prepare(`INSERT INTO daily_notes
-    (controller_id,note_date,shift,author,type,content,created_by,linked_task_id,linked_status_id)
-    VALUES(?,?,?,?,?,?,?,?,?)`).run(hb, today, 'Dzień', 'Administrator', 'Postęp', 'Zakończono kontrolę zasilania 24 V. Kontynuujemy Profinet.', userId, taskId, 2);
-
-  const goalResult = db.prepare('INSERT INTO goals(controller_id,title,description,status,due_date,created_by) VALUES(?,?,?,?,?,?)').run(
-    hb, 'HB522 gotowy do automatu', 'Zamknąć krytyczne testy i zadania przed odbiorem.', 'In progress', future(7), userId
-  );
-  const goalId = Number(goalResult.lastInsertRowid);
-  const goalLink = db.prepare('INSERT INTO goal_links(goal_id,entity_type,entity_id) VALUES(?,?,?)');
-  goalLink.run(goalId, 'status', 3);
-  goalLink.run(goalId, 'task', taskId);
-  goalLink.run(goalId, 'point', pointId);
 }
 
 function backfillV3(db) {
@@ -205,11 +175,12 @@ function backfillV3(db) {
 
 function seedMigrationAudit(db) {
   for (const [type, table] of Object.entries(TABLES)) {
-    const existing = db.prepare('SELECT 1 FROM audit_log WHERE entity_type=? LIMIT 1').get(type);
-    if (existing) continue;
     const rows = db.prepare(`SELECT * FROM ${table}`).all();
     const insertAudit = db.prepare('INSERT INTO audit_log(entity_type,entity_id,action,user_id,changes_json,snapshot_json) VALUES(?,?,?,?,?,?)');
-    for (const row of rows) insertAudit.run(type, row.id, 'migrate', null, JSON.stringify({ migrated: { from: null, to: 'V3' } }), JSON.stringify(row));
+    for (const row of rows) {
+      const existing = db.prepare('SELECT 1 FROM audit_log WHERE entity_type=? AND entity_id=? LIMIT 1').get(type, row.id);
+      if (!existing) insertAudit.run(type, row.id, 'migrate', null, JSON.stringify({ migrated: { from: null, to: 'V3' } }), JSON.stringify(row));
+    }
   }
 }
 

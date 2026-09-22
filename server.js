@@ -76,7 +76,7 @@ async function handleApi(request, response, url) {
   const controller = url.searchParams.get('controller') || 'all';
   const user = currentUser(request);
 
-  if (method === 'GET' && path === '/api/health') return json(response, 200, { status: 'ok', version: 3 });
+  if (method === 'GET' && path === '/api/health') return json(response, 200, { status: 'ok', version: 3, release: '3.1.0' });
   if (method === 'POST' && path === '/api/login') {
     const input = await readJson(request);
     const account = repository.authenticate(input.username);
@@ -225,7 +225,7 @@ export const server = createServer(async (request, response) => {
 });
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  server.listen(port, '0.0.0.0', () => console.log(`PLC Commissioning Hub V3 running on port ${port}`));
+  server.listen(port, '0.0.0.0', () => console.log(`PLC Commissioning Hub V3.1 running on port ${port}`));
 }
 
 function shutdown() {

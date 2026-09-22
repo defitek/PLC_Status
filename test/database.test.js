@@ -20,7 +20,12 @@ test('V3 supports overview, ordering, assignment, mentions, audit and deletion r
     const account = repository.authenticate('admin');
     const admin = repository.me(account.id);
     assert.ok(verifyPassword('test-password', account.password_hash));
-    assert.equal(repository.overview().controllers.length, 2);
+    assert.equal(repository.overview().controllers.length, 6);
+    assert.equal(repository.status('all', admin).length, 100);
+    assert.equal(repository.tasks('all', admin).length, 100);
+    assert.equal(repository.points('all', admin).length, 100);
+    assert.equal(repository.notes('all', null, null, admin).length, 100);
+    assert.equal(repository.goals('all', admin).length, 20);
 
     const workerRecord = repository.saveUser(null, { username: 'worker', display_name: 'PLC Worker', password: 'secret123', role: 'user' });
     const worker = repository.me(workerRecord.id);
@@ -113,10 +118,22 @@ test('configured controller order survives a database restart', () => {
   let repository = openDatabase(temporary.path);
   try {
     const reversed = repository.controllers().map(item => item.id).reverse();
+    const countsBeforeRestart = {
+      status: repository.status('all', repository.me(1)).length,
+      tasks: repository.tasks('all', repository.me(1)).length,
+      points: repository.points('all', repository.me(1)).length,
+      notes: repository.notes('all', null, null, repository.me(1)).length
+    };
     repository.reorder('controllers', reversed);
     repository.close();
     repository = openDatabase(temporary.path);
     assert.deepEqual(repository.controllers().map(item => item.id), reversed);
+    assert.deepEqual({
+      status: repository.status('all', repository.me(1)).length,
+      tasks: repository.tasks('all', repository.me(1)).length,
+      points: repository.points('all', repository.me(1)).length,
+      notes: repository.notes('all', null, null, repository.me(1)).length
+    }, countsBeforeRestart);
   } finally {
     repository.close();
     rmSync(temporary.directory, { recursive: true, force: true });
