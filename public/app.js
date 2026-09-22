@@ -1,406 +1,67 @@
-const state = {
-  view: 'status',
-  controller: 'all',
-  controllers: [],
-  dashboard: {},
-  status: [],
-  tasks: [],
-  points: [],
-  notes: [],
-  dialog: null
-};
-
-const content = document.querySelector('#content');
-const controllerSelect = document.querySelector('#controller-select');
-const addRecordButton = document.querySelector('#add-record');
-const dialog = document.querySelector('#record-dialog');
-const dialogForm = document.querySelector('#record-form');
-const dialogFields = document.querySelector('#dialog-fields');
-const deleteButton = document.querySelector('#delete-record');
-const connection = document.querySelector('#connection-state');
-
-const pageCopy = {
-  status: ['Status', 'Postęp testów i szybka aktualizacja stanu.', '+ Dodaj test'],
-  tasks: ['Zadania', 'Praca zespołu PLC pogrupowana według etapu realizacji.', '+ Nowe zadanie'],
-  points: ['Lista otwartych punktów', 'Blokady, braki i tematy wymagające decyzji lub wsparcia.', '+ Nowy punkt'],
-  notes: ['Dzienne notatki', 'Dziennik zmianowy: postęp, problemy, decyzje i plan na kolejną zmianę.', '+ Dodaj notatkę']
-};
-
-const badgeMap = {
-  'Done': ['Gotowe', 'green'],
-  'In progress': ['W toku', 'blue'],
-  'Ready to test': ['Do testu', 'amber'],
-  'Blocked': ['Zablokowane', 'red'],
-  'NOK / Rework': ['NOK / poprawa', 'red'],
-  'Retest required': ['Retest', 'amber'],
-  'Not started': ['Nie rozpoczęto', 'gray'],
-  'N/A': ['N/A', 'gray'],
-  'To do': ['Do zrobienia', 'gray'],
-  'Open': ['Otwarte', 'red'],
-  'Waiting': ['Oczekuje', 'amber'],
-  'Closed': ['Zamknięte', 'green'],
-  'Critical': ['Krytyczny', 'red'],
-  'High': ['Wysoki', 'amber'],
-  'Medium': ['Średni', 'blue'],
-  'Low': ['Niski', 'green']
-};
-
-const forms = {
-  status: {
-    endpoint: '/api/status',
-    title: 'test',
-    fields: [
-      field('controller', 'Sterownik', 'controller', true),
-      field('test_id', 'Test ID', 'text', false, 'Nadawany automatycznie, jeśli puste'),
-      field('station', 'Stacja / obiekt', 'text', true),
-      field('function_detail', 'Test / funkcja', 'text', true),
-      field('category', 'Kategoria'),
-      field('milestone', 'Milestone'),
-      field('criticality', 'Krytyczność', 'select', true, '', ['Low', 'Medium', 'High', 'Critical']),
-      field('responsible', 'Odpowiedzialny'),
-      field('status', 'Status', 'select', true, '', ['Not started', 'Ready to test', 'In progress', 'Blocked', 'NOK / Rework', 'Retest required', 'Done', 'N/A']),
-      field('current_note', 'Aktualna notatka', 'textarea', false, '', [], true),
-      field('evidence_link', 'Dowód / link', 'text', false, '', [], true)
-    ]
-  },
-  tasks: {
-    endpoint: '/api/tasks',
-    title: 'zadanie',
-    fields: [
-      field('controller', 'Sterownik', 'controller', true),
-      field('title', 'Tytuł zadania', 'text', true),
-      field('station', 'Stacja / obiekt'),
-      field('owner', 'Odpowiedzialny'),
-      field('priority', 'Priorytet', 'select', true, '', ['Low', 'Medium', 'High', 'Critical']),
-      field('status', 'Status', 'select', true, '', ['To do', 'In progress', 'Done']),
-      field('due_date', 'Termin', 'date'),
-      field('linked_test_id', 'Powiązany Test ID'),
-      field('description', 'Opis / rezultat', 'textarea', false, '', [], true)
-    ]
-  },
-  points: {
-    endpoint: '/api/open-points',
-    title: 'otwarty punkt',
-    fields: [
-      field('controller', 'Sterownik', 'controller', true),
-      field('issue_id', 'Issue ID', 'text', false, 'Nadawany automatycznie, jeśli puste'),
-      field('title', 'Temat', 'text', true),
-      field('owner', 'Odpowiedzialny'),
-      field('priority', 'Priorytet', 'select', true, '', ['Low', 'Medium', 'High', 'Critical']),
-      field('status', 'Status', 'select', true, '', ['Open', 'Waiting', 'In progress', 'Closed']),
-      field('due_date', 'Termin', 'date'),
-      field('waiting_for', 'Oczekujemy na'),
-      field('impact', 'Wpływ na uruchomienie', 'textarea', false, '', [], true),
-      field('next_action', 'Następny krok', 'textarea', false, '', [], true),
-      field('description', 'Opis techniczny', 'textarea', false, '', [], true),
-      field('linked_test_id', 'Powiązany Test ID')
-    ]
-  },
-  notes: {
-    endpoint: '/api/daily-notes',
-    title: 'notatkę',
-    fields: [
-      field('controller', 'Sterownik', 'controller', true),
-      field('note_date', 'Data', 'date', true),
-      field('shift', 'Zmiana', 'select', true, '', ['Shift 1', 'Shift 2', 'Shift 3', 'General']),
-      field('author', 'Autor', 'text', true),
-      field('type', 'Typ wpisu', 'select', true, '', ['Progress', 'Problem', 'Decision', 'Plan']),
-      field('content', 'Treść', 'textarea', true, 'Co zrobiono, jaki jest efekt i co dalej?', [], true)
-    ]
-  }
-};
-
-function field(name, label, type = 'text', required = false, placeholder = '', options = [], full = false) {
-  return { name, label, type, required, placeholder, options, full };
+const S={view:'status',controller:'all',me:null,controllers:[],users:[],config:{categories:[],options:[],settings:{}},dashboard:{},status:[],tasks:[],points:[],notes:[],goals:[],dialog:null,group:{status:'category',notes:'controller'}};
+const $=q=>document.querySelector(q),$$=q=>[...document.querySelectorAll(q)],esc=v=>String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+const today=()=>new Date().toISOString().slice(0,10),date=v=>v?new Intl.DateTimeFormat('pl-PL').format(new Date(v.length===10?v+'T12:00:00':v)):'—';
+const ago14=()=>{const d=new Date();d.setDate(d.getDate()-13);return d.toISOString().slice(0,10)};
+const titles={status:['Status','Testy uruchomieniowe z grupowaniem i filtrami','+ Dodaj test'],tasks:['Zadania','Plan pracy zespołu, checklisty i powiązania','+ Nowe zadanie'],goals:['Cele','Kamienie milowe spinające testy, zadania i otwarte punkty','+ Nowy cel'],points:['Otwarte punkty','Problemy, oczekiwania, terminy i przypomnienia','+ Nowy punkt'],notes:['Dzienne notatki','Historia zmianowa i powiązania z pracą zespołu','+ Dodaj notatkę'],settings:['Konfiguracja','Sterowniki, użytkownicy, kategorie i słowniki','']};
+const badges={'Done':['Gotowe','green'],'In progress':['W trakcie','blue'],'Ready to test':['Do testu','amber'],'Blocked':['Zablokowane','red'],'NOK / Rework':['NOK / poprawa','red'],'Retest required':['Retest','amber'],'Not started':['Nie rozpoczęto','gray'],'N/A':['N/A','gray'],'To do':['Do zrobienia','gray'],'Open':['Otwarte','red'],'Waiting':['Oczekiwanie','amber'],'Closed':['Zamknięte','green'],'Critical':['Krytyczny','red'],'High':['Wysoki','amber'],'Medium':['Średni','blue'],'Low':['Niski','green']};
+const badge=v=>{const x=badges[v]||[v||'—','gray'];return `<span class="badge ${x[1]}">${esc(x[0])}</span>`};
+async function api(path,opt={}){const r=await fetch(path,{...opt,headers:{'Content-Type':'application/json',...(opt.headers||{})}});if(r.status===401){location.href='/login.html';throw new Error('Sesja wygasła')}if(!r.ok)throw new Error((await r.json().catch(()=>({}))).error||`Błąd ${r.status}`);return r.status===204?null:r.json()}
+function options(kind){return S.config.options.filter(x=>x.kind===kind).map(x=>x.value)}
+function categories(){return S.config.categories.map(x=>x.name)}
+function subcategories(cat){return S.config.categories.find(x=>x.name===cat)?.subcategories.map(x=>x.name)||[]}
+function people(){return S.users.filter(x=>x.active).map(x=>x.display_name)}
+async function init(){try{S.me=await api('/api/me');$('#me').textContent=`${S.me.display_name} · ${roleName(S.me.role)}`;$('#settings-nav').hidden=S.me.role==='user';bind();await load()}catch(e){toast(e.message,true)}}
+function bind(){$$('#nav button').forEach(b=>b.onclick=()=>view(b.dataset.view));$('#controller').onchange=async e=>{S.controller=e.target.value;await load()};$('#add').onclick=()=>open(S.view);$('#close').onclick=$('#cancel').onclick=()=>$('#modal').close();$('#form').onsubmit=save;$('#remove').onclick=removeCurrent;$('#logout').onclick=async()=>{await api('/api/logout',{method:'POST'});location.href='/login.html'}}
+async function load(){const q=`?controller=${encodeURIComponent(S.controller)}`,from=ago14(),to=today();[S.controllers,S.users,S.config,S.dashboard,S.status,S.tasks,S.points,S.notes,S.goals]=await Promise.all([api('/api/controllers'),api('/api/users'),api('/api/config'),api('/api/dashboard'+q),api('/api/status'+q),api('/api/tasks'+q),api('/api/open-points'+q),api(`/api/daily-notes${q}&from=${from}&to=${to}`),api('/api/goals'+q)]);const current=$('#controller').value;$('#controller').innerHTML='<option value="all">Wszystkie sterowniki</option>'+S.controllers.map(x=>`<option value="${esc(x.code)}">${esc(x.code)}</option>`).join('');$('#controller').value=S.controllers.some(x=>x.code===current)?current:S.controller;$('#people').innerHTML=people().map(x=>`<option value="${esc(x)}">`).join('');counts();render()}
+function counts(){$('#n-status').textContent=S.status.length;$('#n-tasks').textContent=S.tasks.filter(x=>x.status!=='Done').length;$('#n-goals').textContent=S.goals.filter(x=>x.status!=='Done').length;$('#n-points').textContent=S.points.filter(x=>x.status!=='Closed').length;$('#n-notes').textContent=S.notes.length}
+function view(v){if(v==='settings'&&S.me.role==='user')return;S.view=v;$$('#nav button').forEach(x=>x.classList.toggle('active',x.dataset.view===v));render()}
+function render(){const t=titles[S.view];$('#title').textContent=t[0];$('#desc').textContent=t[1];$('#add').textContent=t[2];$('#add').hidden=!t[2];({status:renderStatus,tasks:renderTasks,goals:renderGoals,points:renderPoints,notes:renderNotes,settings:renderSettings})[S.view]()}
+function rowFilters(columns,kind){return `<tr class="filters">${columns.map(c=>`<th>${c.filter===false?'':c.values?`<select data-filter="${c.key}">${select(c.values,'','Wszystkie')}</select>`:`<input data-filter="${c.key}" placeholder="Filtruj…">`}</th>`).join('')}</tr>`}
+function applyFilters(items,root){const f=Object.fromEntries($$(`${root} [data-filter]`).map(x=>[x.dataset.filter,x.value.toLowerCase()]));return items.filter(item=>Object.entries(f).every(([k,v])=>{if(!v)return true;const source=k==='station'?[item.station,item.function_detail,item.test_id]:k==='issue_id'?[item.issue_id,item.title,item.description,item.impact,item.next_action]:[item[k]];return source.join(' ').toLowerCase().includes(v)}))}
+function renderStatus(){const d=S.dashboard,cols=[{key:'station',name:'Stacja / test'},{key:'controller',name:'PLC'},{key:'category',name:'Kategoria',values:categories()},{key:'subcategory',name:'Podkategoria'},{key:'status',name:'Status',values:Object.keys(badges).slice(0,8)},{key:'criticality',name:'Krytyczność',values:['Low','Medium','High','Critical']},{key:'responsible',name:'Odpowiedzialny'},{key:'updated_at',name:'Aktualizacja'}];$('#content').innerHTML=`<div class="stats"><div class="stat"><span>Postęp</span><strong>${d.progress||0}%</strong><div class="progress"><i style="width:${d.progress||0}%"></i></div></div><div class="stat"><span>Gotowe</span><strong>${d.done||0} / ${d.total||0}</strong></div><div class="stat"><span>W trakcie</span><strong>${d.inProgress||0}</strong></div><div class="stat"><span>Zablokowane / NOK</span><strong>${d.blocked||0}</strong></div></div><div class="panel" id="status-panel"><div class="toolbar"><strong>Lista statusowa</strong><label>Grupuj: <select id="status-group"><option value="category">Kategoria</option><option value="subcategory">Podkategoria</option><option value="status">Status</option><option value="">Bez grupowania</option></select></label></div><div class="tablewrap"><table><thead><tr>${cols.map(x=>`<th>${x.name}</th>`).join('')}</tr>${rowFilters(cols)}</thead><tbody id="status-body"></tbody></table></div></div>`;$('#status-group').value=S.group.status;$('#status-group').onchange=e=>{S.group.status=e.target.value;statusRows()};$$('#status-panel [data-filter]').forEach(x=>x.oninput=x.onchange=statusRows);statusRows()}
+function statusRows(){let rows=applyFilters(S.status,'#status-panel'),g=S.group.status,html='';const groups=g?[...new Set(rows.map(x=>x[g]||'Bez wartości'))]:[''];for(const group of groups){const items=g?rows.filter(x=>(x[g]||'Bez wartości')===group):rows;if(g)html+=`<tr class="group-row"><td colspan="8">${esc(group)} <small>${items.length} pozycji</small></td></tr>`;html+=items.map(x=>`<tr data-id="${x.id}"><td class="maincell">${esc(x.station)} · ${esc(x.function_detail)}<span class="sub">${esc(x.test_id)} · ${esc(x.current_note)}</span></td><td>${esc(x.controller)}</td><td>${esc(x.category)}</td><td>${esc(x.subcategory||'—')}</td><td>${badge(x.status)}</td><td>${badge(x.criticality)}</td><td>${esc(x.responsible||'—')}</td><td>${date(x.updated_at.slice(0,10))}</td></tr>`).join('')}$('#status-body').innerHTML=html||'<tr><td colspan="8" class="empty">Brak wyników</td></tr>';$$('#status-body tr[data-id]').forEach(r=>r.onclick=()=>open('status',S.status.find(x=>x.id===+r.dataset.id)))}
+function renderTasks(){const sort=(a,b)=>(a.due_date||'9999').localeCompare(b.due_date||'9999');const lanes=[['To do','Do zrobienia','todo'],['In progress','W trakcie','progressing'],['Done','Ukończone','done']];$('#content').innerHTML=`<div class="toolbar panel"><strong>Zadania według deadline’u</strong><input id="task-search" placeholder="Szukaj po wszystkich polach"><select id="task-cat">${select(categories(),'','Wszystkie kategorie')}</select></div><div class="board" id="task-board"></div>`;const draw=()=>{const q=$('#task-search').value.toLowerCase(),cat=$('#task-cat').value;const list=S.tasks.filter(x=>(!q||JSON.stringify(x).toLowerCase().includes(q))&&(!cat||x.category===cat));$('#task-board').innerHTML=lanes.map(([st,label,cl])=>{const xs=list.filter(x=>x.status===st).sort(sort);return `<section class="lane ${cl}"><div class="lanehead"><span>${label}</span><span>${xs.length}</span></div>${xs.map(taskCard).join('')||'<div class="empty">Brak zadań</div>'}</section>`}).join('');$$('.card[data-kind="tasks"]').forEach(c=>c.onclick=()=>open('tasks',S.tasks.find(x=>x.id===+c.dataset.id)))};$('#task-search').oninput=draw;$('#task-cat').onchange=draw;draw()}
+function taskCard(x){const done=x.checklist?.filter(q=>q.done).length||0,total=x.checklist?.length||0,pct=total?done*100/total:0;return `<button class="card" data-kind="tasks" data-id="${x.id}"><h3>${esc(x.title)}</h3><p>${esc(x.controller)} · ${esc(x.category||'Bez kategorii')} / ${esc(x.subcategory||'—')}</p><div class="cardmeta"><span>${esc(x.owner||'Bez osoby')}</span><span>Termin: ${date(x.due_date)}</span></div>${total?`<div class="checkbar"><i style="width:${pct}%"></i></div><p>${done}/${total} podzadań</p>`:''}<span class="sub">Utworzył: ${esc(x.created_by_name||'dane historyczne')} · ${date(x.created_at.slice(0,10))}</span></button>`}
+function renderPoints(){const cols=[{key:'issue_id',name:'ID / temat'},{key:'controller',name:'PLC'},{key:'category',name:'Kategoria',values:categories()},{key:'subcategory',name:'Podkategoria'},{key:'status',name:'Status',values:['Open','Waiting','In progress','Closed']},{key:'waiting_for',name:'Oczekiwanie na',values:options('waiting_for')},{key:'owner',name:'Odpowiedzialny'},{key:'due_date',name:'Deadline'},{key:'reminder_date',name:'Przypomnienie'}];$('#content').innerHTML=`<div class="panel" id="points-panel"><div class="toolbar"><strong>Lista punktów</strong><input id="point-search" placeholder="Szukaj we wszystkich informacjach"><span>Sortowanie: najbliższy deadline</span></div><div class="tablewrap"><table><thead><tr>${cols.map(x=>`<th>${x.name}</th>`).join('')}</tr>${rowFilters(cols)}</thead><tbody id="points-body"></tbody></table></div></div>`;const draw=()=>{const q=$('#point-search').value.toLowerCase();const xs=applyFilters(S.points,'#points-panel').filter(x=>!q||JSON.stringify(x).toLowerCase().includes(q)).sort((a,b)=>(a.due_date||'9999').localeCompare(b.due_date||'9999'));$('#points-body').innerHTML=xs.map(x=>`<tr data-id="${x.id}"><td class="maincell">${esc(x.issue_id)} · ${esc(x.title)}<span class="sub">${esc(x.description)}</span><span class="sub">Utworzył: ${esc(x.created_by_name||'dane historyczne')}</span></td><td>${esc(x.controller)}</td><td>${esc(x.category||'—')}</td><td>${esc(x.subcategory||'—')}</td><td>${badge(x.status)}</td><td>${esc(x.waiting_for||'—')}</td><td>${esc(x.owner||'—')}</td><td>${date(x.due_date)}</td><td>${date(x.reminder_date)}</td></tr>`).join('')||'<tr><td colspan="9" class="empty">Brak wyników</td></tr>';$$('#points-body tr[data-id]').forEach(r=>r.onclick=()=>open('points',S.points.find(x=>x.id===+r.dataset.id)))};$$('#points-panel [data-filter]').forEach(x=>x.oninput=x.onchange=draw);$('#point-search').oninput=draw;draw()}
+function entity(type,id){return ({status:S.status,task:S.tasks,tasks:S.tasks,point:S.points,points:S.points}[type]||[]).find(x=>x.id===Number(id))}
+function entityLabel(type,x){return type==='status'?`${x.test_id} · ${x.function_detail}`:['task','tasks'].includes(type)?x.title:`${x.issue_id} · ${x.title}`}
+function renderGoals(){$('#content').innerHTML=`<div class="goalgrid">${S.goals.map(g=>{const links=g.links||[],done=links.filter(l=>{const x=entity(l.entity_type,l.entity_id);return x&&(x.status==='Done'||x.status==='Closed')}).length,pct=links.length?Math.round(done*100/links.length):0;return `<article class="goal"><div class="cardmeta"><span>${esc(g.controller||'Wszystkie PLC')}</span>${badge(g.status)}</div><h3>${esc(g.title)}</h3><p>${esc(g.description)}</p><div class="progress"><i style="width:${pct}%"></i></div><p>${done}/${links.length} powiązanych pozycji ukończonych · termin ${date(g.due_date)}</p><div class="goal-links">${links.map(l=>{const x=entity(l.entity_type,l.entity_id);return x?`<button class="jump" data-type="${l.entity_type}" data-id="${x.id}"><span>${esc(entityLabel(l.entity_type,x))}</span><span>→</span></button>`:''}).join('')}</div><button class="secondary edit-goal" data-id="${g.id}">Edytuj cel</button></article>`}).join('')||'<div class="empty">Nie zdefiniowano celów.</div>'}</div>`;$$('.edit-goal').forEach(x=>x.onclick=()=>open('goals',S.goals.find(g=>g.id===+x.dataset.id)));$$('.jump').forEach(x=>x.onclick=()=>jump(x.dataset.type,+x.dataset.id))}
+function renderNotes(){$('#content').innerHTML=`<div class="panel"><div class="toolbar"><strong>Historia wpisów</strong><label>Od <input type="date" id="notes-from" value="${ago14()}"></label><label>Do <input type="date" id="notes-to" value="${today()}"></label><label>Grupuj <select id="notes-group"><option value="controller">Sterownik</option><option value="type">Typ wpisu</option><option value="shift">Zmiana</option><option value="">Bez grupowania</option></select></label><button id="notes-refresh" class="secondary">Odśwież</button></div></div><div id="notes-list" class="notes"></div>`;$('#notes-group').value=S.group.notes;$('#notes-group').onchange=e=>{S.group.notes=e.target.value;notesRows()};$('#notes-refresh').onclick=async()=>{const q=`?controller=${encodeURIComponent(S.controller)}&from=${$('#notes-from').value}&to=${$('#notes-to').value}`;S.notes=await api('/api/daily-notes'+q);notesRows()};notesRows()}
+function notesRows(){const g=S.group.notes,groups=g?[...new Set(S.notes.map(x=>x[g]||'Bez wartości'))]:[''];$('#notes-list').innerHTML=groups.map(group=>`${g?`<div class="group-row"><div>${esc(group)} · ${S.notes.filter(x=>(x[g]||'Bez wartości')===group).length}</div></div>`:''}${(g?S.notes.filter(x=>(x[g]||'Bez wartości')===group):S.notes).map(x=>`<article class="note" data-id="${x.id}"><aside>${date(x.note_date)}<br>${esc(x.controller||'Ogólne')} · ${esc(x.shift)}<br>${esc(x.author||x.created_by_name)}</aside><div><strong>${esc(x.type)}</strong><p>${esc(x.content)}</p><div class="links">${x.linked_task_id?linkChip('tasks',x.linked_task_id):''}${x.linked_status_id?linkChip('status',x.linked_status_id):''}${x.linked_point_id?linkChip('points',x.linked_point_id):''}</div></div></article>`).join('')}`).join('')||'<div class="empty">Brak wpisów</div>';$$('.note[data-id]').forEach(x=>x.onclick=e=>{if(e.target.closest('.jump'))return;open('notes',S.notes.find(n=>n.id===+x.dataset.id))});$$('.jump').forEach(x=>x.onclick=e=>{e.stopPropagation();jump(x.dataset.type,+x.dataset.id)})}
+function linkChip(type,id){const x=entity(type,id);return x?`<button class="jump" data-type="${type}" data-id="${id}">${esc(entityLabel(type,x))} →</button>`:''}
+function roleName(r){return ({admin:'Administrator',moderator:'Moderator',user:'Użytkownik'})[r]||r}
+function renderSettings(){
+ const admin=S.me.role==='admin';
+ const catHtml=S.config.categories.map(c=>`<div class="settings-row"><span><b>${esc(c.name)}</b></span><button class="mini edit-config" data-kind="categories" data-id="${c.id}" data-value="${esc(c.name)}">Edytuj</button>${admin?`<button class="mini delete-config" data-kind="categories" data-id="${c.id}">Usuń</button>`:''}<button class="mini add-sub" data-id="${c.id}">+ podkategoria</button></div>${c.subcategories.map(s=>`<div class="settings-row"><span>↳ ${esc(s.name)}</span><button class="mini edit-config" data-kind="subcategories" data-id="${s.id}" data-value="${esc(s.name)}" data-parent="${c.id}">Edytuj</button>${admin?`<button class="mini delete-config" data-kind="subcategories" data-id="${s.id}">Usuń</button>`:''}</div>`).join('')}`).join('');
+ const dictHtml=[['waiting_for','Oczekiwanie na'],['shift','Zmiany'],['note_type','Typy notatek']].map(([k,n])=>`<b>${n}</b>${S.config.options.filter(x=>x.kind===k).map(x=>`<div class="settings-row"><span>${esc(x.value)}</span><button class="mini edit-config" data-kind="options" data-id="${x.id}" data-value="${esc(x.value)}" data-parent="${k}">Edytuj</button>${admin?`<button class="mini delete-config" data-kind="options" data-id="${x.id}">Usuń</button>`:''}</div>`).join('')}<form class="inline-form add-option" data-kind="${k}"><input name="value" placeholder="Nowa wartość" required><button class="mini">Dodaj</button></form>`).join('');
+ $('#content').innerHTML=`<div class="settings-grid"><section class="settings-card"><h2>Sterowniki / obszary</h2>${S.controllers.map(x=>`<div class="settings-row"><span><b>${esc(x.code)}</b><small class="sub">${esc(x.area)} · ${esc(x.description)}</small></span>${admin?`<button class="mini edit-controller" data-id="${x.id}">Edytuj</button>`:''}</div>`).join('')}${admin?`<form class="inline-form" data-add="controller"><input name="code" placeholder="np. HB521" required><input name="area" placeholder="Obszar"><button class="mini">Dodaj</button></form>`:''}</section><section class="settings-card"><h2>Kategorie i podkategorie</h2>${catHtml}<form class="inline-form" data-add="category"><input name="name" placeholder="Nowa kategoria" required><button class="mini">Dodaj</button></form></section><section class="settings-card"><h2>Użytkownicy</h2>${S.users.map(x=>`<div class="settings-row"><span><b>${esc(x.display_name)}</b><small class="sub">${esc(x.username)} · ${roleName(x.role)}${x.active?'':' · nieaktywny'}</small></span>${admin?`<button class="mini edit-user" data-id="${x.id}">Edytuj</button>`:''}</div>`).join('')}${admin?'<button class="secondary" id="new-user">+ Dodaj użytkownika</button>':'<p class="sub">Tylko administrator może zarządzać kontami.</p>'}</section><section class="settings-card"><h2>Słowniki</h2>${dictHtml}${admin?`<label class="field"><span>Domyślne przypomnienie (dni)</span><input id="reminder-days" type="number" min="1" value="${esc(S.config.settings.default_reminder_days||14)}"></label>`:''}</section></div>`;
+ bindSettings();
 }
-
-function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>'"]/g, character => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' })[character]);
+function bindSettings(){
+ $$('form[data-add="controller"]').forEach(f=>f.onsubmit=async e=>{e.preventDefault();await api('/api/controllers',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(f)))});toast('Dodano sterownik');await load()});
+ $$('form[data-add="category"]').forEach(f=>f.onsubmit=async e=>{e.preventDefault();await api('/api/categories',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(f)))});toast('Dodano kategorię');await load()});
+ $$('.add-sub').forEach(b=>b.onclick=async()=>{const name=prompt('Nazwa podkategorii:');if(name){await api('/api/subcategories',{method:'POST',body:JSON.stringify({category_id:+b.dataset.id,name})});await load()}});
+ $$('.add-option').forEach(f=>f.onsubmit=async e=>{e.preventDefault();const x=Object.fromEntries(new FormData(f));x.kind=f.dataset.kind;await api('/api/options',{method:'POST',body:JSON.stringify(x)});await load()});
+ $$('.edit-config').forEach(b=>b.onclick=async()=>{const value=prompt('Nowa nazwa:',b.dataset.value);if(!value)return;const body={name:value,value};if(b.dataset.kind==='subcategories')body.category_id=+b.dataset.parent;if(b.dataset.kind==='options')body.kind=b.dataset.parent;await api(`/api/${b.dataset.kind}/${b.dataset.id}`,{method:'PATCH',body:JSON.stringify(body)});await load()});
+ $$('.delete-config').forEach(b=>b.onclick=async()=>{if(!confirm('Usunąć tę wartość konfiguracji?'))return;await api(`/api/${b.dataset.kind}/${b.dataset.id}`,{method:'DELETE'});await load()});
+ $$('.edit-user').forEach(b=>b.onclick=()=>open('users',S.users.find(x=>x.id===+b.dataset.id)));$$('.edit-controller').forEach(b=>b.onclick=()=>open('controllers',S.controllers.find(x=>x.id===+b.dataset.id)));$('#new-user')?.addEventListener('click',()=>open('users'));$('#reminder-days')?.addEventListener('change',async e=>{await api('/api/settings/default_reminder_days',{method:'PATCH',body:JSON.stringify({value:e.target.value})});toast('Zapisano ustawienie')});
 }
-
-function badge(value) {
-  const [label, color] = badgeMap[value] || [value || '—', 'gray'];
-  return `<span class="badge ${color}">${escapeHtml(label)}</span>`;
-}
-
-function displayDate(value) {
-  if (!value) return '—';
-  const date = new Date(`${value}T12:00:00`);
-  return new Intl.DateTimeFormat('pl-PL', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(date);
-}
-
-function today() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-async function api(path, options = {}) {
-  const response = await fetch(path, {
-    ...options,
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(body.error || `Błąd serwera (${response.status})`);
-  }
-  return response.status === 204 ? null : response.json();
-}
-
-async function initialize() {
-  try {
-    state.controllers = await api('/api/controllers');
-    controllerSelect.insertAdjacentHTML('beforeend', state.controllers.map(item => `<option value="${escapeHtml(item.code)}">${escapeHtml(item.code)}</option>`).join(''));
-    bindShellEvents();
-    await loadData();
-  } catch (error) {
-    showError(error);
-  }
-}
-
-function bindShellEvents() {
-  document.querySelectorAll('.nav-button').forEach(button => button.addEventListener('click', () => setView(button.dataset.view)));
-  controllerSelect.addEventListener('change', async () => {
-    state.controller = controllerSelect.value;
-    await loadData();
-  });
-  addRecordButton.addEventListener('click', () => openDialog(state.view));
-  document.querySelector('#close-dialog').addEventListener('click', () => dialog.close());
-  document.querySelector('#cancel-dialog').addEventListener('click', () => dialog.close());
-  dialogForm.addEventListener('submit', saveDialogRecord);
-  deleteButton.addEventListener('click', deleteDialogRecord);
-}
-
-async function loadData() {
-  content.innerHTML = '<div class="loading">Ładowanie danych…</div>';
-  try {
-    const query = `?controller=${encodeURIComponent(state.controller)}`;
-    [state.dashboard, state.status, state.tasks, state.points, state.notes] = await Promise.all([
-      api(`/api/dashboard${query}`),
-      api(`/api/status${query}`),
-      api(`/api/tasks${query}`),
-      api(`/api/open-points${query}`),
-      api(`/api/daily-notes${query}`)
-    ]);
-    connection.className = 'connection online';
-    connection.innerHTML = '<span class="connection-dot"></span><span>Połączono</span>';
-    updateCounts();
-    render();
-  } catch (error) {
-    connection.className = 'connection error';
-    connection.innerHTML = '<span class="connection-dot"></span><span>Brak połączenia</span>';
-    showError(error);
-  }
-}
-
-function setView(view) {
-  state.view = view;
-  document.querySelectorAll('.nav-button').forEach(button => {
-    const active = button.dataset.view === view;
-    button.classList.toggle('active', active);
-    if (active) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
-  });
-  render();
-}
-
-function render() {
-  const [title, description, action] = pageCopy[state.view];
-  document.querySelector('#page-title').textContent = title;
-  document.querySelector('#page-description').textContent = description;
-  addRecordButton.textContent = action;
-  ({ status: renderStatus, tasks: renderTasks, points: renderPoints, notes: renderNotes })[state.view]();
-}
-
-function updateCounts() {
-  document.querySelector('#nav-status-count').textContent = state.status.length;
-  document.querySelector('#nav-tasks-count').textContent = state.tasks.filter(item => item.status !== 'Done').length;
-  document.querySelector('#nav-points-count').textContent = state.points.filter(item => item.status !== 'Closed').length;
-  document.querySelector('#nav-notes-count').textContent = state.notes.filter(item => item.note_date === today()).length;
-}
-
-function renderStatus() {
-  const d = state.dashboard;
-  content.innerHTML = `
-    <div class="stats">
-      <div class="stat"><div class="stat-label">Postęp</div><div class="stat-value">${d.progress || 0}%</div><div class="progress-track"><div class="progress-fill" style="width:${d.progress || 0}%"></div></div></div>
-      <div class="stat"><div class="stat-label">Gotowe</div><div class="stat-value">${d.done || 0} / ${d.total || 0}</div></div>
-      <div class="stat"><div class="stat-label">W toku</div><div class="stat-value">${d.inProgress || 0}</div></div>
-      <div class="stat"><div class="stat-label">Zablokowane / NOK</div><div class="stat-value">${d.blocked || 0}</div></div>
-    </div>
-    <div class="panel">
-      <div class="panel-head"><strong>Lista testów</strong><input id="status-search" type="search" placeholder="Szukaj testu lub stacji"><select id="status-filter"><option value="">Wszystkie statusy</option>${['Not started','Ready to test','In progress','Blocked','NOK / Rework','Retest required','Done','N/A'].map(value => `<option value="${value}">${escapeHtml((badgeMap[value] || [value])[0])}</option>`).join('')}</select></div>
-      <div class="table-wrap"><table><thead><tr><th>Stacja / test</th><th>Sterownik</th><th>Status</th><th>Krytyczność</th><th>Odpowiedzialny</th><th>Milestone</th></tr></thead><tbody id="status-table-body"></tbody></table></div>
-    </div>`;
-  const renderRows = () => {
-    const phrase = document.querySelector('#status-search').value.trim().toLowerCase();
-    const filter = document.querySelector('#status-filter').value;
-    const rows = state.status.filter(item => {
-      const text = [item.test_id, item.station, item.function_detail, item.category, item.responsible].join(' ').toLowerCase();
-      return (!phrase || text.includes(phrase)) && (!filter || item.status === filter);
-    });
-    document.querySelector('#status-table-body').innerHTML = rows.length ? rows.map(item => `
-      <tr data-edit="${item.id}"><td class="cell-title">${escapeHtml(item.station)} · ${escapeHtml(item.function_detail)}<span class="cell-subtitle">${escapeHtml(item.test_id)} · ${escapeHtml(item.category)}</span></td><td>${escapeHtml(item.controller)}</td><td>${badge(item.status)}</td><td>${badge(item.criticality)}</td><td>${escapeHtml(item.responsible || '—')}</td><td>${escapeHtml(item.milestone || '—')}</td></tr>`).join('') : '<tr><td colspan="6"><div class="empty-state">Brak testów dla wybranego filtra.</div></td></tr>';
-    document.querySelectorAll('#status-table-body [data-edit]').forEach(row => row.addEventListener('click', () => openDialog('status', state.status.find(item => item.id === Number(row.dataset.edit)))));
-  };
-  document.querySelector('#status-search').addEventListener('input', renderRows);
-  document.querySelector('#status-filter').addEventListener('change', renderRows);
-  renderRows();
-}
-
-function renderTasks() {
-  const lanes = [['To do', 'Do zrobienia'], ['In progress', 'W toku'], ['Done', 'Zakończone']];
-  content.innerHTML = `<div class="task-board">${lanes.map(([status, label]) => {
-    const items = state.tasks.filter(item => item.status === status);
-    return `<section class="task-lane"><div class="lane-title">${label}<span>${items.length}</span></div>${items.length ? items.map(task => `
-      <button type="button" class="task-card" data-edit="${task.id}"><strong>${escapeHtml(task.title)}</strong><p>${escapeHtml(task.station || task.controller)}${task.description ? ` · ${escapeHtml(task.description)}` : ''}</p><div class="card-foot"><span>${escapeHtml(task.owner || 'Bez właściciela')}</span><span>${task.due_date ? displayDate(task.due_date) : badge(task.priority)}</span></div></button>`).join('') : '<div class="empty-state">Brak zadań</div>'}</section>`;
-  }).join('')}</div>`;
-  document.querySelectorAll('.task-card[data-edit]').forEach(card => card.addEventListener('click', () => openDialog('tasks', state.tasks.find(item => item.id === Number(card.dataset.edit)))));
-}
-
-function renderPoints() {
-  const openItems = state.points.filter(item => item.status !== 'Closed');
-  content.innerHTML = `<div class="point-list">${openItems.length ? openItems.map(point => `
-    <button type="button" class="point-card" data-edit="${point.id}"><span class="priority-bar ${point.priority === 'Critical' ? 'critical' : point.priority === 'Low' ? 'low' : ''}"></span><span><strong>${escapeHtml(point.issue_id)} · ${escapeHtml(point.title)}</strong><p>${escapeHtml(point.impact || point.description || 'Brak opisu')}${point.waiting_for ? ` · Oczekujemy na: ${escapeHtml(point.waiting_for)}` : ''}</p></span><span class="point-side">${escapeHtml(point.owner || 'Bez właściciela')}<br>${badge(point.status)} ${point.due_date ? displayDate(point.due_date) : ''}</span></button>`).join('') : '<div class="empty-state">Brak otwartych punktów.</div>'}</div>`;
-  document.querySelectorAll('.point-card[data-edit]').forEach(card => card.addEventListener('click', () => openDialog('points', state.points.find(item => item.id === Number(card.dataset.edit)))));
-}
-
-function renderNotes() {
-  const defaultController = state.controller === 'all' ? (state.controllers[0]?.code || '') : state.controller;
-  content.innerHTML = `
-    <div class="notes-layout">
-      <section class="panel"><div class="panel-head"><strong>Ostatnie wpisy</strong><span class="badge blue">${state.notes.length}</span></div><div class="note-list">${state.notes.length ? state.notes.map(note => `
-        <article class="note-row" data-edit="${note.id}"><div class="note-meta">${displayDate(note.note_date)}<br>${escapeHtml(note.controller || 'Ogólne')} · ${escapeHtml(note.shift)}<br>${escapeHtml(note.author)}</div><div><strong>${escapeHtml(typeLabel(note.type))}</strong><p>${escapeHtml(note.content)}</p></div></article>`).join('') : '<div class="empty-state">Brak notatek dla wybranego sterownika.</div>'}</div></section>
-      <section class="panel"><div class="panel-head"><strong>Dodaj notatkę</strong></div><form id="quick-note-form" class="note-form">
-        <div class="field"><label for="quick-note-controller">Sterownik</label><select id="quick-note-controller" name="controller" required>${controllerOptions(defaultController)}</select></div>
-        <div class="field"><label for="quick-note-date">Data</label><input id="quick-note-date" name="note_date" type="date" value="${today()}" required></div>
-        <div class="field"><label for="quick-note-shift">Zmiana</label><select id="quick-note-shift" name="shift"><option>Shift 1</option><option>Shift 2</option><option>Shift 3</option><option>General</option></select></div>
-        <div class="field"><label for="quick-note-author">Autor</label><input id="quick-note-author" name="author" required placeholder="Imię i nazwisko"></div>
-        <div class="field"><label for="quick-note-type">Typ</label><select id="quick-note-type" name="type"><option value="Progress">Postęp</option><option value="Problem">Problem / blokada</option><option value="Decision">Decyzja</option><option value="Plan">Plan</option></select></div>
-        <div class="field"><label for="quick-note-content">Treść</label><textarea id="quick-note-content" name="content" required placeholder="Co zrobiono, jaki jest efekt i co dalej?"></textarea></div>
-        <button class="primary-button" type="submit">Zapisz notatkę</button>
-      </form></section>
-    </div>`;
-  document.querySelector('#quick-note-form').addEventListener('submit', saveQuickNote);
-  document.querySelectorAll('.note-row[data-edit]').forEach(row => row.addEventListener('click', () => openDialog('notes', state.notes.find(item => item.id === Number(row.dataset.edit)))));
-}
-
-function typeLabel(type) {
-  return ({ Progress:'Postęp prac', Problem:'Problem / blokada', Decision:'Decyzja', Plan:'Plan na kolejną zmianę' })[type] || type;
-}
-
-async function saveQuickNote(event) {
-  event.preventDefault();
-  const data = Object.fromEntries(new FormData(event.currentTarget));
-  try {
-    await api('/api/daily-notes', { method: 'POST', body: JSON.stringify(data) });
-    showToast('Notatka została zapisana.');
-    await loadData();
-  } catch (error) { showToast(error.message, true); }
-}
-
-function controllerOptions(selected) {
-  return state.controllers.map(item => `<option value="${escapeHtml(item.code)}"${item.code === selected ? ' selected' : ''}>${escapeHtml(item.code)}</option>`).join('');
-}
-
-function openDialog(view, record = null) {
-  if (view === 'notes' && !record) {
-    document.querySelector('#quick-note-content')?.focus();
-    return;
-  }
-  const config = forms[view];
-  state.dialog = { view, record };
-  document.querySelector('#dialog-title').textContent = record ? `Edytuj ${config.title}` : `Dodaj ${config.title}`;
-  document.querySelector('#dialog-subtitle').textContent = record ? `Rekord ${record.test_id || record.issue_id || record.id}` : 'Uzupełnij tylko informacje potrzebne zespołowi.';
-  deleteButton.classList.toggle('hidden', !record);
-  dialogFields.innerHTML = '';
-  config.fields.forEach(definition => dialogFields.appendChild(createField(definition, record)));
-  dialog.showModal();
-}
-
-function createField(definition, record) {
-  const wrapper = document.createElement('div');
-  wrapper.className = `field${definition.full ? ' full' : ''}`;
-  const label = document.createElement('label');
-  const id = `field-${definition.name}`;
-  label.htmlFor = id;
-  label.textContent = definition.label;
-  let input;
-  const value = record?.[definition.name] ?? defaultValue(definition.name);
-  if (definition.type === 'select' || definition.type === 'controller') {
-    input = document.createElement('select');
-    const options = definition.type === 'controller' ? state.controllers.map(item => item.code) : definition.options;
-    options.forEach(optionValue => {
-      const option = document.createElement('option');
-      option.value = optionValue;
-      option.textContent = optionLabel(optionValue);
-      option.selected = optionValue === value;
-      input.appendChild(option);
-    });
-    if (definition.type === 'controller' && record) input.disabled = true;
-  } else if (definition.type === 'textarea') {
-    input = document.createElement('textarea');
-    input.value = value;
-  } else {
-    input = document.createElement('input');
-    input.type = definition.type;
-    input.value = value;
-  }
-  input.id = id;
-  input.name = definition.name;
-  input.required = definition.required;
-  input.placeholder = definition.placeholder;
-  wrapper.append(label, input);
-  return wrapper;
-}
-
-function defaultValue(name) {
-  if (name === 'controller') return state.controller === 'all' ? (state.controllers[0]?.code || '') : state.controller;
-  if (name === 'note_date') return today();
-  const defaults = { criticality:'Medium', priority:'Medium', status: state.view === 'tasks' ? 'To do' : state.view === 'points' ? 'Open' : 'Not started', shift:'Shift 1', type:'Progress' };
-  return defaults[name] || '';
-}
-
-function optionLabel(value) {
-  const labels = { Low:'Niski', Medium:'Średni', High:'Wysoki', Critical:'Krytyczny', 'Not started':'Nie rozpoczęto', 'Ready to test':'Gotowe do testu', 'In progress':'W toku', Blocked:'Zablokowane', 'NOK / Rework':'NOK / poprawa', 'Retest required':'Wymagany retest', Done:'Gotowe', 'To do':'Do zrobienia', Open:'Otwarte', Waiting:'Oczekuje', Closed:'Zamknięte', 'Shift 1':'Zmiana 1', 'Shift 2':'Zmiana 2', 'Shift 3':'Zmiana 3', General:'Ogólne', Progress:'Postęp', Problem:'Problem / blokada', Decision:'Decyzja', Plan:'Plan' };
-  return labels[value] || value;
-}
-
-async function saveDialogRecord(event) {
-  event.preventDefault();
-  const { view, record } = state.dialog;
-  const config = forms[view];
-  const data = Object.fromEntries(new FormData(dialogForm));
-  if (record?.controller) data.controller = record.controller;
-  const path = record ? `${config.endpoint}/${record.id}` : config.endpoint;
-  try {
-    await api(path, { method: record ? 'PATCH' : 'POST', body: JSON.stringify(data) });
-    dialog.close();
-    showToast(record ? 'Zmiany zostały zapisane.' : 'Rekord został dodany.');
-    await loadData();
-  } catch (error) { showToast(error.message, true); }
-}
-
-async function deleteDialogRecord() {
-  const { view, record } = state.dialog || {};
-  if (!record) return;
-  if (!window.confirm('Usunąć ten rekord? Tej operacji nie można cofnąć.')) return;
-  try {
-    await api(`${forms[view].endpoint}/${record.id}`, { method: 'DELETE' });
-    dialog.close();
-    showToast('Rekord został usunięty.');
-    await loadData();
-  } catch (error) { showToast(error.message, true); }
-}
-
-function showToast(message, error = false) {
-  const toast = document.querySelector('#toast');
-  toast.textContent = message;
-  toast.className = `toast show${error ? ' error' : ''}`;
-  clearTimeout(showToast.timer);
-  showToast.timer = setTimeout(() => { toast.className = 'toast'; }, 3200);
-}
-
-function showError(error) {
-  content.innerHTML = `<div class="error-state">${escapeHtml(error.message || 'Nie udało się pobrać danych.')}</div>`;
-  showToast(error.message || 'Nie udało się pobrać danych.', true);
-}
-
-initialize();
+const defs={status:{endpoint:'/api/status',title:'test',fields:[['controller','Sterownik','controller'],['test_id','Test ID'],['station','Stacja / obiekt'],['function_detail','Test / funkcja'],['category','Kategoria','category'],['subcategory','Podkategoria','subcategory'],['status','Status','select',['Not started','Ready to test','In progress','Blocked','NOK / Rework','Retest required','Done','N/A']],['criticality','Krytyczność','select',['Low','Medium','High','Critical']],['responsible','Odpowiedzialny','person'],['milestone','Milestone'],['current_note','Aktualna notatka','textarea'],['evidence_link','Dodatkowe informacje / link']]},tasks:{endpoint:'/api/tasks',title:'zadanie',fields:[['controller','Sterownik','controller'],['title','Tytuł'],['station','Stacja / obiekt'],['owner','Odpowiedzialny','person'],['status','Status','select',['To do','In progress','Done']],['priority','Priorytet','select',['Low','Medium','High','Critical']],['start_date','Planowany start','date'],['due_date','Deadline','date'],['category','Kategoria','category'],['subcategory','Podkategoria','subcategory'],['link','Powiązanie','entity'],['info_link','Dodatkowe informacje / link'],['description','Opis','textarea']]},points:{endpoint:'/api/open-points',title:'otwarty punkt',fields:[['controller','Sterownik','controller'],['issue_id','Issue ID'],['title','Temat'],['owner','Odpowiedzialny','person'],['status','Status','select',['Open','Waiting','In progress','Closed']],['priority','Priorytet','select',['Low','Medium','High','Critical']],['start_date','Planowany start','date'],['due_date','Deadline','date'],['reminder_date','Przypomnienie','date'],['category','Kategoria','category'],['subcategory','Podkategoria','subcategory'],['waiting_for','Oczekiwanie na','options','waiting_for'],['link','Powiązanie','entity'],['info_link','Dodatkowe informacje / link'],['impact','Wpływ','textarea'],['next_action','Następny krok','textarea'],['description','Opis techniczny','textarea']]},notes:{endpoint:'/api/daily-notes',title:'notatkę',fields:[['controller','Sterownik','controller'],['note_date','Data','date'],['shift','Zmiana','options','shift'],['type','Typ wpisu','options','note_type'],['content','Treść','bigtextarea'],['note_links','Powiązania','note-links']]},goals:{endpoint:'/api/goals',title:'cel',fields:[['controller','Sterownik','controller'],['title','Nazwa celu'],['status','Status','select',['Open','In progress','Done']],['due_date','Termin','date'],['description','Opis','textarea'],['goal_links','Elementy wymagane do ukończenia','goal-links']]},users:{endpoint:'/api/users',title:'użytkownika',fields:[['username','Login'],['display_name','Imię i nazwisko'],['password','Hasło','password'],['role','Rola','select',['user','moderator','admin']],['active','Konto aktywne','boolean']]},controllers:{endpoint:'/api/controllers',title:'sterownik',fields:[['code','Kod sterownika'],['area','Obszar'],['description','Opis','textarea']]}};
+function open(type,record=null){const d=defs[type];if(!d)return;S.dialog={type,record};$('#modal-title').textContent=`${record?'Edytuj':'Dodaj'} ${d.title}`;$('#modal-subtitle').textContent=record?`Utworzone: ${date((record.created_at||'').slice(0,10))}${record.created_by_name?' · '+record.created_by_name:''}`:'Uzupełnij wymagane informacje.';$('#remove').hidden=!record||S.me.role!=='admin';$('#fields').innerHTML=d.fields.map(f=>fieldHtml(f,record)).join('')+(type==='tasks'?checklistHtml(record):'');bindDynamic(type);$('#modal').showModal()}
+function fieldHtml([name,label,type='text',extra],r){let v=r?.[name]??defaultVal(name),input='';if(type==='controller')input=`<select name="${name}" ${r?'disabled':''}>${select(S.controllers.map(x=>x.code),v)}</select>`;else if(type==='select')input=`<select name="${name}">${select(extra,v)}</select>`;else if(type==='category')input=`<select name="${name}" id="form-category">${select(categories(),v)}</select>`;else if(type==='subcategory')input=`<select name="${name}" id="form-subcategory">${select(subcategories(r?.category),v)}</select>`;else if(type==='options')input=`<select name="${name}">${select(options(extra),v)}</select>`;else if(type==='textarea'||type==='bigtextarea')input=`<textarea name="${name}">${esc(v)}</textarea>`;else if(type==='person')input=`<input name="${name}" list="people" value="${esc(v)}">`;else if(type==='boolean')input=`<select name="${name}"><option value="1"${v!==0?' selected':''}>Tak</option><option value="0"${v===0?' selected':''}>Nie</option></select>`;else if(type==='entity')return entityField(r);else if(type==='note-links')return noteLinks(r);else if(type==='goal-links')return goalLinks(r);else input=`<input name="${name}" type="${type}" value="${esc(v)}" ${['title','station','function_detail','username','display_name','password'].includes(name)&&!(name==='password'&&r)?'required':''}>`;return `<label class="field ${['textarea','bigtextarea'].includes(type)?'full '+(type==='bigtextarea'?'big':''):''}"><span>${label}</span>${input}</label>`}
+function entityField(r){const type=r?.linked_entity_type||'status',id=r?.linked_entity_id||'';return `<div class="field full"><label>Powiązanie z innym punktem</label><div class="link-choice"><select name="linked_entity_type" id="entity-type"><option value="status"${type==='status'?' selected':''}>Status</option><option value="points"${type==='points'?' selected':''}>Otwarty punkt</option></select><select name="linked_entity_id" id="entity-id" data-value="${id}"></select></div>${r?.linked_entity_id?'<button type="button" class="mini" id="go-entity">Przejdź bezpośrednio do powiązanego punktu →</button>':''}</div>`}
+function noteLinks(r){return `<div class="field full"><label>Powiązania (zaznacz i wybierz punkt)</label>${[['task','Zadanie','linked_task_id'],['status','Status','linked_status_id'],['point','Otwarty punkt','linked_point_id']].map(([t,n,k])=>`<div class="link-choice"><input type="checkbox" data-toggle="${k}" ${r?.[k]?'checked':''}><select name="${k}" id="${k}" ${r?.[k]?'':'disabled'}>${entityOptions(t,r?.[k])}</select></div>`).join('')}</div>`}
+function goalLinks(r){const current=r?.links||[];return `<div class="field full"><label>Powiązane elementy</label>${[['status','Status'],['task','Zadania'],['point','Otwarte punkty']].map(([t,n])=>{const list=t==='status'?S.status:t==='task'?S.tasks:S.points;return `<div class="checks"><b>${n}</b>${list.map(x=>`<label class="check-row"><input type="checkbox" data-goal-type="${t}" value="${x.id}" ${current.some(l=>l.entity_type===t&&l.entity_id===x.id)?'checked':''}><span>${esc(entityLabel(t,x))}</span></label>`).join('')}</div>`}).join('')}</div>`}
+function checklistHtml(r){const list=r?.checklist||[];return `<div class="checks"><label>Lista kontrolna / podzadania</label><div id="checklist">${list.map((x,i)=>checkRow(x,i)).join('')}</div><button type="button" class="mini" id="add-check">+ Dodaj podzadanie</button></div>`}
+function checkRow(x={},i=0){return `<div class="check-row"><input type="checkbox" data-check-done ${x.done?'checked':''}><input type="text" data-check-text value="${esc(x.text||'')}" placeholder="Treść podzadania"><button type="button" class="mini del-check">×</button></div>`}
+function entityOptions(t,val){const xs=t==='task'?S.tasks:t==='point'?S.points:S.status;return select(xs.map(x=>({value:x.id,label:entityLabel(t==='task'?'tasks':t==='point'?'points':'status',x)})),val)}
+function select(items,value='',blank='— wybierz —'){return `<option value="">${blank}</option>${items.map(x=>{const v=typeof x==='object'?x.value:x,l=typeof x==='object'?x.label:x;return `<option value="${esc(v)}"${String(v)===String(value)?' selected':''}>${esc(l)}</option>`}).join('')}`}
+function bindDynamic(type){$('#form-category')?.addEventListener('change',e=>{$('#form-subcategory').innerHTML=select(subcategories(e.target.value))});$('#entity-type')?.addEventListener('change',fillEntity);if($('#entity-type'))fillEntity();$('#go-entity')?.addEventListener('click',()=>{const t=$('#entity-type').value,i=Number($('#entity-id').value);$('#modal').close();jump(t,i)});$$('[data-toggle]').forEach(c=>c.onchange=()=>{$('#'+c.dataset.toggle).disabled=!c.checked});if(type==='tasks'){$('#add-check').onclick=()=>{$('#checklist').insertAdjacentHTML('beforeend',checkRow());bindCheckDeletes()};bindCheckDeletes()}}
+function fillEntity(){const t=$('#entity-type').value,xs=t==='status'?S.status:S.points,val=$('#entity-id').dataset.value;$('#entity-id').innerHTML=select(xs.map(x=>({value:x.id,label:entityLabel(t,x)})),val);$('#entity-id').dataset.value=''}
+function bindCheckDeletes(){$$('.del-check').forEach(b=>b.onclick=()=>b.closest('.check-row').remove())}
+function defaultVal(n){return n==='controller'?(S.controller==='all'?S.controllers[0]?.code:S.controller):n==='note_date'?today():n==='status'?'':n==='active'?1:''}
+async function save(e){e.preventDefault();const {type,record}=S.dialog,d=defs[type],x=Object.fromEntries(new FormData(e.currentTarget));if(record?.controller)x.controller=record.controller;if(type==='tasks')x.checklist=$$('#checklist .check-row').map(r=>({text:r.querySelector('[data-check-text]').value,done:r.querySelector('[data-check-done]').checked})).filter(q=>q.text.trim());if(type==='goals')x.links=$$('[data-goal-type]:checked').map(c=>({entity_type:c.dataset.goalType,entity_id:+c.value}));if(type==='notes')$$('[data-toggle]').forEach(c=>{if(!c.checked)x[c.dataset.toggle]=null});try{await api(d.endpoint+(record?'/'+record.id:''),{method:record?'PATCH':'POST',body:JSON.stringify(x)});$('#modal').close();toast('Zapisano zmiany');await load()}catch(err){toast(err.message,true)}}
+async function removeCurrent(){const {type,record}=S.dialog;if(!confirm('Usunąć ten rekord? Tej operacji nie można cofnąć.'))return;try{await api(defs[type].endpoint+'/'+record.id,{method:'DELETE'});$('#modal').close();toast('Usunięto rekord');await load()}catch(e){toast(e.message,true)}}
+function jump(type,id){const v=['task','tasks'].includes(type)?'tasks':['point','points'].includes(type)?'points':'status';view(v);const list={tasks:S.tasks,points:S.points,status:S.status}[v],r=list.find(x=>x.id===id);if(r)open(v,r)}
+let tt;function toast(m,bad=false){const x=$('#toast');x.textContent=m;x.className='toast show'+(bad?' error':'');clearTimeout(tt);tt=setTimeout(()=>x.className='toast',3000)}
+init();

@@ -1,0 +1,2 @@
+const form=document.querySelector('#login'),error=document.querySelector('#login-error');
+form.addEventListener('submit',async e=>{e.preventDefault();error.textContent='';const data=Object.fromEntries(new FormData(form));const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});if(r.ok)location.href='/';else error.textContent=(await r.json().catch(()=>({}))).error||'Nie udało się zalogować';});

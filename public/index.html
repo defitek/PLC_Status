@@ -1,67 +1,7 @@
-<!doctype html>
-<html lang="pl">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Status uruchomienia linii PLC: testy, zadania, otwarte punkty i dzienne notatki.">
-  <meta name="theme-color" content="#233c91">
-  <title>PLC Commissioning Hub</title>
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23233c91'/%3E%3Cpath d='M17 18h30v11H17zm0 17h13v11H17zm19 0h11v11H36z' fill='white'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="/styles.css">
-  <script src="/app.js" type="module"></script>
-</head>
-<body>
-  <div class="app-shell">
-    <header class="topbar">
-      <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
-      <div class="brand-copy"><strong>PLC Commissioning Hub</strong><span>W371 · Body Shop</span></div>
-      <div class="connection" id="connection-state"><span class="connection-dot"></span><span>Łączenie…</span></div>
-    </header>
-
-    <div class="app-layout">
-      <aside class="sidebar">
-        <label class="controller-field" for="controller-select">
-          <span>Sterownik</span>
-          <select id="controller-select"><option value="all">Wszystkie PLC</option></select>
-        </label>
-
-        <nav class="main-nav" aria-label="Główne okna">
-          <button type="button" class="nav-button active" data-view="status" aria-current="page"><span class="nav-icon">◫</span><span>Status</span><span class="nav-count" id="nav-status-count">0</span></button>
-          <button type="button" class="nav-button" data-view="tasks"><span class="nav-icon">✓</span><span>Zadania</span><span class="nav-count" id="nav-tasks-count">0</span></button>
-          <button type="button" class="nav-button" data-view="points"><span class="nav-icon">!</span><span>Otwarte punkty</span><span class="nav-count" id="nav-points-count">0</span></button>
-          <button type="button" class="nav-button" data-view="notes"><span class="nav-icon">▤</span><span>Dzienne notatki</span><span class="nav-count" id="nav-notes-count">0</span></button>
-        </nav>
-      </aside>
-
-      <main class="main-content">
-        <div class="page-header">
-          <div>
-            <h1 id="page-title">Status</h1>
-            <p id="page-description">Postęp testów i szybka aktualizacja stanu.</p>
-          </div>
-          <button type="button" class="primary-button" id="add-record">+ Dodaj test</button>
-        </div>
-        <section id="content" aria-live="polite"><div class="loading">Ładowanie danych…</div></section>
-      </main>
-    </div>
-  </div>
-
-  <dialog id="record-dialog" class="record-dialog">
-    <form method="dialog" id="record-form">
-      <div class="dialog-head">
-        <div><h2 id="dialog-title">Nowy rekord</h2><p id="dialog-subtitle"></p></div>
-        <button type="button" class="icon-button" id="close-dialog" aria-label="Zamknij">×</button>
-      </div>
-      <div class="form-grid" id="dialog-fields"></div>
-      <div class="dialog-actions">
-        <button type="button" class="danger-button hidden" id="delete-record">Usuń</button>
-        <span class="dialog-spacer"></span>
-        <button type="button" class="secondary-button" id="cancel-dialog">Anuluj</button>
-        <button type="submit" class="primary-button">Zapisz</button>
-      </div>
-    </form>
-  </dialog>
-
-  <div class="toast" id="toast" role="status" aria-live="polite"></div>
-</body>
-</html>
+<!doctype html><html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#172554"><title>PLC Commissioning Hub</title><link rel="stylesheet" href="/styles.css"><script type="module" src="/app.js"></script></head><body>
+<header class="topbar"><div class="logo">PLC</div><div class="brand"><strong>Commissioning Hub</strong><span>Project status & team workspace</span></div><div class="userbox"><span id="me"></span><button id="logout" class="ghost">Wyloguj</button></div></header>
+<div class="layout"><aside><label class="select-label">Sterownik<select id="controller"><option value="all">Wszystkie sterowniki</option></select></label><nav id="nav">
+<button data-view="status" class="active">▦ <span>Status</span><b id="n-status">0</b></button><button data-view="tasks">✓ <span>Zadania</span><b id="n-tasks">0</b></button><button data-view="goals">◎ <span>Cele</span><b id="n-goals">0</b></button><button data-view="points">! <span>Otwarte punkty</span><b id="n-points">0</b></button><button data-view="notes">▤ <span>Dzienne notatki</span><b id="n-notes">0</b></button><button data-view="settings" id="settings-nav">⚙ <span>Konfiguracja</span></button></nav></aside>
+<main><header class="pagehead"><div><h1 id="title">Status</h1><p id="desc"></p></div><button id="add" class="primary">+ Dodaj</button></header><section id="content"><div class="loading">Ładowanie…</div></section></main></div>
+<dialog id="modal"><form id="form"><header><div><h2 id="modal-title"></h2><p id="modal-subtitle"></p></div><button type="button" class="x" id="close">×</button></header><div id="fields" class="formgrid"></div><footer><button type="button" id="remove" class="danger">Usuń</button><span></span><button type="button" id="cancel" class="secondary">Anuluj</button><button class="primary">Zapisz</button></footer></form></dialog>
+<div id="toast" class="toast"></div><datalist id="people"></datalist></body></html>

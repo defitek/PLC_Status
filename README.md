@@ -1,98 +1,82 @@
-# PLC Commissioning Hub
+# PLC Commissioning Hub V2
 
-Samodzielna aplikacja do prowadzenia statusu uruchomienia linii PLC. Zawiera cztery główne moduły:
+Samodzielna aplikacja WWW do prowadzenia uruchomienia PLC. Działa na Node.js 24 i SQLite, bez zewnętrznych usług oraz bez zależności npm.
 
-- **Status** — testy, postęp, odpowiedzialni, milestone i krótkie notatki;
-- **Zadania** — tablica „Do zrobienia / W toku / Zakończone”;
-- **Otwarte punkty** — blokady, priorytety, wpływ, oczekiwanie i następny krok;
-- **Dzienne notatki** — dziennik zmianowy z datą, zmianą, autorem i typem wpisu.
+## Funkcje V2
 
-Przy pierwszym uruchomieniu baza jest automatycznie tworzona i uzupełniana przykładowymi danymi dla **HB522** oraz **UB512**.
+- indywidualne konta i role: `admin`, `moderator`, `user`;
+- dynamiczne sterowniki/obszary, kategorie, podkategorie, zmiany, typy notatek i wartości „Oczekiwanie na”;
+- status z grupowaniem według kategorii, podkategorii lub statusu oraz filtrami kolumnowymi;
+- zadania w trzech kolorystycznych etapach, z checklistami, terminami, autorem i powiązaniami;
+- Cele łączące testy, zadania i otwarte punkty;
+- otwarte punkty z terminem, przypomnieniem (domyślnie 14 dni), kategoriami i powiązaniem;
+- dzienne notatki z zakresem dat (domyślnie 14 dni), grupowaniem i trzema typami powiązań;
+- automatyczne pola „Utworzone przez” i „Data utworzenia”.
 
-## Najprostsze uruchomienie — Docker Compose
+## Ważne przy aktualizacji z prototypu V1
 
-Wymagania: Docker oraz Docker Compose.
+V2 ma nowy model danych. Przy pierwszym starcie wykrywa bazę V1 i tworzy od nowa schemat V2 z przykładowymi danymi HB522/UB512. Kolejne redeploye zachowują już dane V2 na Railway Volume.
 
-1. Rozpakuj paczkę na serwerze.
-2. Opcjonalnie skopiuj `.env.example` jako `.env` i ustaw dane dostępu:
+## Wdrożenie na Railway
 
-   ```env
-   APP_USER=plc
+Konfiguracja pozostaje taka sama jak w poprzedniej wersji:
+
+1. Podmień wszystkie pliki w repozytorium GitHub zawartością katalogu `plc-commissioning-hub`.
+2. Wypchnij commit do GitHuba; Railway powinien automatycznie rozpocząć deployment. Możesz też wybrać `Redeploy`.
+3. Pozostaw Railway Volume zamontowany jako:
+
+   ```text
+   /app/data
+   ```
+
+4. Pozostaw zmienną:
+
+   ```text
+   DB_PATH=/app/data/plc-status.db
+   ```
+
+5. Ustaw dane pierwszego administratora:
+
+   ```text
+   APP_USER=admin
    APP_PASSWORD=ustaw-dlugie-losowe-haslo
    ```
 
-3. W katalogu aplikacji uruchom:
+6. Nie ustawiaj ręcznie `PORT`. Railway przekaże go automatycznie.
 
-   ```bash
-   docker compose up -d --build
-   ```
+`Dockerfile` nie zawiera instrukcji `VOLUME`. Skrypt `docker-entrypoint.sh` po zamontowaniu dysku ustawia prawa do `/app/data`, a aplikacja działa jako użytkownik `node`. To zachowuje wcześniejszą poprawkę błędu SQLite `unable to open database file`.
 
-4. Otwórz w przeglądarce:
+Po pierwszym udanym uruchomieniu zaloguj się danymi `APP_USER` / `APP_PASSWORD`. Następne konta tworzysz w aplikacji w module **Konfiguracja → Użytkownicy**. Zmiana zmiennych `APP_USER` lub `APP_PASSWORD` po utworzeniu bazy nie zmienia istniejącego konta — hasło edytuje się w aplikacji.
 
-   ```text
-   http://ADRES_SERWERA:8080
-   ```
+## Uprawnienia w prototypie
 
-Dane są przechowywane w trwałym wolumenie Docker `plc_status_data`, więc aktualizacja lub ponowne uruchomienie kontenera ich nie usuwa.
+| Czynność | Administrator | Moderator | Użytkownik |
+|---|:---:|:---:|:---:|
+| Dodawanie i edycja danych roboczych | ✓ | ✓ | ✓ |
+| Usuwanie danych roboczych | ✓ | — | — |
+| Kategorie, podkategorie i słowniki | pełne | dodawanie/edycja | — |
+| Sterowniki i użytkownicy | pełne | podgląd | — |
+| Ustawienie domyślnego przypomnienia | ✓ | — | — |
 
-## Uruchomienie bez Dockera
+To jest wstępna macierz zgodna z założeniem, że dokładne uprawnienia zostaną dopasowane na końcu.
 
-Wymagany jest Node.js 24 lub nowszy.
-
-```bash
-node server.js
-```
-
-Aplikacja będzie dostępna pod adresem `http://localhost:3000`, a baza zostanie zapisana jako `data/plc-status.db`.
-
-Można zmienić konfigurację przez zmienne środowiskowe:
-
-| Zmienna | Znaczenie | Domyślna wartość |
-|---|---|---|
-| `PORT` | Port serwera HTTP | `3000` |
-| `DB_PATH` | Ścieżka pliku SQLite | `data/plc-status.db` |
-| `APP_USER` | Opcjonalny użytkownik HTTP Basic Auth | puste |
-| `APP_PASSWORD` | Opcjonalne hasło HTTP Basic Auth | puste |
-
-Jeżeli ustawiasz autoryzację, ustaw jednocześnie `APP_USER` i `APP_PASSWORD`.
-
-## Kopia bezpieczeństwa
-
-Baza jest pojedynczym plikiem SQLite. Przed wykonaniem kopii zatrzymaj zapis do aplikacji, a najlepiej kontener:
+## Lokalny test przez Docker
 
 ```bash
-docker compose stop plc-status
+cp .env.example .env
+docker compose up -d --build
 ```
 
-Następnie wykonaj kopię wolumenu `plc_status_data` zgodnie z procedurą backupu używaną na Twoim serwerze i ponownie uruchom usługę:
+Aplikacja: `http://localhost:8080`.
 
-```bash
-docker compose start plc-status
-```
+## Testy
 
-## Bezpieczeństwo
-
-- Do testu w odseparowanej sieci zakładowej można uruchomić aplikację bez logowania.
-- Przed wystawieniem jej poza zaufaną sieć ustaw `APP_USER` i `APP_PASSWORD` oraz użyj HTTPS na reverse proxy (np. Nginx, Traefik lub firmowy load balancer).
-- Wersja demonstracyjna nie ma indywidualnych kont ani rozbudowanych ról użytkowników.
-
-## Struktura projektu
-
-```text
-plc-commissioning-hub/
-├── public/              # interfejs przeglądarkowy
-├── test/                # test warstwy danych
-├── database.js          # obsługa SQLite i dane startowe
-├── schema.sql           # struktura bazy i indeksy
-├── server.js            # serwer HTTP oraz REST API
-├── Dockerfile
-└── compose.yaml
-```
-
-## Test
+W Node.js 24+:
 
 ```bash
 npm test
 ```
 
-Projekt nie wymaga instalowania paczek npm — korzysta wyłącznie z modułów wbudowanych w Node.js 24.
+## Dane i backup
+
+Baza znajduje się w jednym pliku wskazanym przez `DB_PATH`. Na Railway jest to `/app/data/plc-status.db`. Nie usuwaj Volume i nie zmieniaj punktu montowania po rozpoczęciu właściwych testów. Przed ważną aktualizacją pobierz kopię pliku bazy lub wykonaj snapshot wolumenu.
