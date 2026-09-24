@@ -11,7 +11,7 @@
 <body>
   <header class="topbar">
     <div class="logo">PLC</div>
-    <div class="brand"><strong>Commissioning Hub</strong><span>Project status & team workspace · V3.1</span></div>
+    <div class="brand"><strong>Commissioning Hub</strong><span>Project status & team workspace · V3.2</span></div>
     <div class="userbox"><span id="me"></span><button id="logout" class="ghost">Wyloguj</button></div>
   </header>
   <div class="layout">
@@ -57,6 +57,20 @@
     <div class="picker-tools"><input id="picker-search" type="search" placeholder="Szukaj elementu…"></div>
     <div id="picker-content" class="picker-content"></div>
     <footer class="dialog-actions"><span></span><button type="button" class="secondary" id="picker-cancel">Anuluj</button><button type="button" class="primary" id="picker-apply">Zastosuj wybór</button></footer>
+  </dialog>
+
+  <dialog id="function-points-dialog" class="wide-dialog">
+    <header class="dialog-head"><div><h2 id="function-points-title">Punkty grupy funkcyjnej</h2><p id="function-points-subtitle"></p></div><button type="button" class="x" id="function-points-close">×</button></header>
+    <div class="dialog-notice">Wybierz kategorię i tylko te podkategorie, które faktycznie trzeba sprawdzić. Każda zaznaczona podkategoria utworzy osobny wiersz w module Status.</div>
+    <div id="function-points-content" class="function-points"></div>
+    <footer class="dialog-actions"><button type="button" class="secondary" id="function-point-add">+ Dodaj punkt</button><span></span><button type="button" class="secondary" id="function-points-cancel">Anuluj</button><button type="button" class="primary" id="function-points-save">Zapisz i zsynchronizuj status</button></footer>
+  </dialog>
+
+  <dialog id="quick-status-dialog" class="wide-dialog quick-status-dialog">
+    <header class="dialog-head"><div><h2>Szybka edycja statusu</h2><p>Cała bieżąca lista w jednym oknie — zmiany zostaną zapisane zbiorczo.</p></div><button type="button" class="x" id="quick-status-close">×</button></header>
+    <div class="picker-tools"><input id="quick-status-search" type="search" placeholder="Szukaj po ID, grupie, punkcie, kategorii lub notatce…"></div>
+    <div class="tablewrap quick-status-wrap"><table class="quick-status-table"><thead><tr><th>Test ID</th><th>Sterownik</th><th>Grupa funkcyjna</th><th>Punkt / funkcja</th><th>Kategoria</th><th>Podkategoria</th><th>Krytyczność</th><th>Status</th><th>Odpowiedzialny</th><th>Notatka</th></tr></thead><tbody id="quick-status-body"></tbody></table></div>
+    <footer class="dialog-actions"><span id="quick-status-count" class="dialog-count"></span><span></span><button type="button" class="secondary" id="quick-status-cancel">Anuluj</button><button type="button" class="primary" id="quick-status-save">Zapisz wszystkie zmiany</button></footer>
   </dialog>
 
   <div id="toast" class="toast"></div>

@@ -41,13 +41,15 @@ export function openDatabase(databasePath) {
   db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;');
   db.exec(readFileSync(join(moduleDir, 'schema.sql'), 'utf8'));
   migrateToV3(db);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_status_function_group ON status_items(function_group_id,function_group_check_id)');
   seedConfiguration(db);
   if (String(process.env.SEED_DEMO_DATA || 'true').toLowerCase() !== 'false') {
     seedDemoData(db, hashPassword, process.env.DEMO_DATA_LIMIT || 100);
   }
   backfillV3(db);
+  backfillFunctionGroups(db);
   seedMigrationAudit(db);
-  db.prepare("INSERT INTO app_meta(key,value) VALUES('schema_version','3') ON CONFLICT(key) DO UPDATE SET value='3'").run();
+  db.prepare("INSERT INTO app_meta(key,value) VALUES('schema_version','3.2') ON CONFLICT(key) DO UPDATE SET value='3.2'").run();
   return createRepository(db);
 }
 
@@ -66,6 +68,8 @@ function migrateToV3(db) {
     ['status_items', 'subcategory', "TEXT NOT NULL DEFAULT ''"],
     ['status_items', 'responsible_user_id', 'INTEGER'],
     ['status_items', 'created_by', 'INTEGER'],
+    ['status_items', 'function_group_id', 'INTEGER'],
+    ['status_items', 'function_group_check_id', 'INTEGER'],
     ['tasks', 'owner_user_id', 'INTEGER'],
     ['tasks', 'start_date', 'TEXT'],
     ['tasks', 'category', "TEXT NOT NULL DEFAULT ''"],
@@ -173,6 +177,47 @@ function backfillV3(db) {
   }
 }
 
+function backfillFunctionGroups(db) {
+  if (db.prepare("SELECT value FROM app_meta WHERE key='function_groups_backfill_v1'").get()?.value === '1') return;
+  const rows = db.prepare(`SELECT DISTINCT controller_id,station FROM status_items
+    WHERE station!='' ORDER BY controller_id,station COLLATE NOCASE`).all();
+  if (!rows.length) return;
+  const insertGroup = db.prepare('INSERT OR IGNORE INTO function_groups(controller_id,name,sort_order) VALUES(?,?,?)');
+  for (const row of rows) {
+    const nextOrder = db.prepare('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM function_groups WHERE controller_id=?').get(row.controller_id).value;
+    insertGroup.run(row.controller_id, row.station, nextOrder);
+  }
+  db.exec(`UPDATE status_items SET function_group_id=(
+    SELECT fg.id FROM function_groups fg
+    WHERE fg.controller_id=status_items.controller_id AND fg.name=status_items.station COLLATE NOCASE
+    LIMIT 1
+  ) WHERE function_group_id IS NULL AND station!=''`);
+
+  const statusRows = db.prepare(`SELECT id,function_group_id,function_detail,category,criticality,subcategory
+    FROM status_items WHERE function_group_id IS NOT NULL ORDER BY id`).all();
+  const insertCheck = db.prepare(`INSERT OR IGNORE INTO function_group_checks
+    (function_group_id,title,category,criticality,sort_order) VALUES(?,?,?,?,?)`);
+  const linkSubcategory = db.prepare('INSERT OR IGNORE INTO function_group_check_subcategories(check_id,subcategory_id) VALUES(?,?)');
+  const linkStatus = db.prepare('UPDATE status_items SET function_group_check_id=? WHERE id=?');
+  for (const row of statusRows) {
+    let check = db.prepare(`SELECT * FROM function_group_checks
+      WHERE function_group_id=? AND title=? COLLATE NOCASE AND category=? COLLATE NOCASE`).get(row.function_group_id, row.function_detail, row.category);
+    if (!check) {
+      const nextOrder = db.prepare('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM function_group_checks WHERE function_group_id=?').get(row.function_group_id).value;
+      insertCheck.run(row.function_group_id, row.function_detail, row.category, row.criticality || 'Medium', nextOrder);
+      check = db.prepare(`SELECT * FROM function_group_checks
+        WHERE function_group_id=? AND title=? COLLATE NOCASE AND category=? COLLATE NOCASE`).get(row.function_group_id, row.function_detail, row.category);
+    }
+    linkStatus.run(check.id, row.id);
+    if (row.subcategory) {
+      const subcategory = db.prepare(`SELECT s.id FROM subcategories s JOIN categories c ON c.id=s.category_id
+        WHERE c.name=? COLLATE NOCASE AND s.name=? COLLATE NOCASE LIMIT 1`).get(row.category, row.subcategory);
+      if (subcategory) linkSubcategory.run(check.id, subcategory.id);
+    }
+  }
+  db.prepare("INSERT INTO app_meta(key,value) VALUES('function_groups_backfill_v1','1') ON CONFLICT(key) DO UPDATE SET value='1'").run();
+}
+
 function seedMigrationAudit(db) {
   for (const [type, table] of Object.entries(TABLES)) {
     const rows = db.prepare(`SELECT * FROM ${table}`).all();
@@ -191,6 +236,13 @@ function createRepository(db) {
   function controller(code) {
     const value = one('SELECT * FROM controllers WHERE code=?', clean(code));
     if (!value) throw appError('Nieznany sterownik');
+    return value;
+  }
+
+  function functionGroup(id) {
+    const value = one(`SELECT fg.*,c.code controller FROM function_groups fg
+      JOIN controllers c ON c.id=fg.controller_id WHERE fg.id=?`, asId(id));
+    if (!value) throw appError('Nieznana grupa funkcyjna', 404);
     return value;
   }
 
@@ -304,15 +356,19 @@ function createRepository(db) {
     const filter = controllerFilter(code, 's');
     return all(`SELECT s.*,c.code controller,c.sort_order controller_order,
       creator.display_name created_by_name,responsible.display_name responsible_name,
+      fg.name function_group_name,COALESCE(fg.sort_order,9999) function_group_order,
+      COALESCE(fgc.sort_order,9999) function_check_order,
       COALESCE(cat.sort_order,9999) category_order,COALESCE(sub.sort_order,9999) subcategory_order
       FROM status_items s
       JOIN controllers c ON c.id=s.controller_id
       LEFT JOIN users creator ON creator.id=s.created_by
       LEFT JOIN users responsible ON responsible.id=s.responsible_user_id
+      LEFT JOIN function_groups fg ON fg.id=s.function_group_id
+      LEFT JOIN function_group_checks fgc ON fgc.id=s.function_group_check_id
       LEFT JOIN categories cat ON cat.name=s.category
       LEFT JOIN subcategories sub ON sub.category_id=cat.id AND sub.name=s.subcategory
       ${filter.sql}
-      ORDER BY c.sort_order,category_order,subcategory_order,s.id`, ...filter.params).map(row => decorateStatus(row, currentUser));
+      ORDER BY c.sort_order,function_group_order,category_order,function_check_order,subcategory_order,s.id`, ...filter.params).map(row => decorateStatus(row, currentUser));
   }
 
   function taskRows(code, currentUser) {
@@ -421,10 +477,185 @@ function createRepository(db) {
     },
     deleteController(id) { db.prepare('DELETE FROM controllers WHERE id=?').run(id); },
 
+    saveFunctionGroup(id, input, currentUser) {
+      const targetController = controller(input.controller);
+      const name = clean(input.name);
+      if (!name) throw appError('Nazwa grupy funkcyjnej jest wymagana');
+      const duplicate = one('SELECT id FROM function_groups WHERE controller_id=? AND name=? COLLATE NOCASE AND id!=?', targetController.id, name, asId(id) || 0);
+      if (duplicate) throw appError('Taka grupa funkcyjna już istnieje dla tego sterownika');
+      if (!id) {
+        const nextOrder = one('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM function_groups WHERE controller_id=?', targetController.id).value;
+        const groupId = insertRecord('function_groups', { controller_id: targetController.id, name, sort_order: nextOrder, active: 1 });
+        return functionGroup(groupId);
+      }
+
+      const previous = functionGroup(id);
+      const linkedStatuses = all('SELECT id FROM status_items WHERE function_group_id=? ORDER BY id', previous.id);
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        db.prepare('UPDATE function_groups SET controller_id=?,name=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(targetController.id, name, previous.id);
+        for (const status of linkedStatuses) {
+          const before = baseSnapshot('status', status.id);
+          db.prepare('UPDATE status_items SET controller_id=?,station=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(targetController.id, name, status.id);
+          writeAudit('status', status.id, 'update', currentUser, before, baseSnapshot('status', status.id));
+        }
+        db.exec('COMMIT');
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
+      return functionGroup(previous.id);
+    },
+    bulkFunctionGroups(input) {
+      const targetController = controller(input.controller);
+      const rawNames = Array.isArray(input.names) ? input.names : String(input.names || '').split(/\r?\n/);
+      const names = [...new Set(rawNames.map(clean).filter(Boolean))].slice(0, 500);
+      if (!names.length) throw appError('Wklej co najmniej jedną nazwę grupy');
+      const insert = db.prepare('INSERT OR IGNORE INTO function_groups(controller_id,name,sort_order) VALUES(?,?,?)');
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        let nextOrder = one('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM function_groups WHERE controller_id=?', targetController.id).value;
+        for (const name of names) {
+          const result = insert.run(targetController.id, name, nextOrder);
+          if (result.changes) nextOrder += 1;
+        }
+        db.exec('COMMIT');
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
+      return all(`SELECT fg.*,c.code controller FROM function_groups fg JOIN controllers c ON c.id=fg.controller_id
+        WHERE fg.controller_id=? ORDER BY fg.sort_order,fg.name`, targetController.id);
+    },
+    deleteFunctionGroup(id, currentUser) {
+      const group = functionGroup(id);
+      const statuses = all('SELECT id FROM status_items WHERE function_group_id=? ORDER BY id', group.id);
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        for (const status of statuses) removeWithAudit('status', status.id, currentUser);
+        db.prepare('DELETE FROM function_groups WHERE id=?').run(group.id);
+        db.exec('COMMIT');
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
+    },
+    saveFunctionGroupChecks(groupId, input, currentUser) {
+      const group = functionGroup(groupId);
+      const points = Array.isArray(input.points) ? input.points : [];
+      const duplicateKeys = new Set();
+      const normalized = points.map((point, index) => {
+        const title = clean(point.title);
+        const category = clean(point.category);
+        if (!title || !category) throw appError(`Punkt ${index + 1}: nazwa i kategoria są wymagane`);
+        const categoryRow = one('SELECT id FROM categories WHERE name=? COLLATE NOCASE AND active=1', category);
+        if (!categoryRow) throw appError(`Punkt ${index + 1}: nieznana kategoria`);
+        const key = `${title.toLocaleLowerCase('pl')}\u0000${category.toLocaleLowerCase('pl')}`;
+        if (duplicateKeys.has(key)) throw appError(`Punkt ${index + 1}: powtórzona nazwa w tej samej kategorii`);
+        duplicateKeys.add(key);
+        const subcategoryIds = [...new Set((Array.isArray(point.subcategory_ids) ? point.subcategory_ids : []).map(asId).filter(Boolean))];
+        for (const subcategoryId of subcategoryIds) {
+          if (!one('SELECT 1 FROM subcategories WHERE id=? AND category_id=? AND active=1', subcategoryId, categoryRow.id)) {
+            throw appError(`Punkt ${index + 1}: podkategoria nie należy do wybranej kategorii`);
+          }
+        }
+        return { id: asId(point.id), title, category, criticality: clean(point.criticality) || 'Medium', subcategoryIds, sort_order: index };
+      });
+
+      const currentChecks = all('SELECT * FROM function_group_checks WHERE function_group_id=?', group.id);
+      const currentById = new Map(currentChecks.map(check => [check.id, check]));
+      for (const point of normalized) if (point.id && !currentById.has(point.id)) throw appError('Punkt nie należy do tej grupy funkcyjnej');
+
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const keptIds = new Set();
+        const requestedIds = new Set(normalized.map(point => point.id).filter(Boolean));
+        for (const check of currentChecks) {
+          if (requestedIds.has(check.id)) {
+            db.prepare('UPDATE function_group_checks SET title=? WHERE id=?').run(`__fg_tmp_${check.id}_${Date.now()}`, check.id);
+          } else {
+            for (const status of all('SELECT id FROM status_items WHERE function_group_check_id=?', check.id)) removeWithAudit('status', status.id, currentUser);
+            db.prepare('DELETE FROM function_group_checks WHERE id=?').run(check.id);
+          }
+        }
+        const linkSubcategory = db.prepare('INSERT INTO function_group_check_subcategories(check_id,subcategory_id) VALUES(?,?)');
+        for (const point of normalized) {
+          let checkId = point.id;
+          if (checkId) {
+            db.prepare(`UPDATE function_group_checks SET title=?,category=?,criticality=?,sort_order=?,active=1,updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+              .run(point.title, point.category, point.criticality, point.sort_order, checkId);
+          } else {
+            checkId = insertRecord('function_group_checks', {
+              function_group_id: group.id, title: point.title, category: point.category,
+              criticality: point.criticality, sort_order: point.sort_order, active: 1
+            });
+          }
+          keptIds.add(checkId);
+          db.prepare('DELETE FROM function_group_check_subcategories WHERE check_id=?').run(checkId);
+          point.subcategoryIds.forEach(subcategoryId => linkSubcategory.run(checkId, subcategoryId));
+
+          const desiredSubcategories = point.subcategoryIds.length
+            ? point.subcategoryIds.map(subcategoryId => ({ id: subcategoryId, name: one('SELECT name FROM subcategories WHERE id=?', subcategoryId).name }))
+            : [{ id: null, name: '' }];
+          const existing = all('SELECT * FROM status_items WHERE function_group_check_id=? ORDER BY id', checkId);
+          const unused = [...existing];
+          for (const desired of desiredSubcategories) {
+            let rowIndex = unused.findIndex(row => row.subcategory === desired.name);
+            if (rowIndex < 0) rowIndex = 0;
+            const status = unused.splice(rowIndex, 1)[0];
+            const statusValues = {
+              controller_id: group.controller_id, function_group_id: group.id, function_group_check_id: checkId,
+              station: group.name, function_detail: point.title, category: point.category,
+              subcategory: desired.name, criticality: point.criticality
+            };
+            if (status) {
+              const before = baseSnapshot('status', status.id);
+              updateRecord('status_items', status.id, statusValues, Object.keys(statusValues));
+              const after = baseSnapshot('status', status.id);
+              if (Object.keys(changesBetween(before, after)).length) writeAudit('status', status.id, 'update', currentUser, before, after);
+            } else {
+              const baseTestId = `FG-${group.id}-${checkId}-${desired.id || 0}`;
+              let testId = baseTestId;
+              let suffix = 2;
+              while (one('SELECT 1 FROM status_items WHERE test_id=?', testId)) testId = `${baseTestId}-${suffix++}`;
+              const statusId = insertRecord('status_items', {
+                ...statusValues, test_id: testId, status: 'Not started', environment: 'Factory', created_by: currentUser.id
+              });
+              writeAudit('status', statusId, 'create', currentUser, null, baseSnapshot('status', statusId));
+            }
+          }
+          for (const obsolete of unused) removeWithAudit('status', obsolete.id, currentUser);
+        }
+
+        for (const check of currentChecks) {
+          if (keptIds.has(check.id)) continue;
+          for (const status of all('SELECT id FROM status_items WHERE function_group_check_id=?', check.id)) removeWithAudit('status', status.id, currentUser);
+          db.prepare('DELETE FROM function_group_checks WHERE id=?').run(check.id);
+        }
+        db.prepare('UPDATE function_groups SET updated_at=CURRENT_TIMESTAMP WHERE id=?').run(group.id);
+        db.exec('COMMIT');
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
+      return { id: group.id, points: normalized.length };
+    },
+
     config() {
       return {
         categories: all('SELECT * FROM categories WHERE active=1 ORDER BY sort_order,name').map(category => ({ ...category, subcategories: all('SELECT * FROM subcategories WHERE category_id=? AND active=1 ORDER BY sort_order,name', category.id) })),
         task_categories: all('SELECT * FROM task_categories WHERE active=1 ORDER BY sort_order,name').map(category => ({ ...category, subcategories: all('SELECT * FROM task_subcategories WHERE category_id=? AND active=1 ORDER BY sort_order,name', category.id) })),
+        function_groups: all(`SELECT fg.*,c.code controller,c.sort_order controller_order,
+          (SELECT COUNT(*) FROM function_group_checks fgc WHERE fgc.function_group_id=fg.id AND fgc.active=1) check_count,
+          (SELECT COUNT(*) FROM status_items si WHERE si.function_group_id=fg.id) status_count
+          FROM function_groups fg JOIN controllers c ON c.id=fg.controller_id
+          WHERE fg.active=1 ORDER BY c.sort_order,fg.sort_order,fg.name`).map(group => ({
+            ...group,
+            checks: all(`SELECT * FROM function_group_checks WHERE function_group_id=? AND active=1 ORDER BY sort_order,title`, group.id).map(check => ({
+              ...check,
+              subcategory_ids: all('SELECT subcategory_id FROM function_group_check_subcategories WHERE check_id=? ORDER BY subcategory_id', check.id).map(row => row.subcategory_id)
+            }))
+          })),
         options: all('SELECT * FROM options WHERE active=1 ORDER BY kind,sort_order,value'),
         settings: Object.fromEntries(all('SELECT * FROM settings').map(row => [row.key, row.value]))
       };
@@ -437,7 +668,10 @@ function createRepository(db) {
         const previous = one(`SELECT * FROM ${table} WHERE id=?`, id);
         db.prepare(`UPDATE ${table} SET name=? WHERE id=?`).run(name, id);
         if (itemTable) db.prepare(`UPDATE ${itemTable} SET category=? WHERE category=?`).run(name, previous.name);
-        else for (const target of ['status_items', 'open_points']) db.prepare(`UPDATE ${target} SET category=? WHERE category=?`).run(name, previous.name);
+        else {
+          for (const target of ['status_items', 'open_points']) db.prepare(`UPDATE ${target} SET category=? WHERE category=?`).run(name, previous.name);
+          db.prepare('UPDATE function_group_checks SET category=?,updated_at=CURRENT_TIMESTAMP WHERE category=?').run(name, previous.name);
+        }
         return one(`SELECT * FROM ${table} WHERE id=?`, id);
       }
       const nextOrder = one(`SELECT COALESCE(MAX(sort_order),-1)+1 value FROM ${table}`).value;
@@ -485,7 +719,7 @@ function createRepository(db) {
       db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, String(value));
     },
     reorder(kind, ids) {
-      const map = { controllers: 'controllers', users: 'users', categories: 'categories', subcategories: 'subcategories', task_categories: 'task_categories', task_subcategories: 'task_subcategories', options: 'options' };
+      const map = { controllers: 'controllers', users: 'users', categories: 'categories', subcategories: 'subcategories', task_categories: 'task_categories', task_subcategories: 'task_subcategories', options: 'options', function_groups: 'function_groups' };
       const table = map[kind];
       if (!table || !Array.isArray(ids)) throw appError('Nieprawidłowa lista kolejności');
       const update = db.prepare(`UPDATE ${table} SET sort_order=? WHERE id=?`);
@@ -518,24 +752,46 @@ function createRepository(db) {
     saveStatus(id, input, currentUser) {
       const before = id ? baseSnapshot('status', id) : null;
       const ownerId = asId(input.responsible_user_id);
+      const selectedGroup = asId(input.function_group_id) ? functionGroup(input.function_group_id) : null;
+      const selectedController = selectedGroup || controller(input.controller);
       const values = {
-        controller_id: controller(input.controller).id,
-        test_id: clean(input.test_id), station: clean(input.station), function_detail: clean(input.function_detail),
+        controller_id: selectedGroup ? selectedGroup.controller_id : selectedController.id,
+        function_group_id: selectedGroup?.id || null,
+        test_id: clean(input.test_id), station: selectedGroup?.name || clean(input.station), function_detail: clean(input.function_detail),
         category: clean(input.category) || 'General', subcategory: clean(input.subcategory), milestone: clean(input.milestone),
         criticality: clean(input.criticality) || 'Medium', responsible_user_id: ownerId, responsible: userName(ownerId),
         status: clean(input.status) || 'Not started', checked_by: clean(input.checked_by), checked_on: nullableDate(input.checked_on),
         environment: clean(input.environment) || 'Factory', current_note: clean(input.current_note), evidence_link: clean(input.evidence_link)
       };
+      if (id && before.function_group_id !== values.function_group_id) values.function_group_check_id = null;
       let recordId = id;
       if (id) updateRecord('status_items', id, values, Object.keys(values));
       else {
-        if (!values.test_id) values.test_id = `${clean(input.controller)}-${String(one('SELECT COALESCE(MAX(id),0)+1 value FROM status_items').value).padStart(3, '0')}`;
+        if (!values.test_id) values.test_id = `${selectedGroup?.controller || clean(input.controller)}-${String(one('SELECT COALESCE(MAX(id),0)+1 value FROM status_items').value).padStart(3, '0')}`;
         recordId = insertRecord('status_items', { ...values, created_by: currentUser.id });
       }
       setMentions('status', recordId, input.mentioned_user_ids);
       const after = baseSnapshot('status', recordId);
       writeAudit('status', recordId, id ? 'update' : 'create', currentUser, before, after);
       return decorateStatus({ ...after, controller: one('SELECT code FROM controllers WHERE id=?', after.controller_id).code, created_by_name: userName(after.created_by), responsible_name: userName(after.responsible_user_id) }, currentUser);
+    },
+    batchUpdateStatus(input, currentUser) {
+      const items = Array.isArray(input.items) ? input.items : [];
+      if (!items.length) throw appError('Brak punktów do zapisania');
+      if (items.length > 1000) throw appError('Jednorazowo można zapisać maksymalnie 1000 punktów');
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const saved = items.map(item => {
+          const recordId = asId(item.id);
+          if (!recordId) throw appError('Każdy punkt musi mieć identyfikator');
+          return this.saveStatus(recordId, item, currentUser);
+        });
+        db.exec('COMMIT');
+        return saved;
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
     },
     deleteStatus(id, currentUser) { removeWithAudit('status', id, currentUser); },
 

@@ -1,8 +1,9 @@
 const state = {
   view: 'overview', controller: 'all', me: null, controllers: [], users: [],
-  config: { categories: [], task_categories: [], options: [], settings: {} },
+  config: { categories: [], task_categories: [], function_groups: [], options: [], settings: {} },
   overview: null, mine: null, dashboard: {}, status: [], tasks: [], points: [], notes: [], goals: [],
   dialog: null, goalDraftLinks: [], taskMode: 'board', pointMode: 'list',
+  functionGroupController: '', functionPointGroup: null, functionPointDraft: [], quickStatusDraft: [],
   notesFrom: '', notesTo: '', notesWeek: '', draggingTask: false,
   grouping: { status: 'category', tasks: '', notes: 'controller' },
   sort: { status: { key: '', direction: 1 }, tasks: { key: '', direction: 1 }, points: { key: '', direction: 1 } }
@@ -47,6 +48,7 @@ function roleName(role) { return ({ admin: 'Administrator', moderator: 'Moderato
 function options(kind) { return state.config.options.filter(item => item.kind === kind).map(item => item.value); }
 function statusCategories() { return state.config.categories.map(item => item.name); }
 function taskCategories() { return state.config.task_categories.map(item => item.name); }
+function functionGroups(controllerCode) { return (state.config.function_groups || []).filter(item => !controllerCode || item.controller === controllerCode); }
 function subcategories(scope, category) {
   const source = scope === 'task' ? state.config.task_categories : state.config.categories;
   return source.find(item => item.name === category)?.subcategories.map(item => item.name) || [];
@@ -145,6 +147,14 @@ function bindShell() {
   $('#picker-cancel').addEventListener('click', () => $('#goal-picker').close());
   $('#picker-search').addEventListener('input', renderGoalPicker);
   $('#picker-apply').addEventListener('click', applyGoalPicker);
+  $('#function-points-close').addEventListener('click', () => $('#function-points-dialog').close());
+  $('#function-points-cancel').addEventListener('click', () => $('#function-points-dialog').close());
+  $('#function-point-add').addEventListener('click', addFunctionPointDraft);
+  $('#function-points-save').addEventListener('click', saveFunctionGroupPoints);
+  $('#quick-status-close').addEventListener('click', () => $('#quick-status-dialog').close());
+  $('#quick-status-cancel').addEventListener('click', () => $('#quick-status-dialog').close());
+  $('#quick-status-search').addEventListener('input', () => { captureQuickStatusRows(); renderQuickStatusRows(); });
+  $('#quick-status-save').addEventListener('click', saveQuickStatus);
 }
 
 async function loadData() {
@@ -158,6 +168,10 @@ async function loadData() {
     api('/api/dashboard' + query), api('/api/status' + query), api('/api/tasks' + query), api('/api/open-points' + query),
     api('/api/daily-notes' + notesQuery), api('/api/goals' + query)
   ]);
+  if (!state.controllers.some(item => item.code === state.functionGroupController)) {
+    state.functionGroupController = state.controller !== 'all' && state.controllers.some(item => item.code === state.controller)
+      ? state.controller : state.controllers[0]?.code || '';
+  }
   const current = state.controller;
   $('#controller').innerHTML = '<option value="all">Wszystkie sterowniki</option>' + state.controllers.map(item => `<option value="${escapeHtml(item.code)}">${escapeHtml(item.code)}</option>`).join('');
   $('#controller').value = current;
@@ -246,6 +260,7 @@ function orderedGroups(module, grouping, rows) {
   let order = [];
   if (module === 'status' && grouping === 'category') order = statusCategories();
   else if (module === 'status' && grouping === 'subcategory') order = state.config.categories.flatMap(category => category.subcategories.map(item => item.name));
+  else if (module === 'status' && grouping === 'function_group_name') order = [...new Set((state.config.function_groups || []).map(group => group.name))];
   else if (module === 'status' && grouping === 'status') order = ['Not started', 'Ready to test', 'In progress', 'Blocked', 'NOK / Rework', 'Retest required', 'Done', 'N/A'];
   else if (module === 'tasks' && grouping === 'category') order = taskCategories();
   else if (module === 'tasks' && grouping === 'subcategory') order = state.config.task_categories.flatMap(category => category.subcategories.map(item => item.name));
@@ -268,9 +283,10 @@ function renderStatus() {
     <article class="metric-card"><header><span>Postęp</span><span>${d.progress || 0}%</span></header><strong>${d.done || 0}/${d.total || 0}</strong><div class="progress"><i style="width:${d.progress || 0}%"></i></div></article>
     <article class="metric-card"><header><span>W trakcie</span></header><strong>${d.in_progress || 0}</strong></article>
     <article class="metric-card"><header><span>Zablokowane / NOK</span></header><strong>${d.blocked || 0}</strong></article>
-  </div><div class="panel" id="status-panel"><div class="toolbar"><strong>Lista statusowa</strong><label>Grupuj <select id="status-group"><option value="category">Kategoria</option><option value="subcategory">Podkategoria</option><option value="status">Status</option><option value="">Bez grupowania</option></select></label></div>
+  </div><div class="panel" id="status-panel"><div class="toolbar"><strong>Lista statusowa</strong><button id="quick-status-edit" class="secondary">Szybka edycja</button><label>Grupuj <select id="status-group"><option value="function_group_name">Grupa funkcyjna</option><option value="category">Kategoria</option><option value="subcategory">Podkategoria</option><option value="status">Status</option><option value="">Bez grupowania</option></select></label></div>
   <div class="tablewrap"><table><thead><tr>${columns.map(column => `<th class="sortable" data-sort="${column.key}" data-label="${column.label}">${column.label}${sortMarker('status', column.key)}</th>`).join('')}</tr>${tableFilterRow(columns)}</thead><tbody id="status-body"></tbody></table></div></div>`;
   $('#status-group').value = state.grouping.status;
+  $('#quick-status-edit').addEventListener('click', openQuickStatusEditor);
   $('#status-group').addEventListener('change', event => { state.grouping.status = event.target.value; drawStatusRows(); });
   $$('#status-panel [data-filter]').forEach(input => { input.addEventListener('input', drawStatusRows); input.addEventListener('change', drawStatusRows); });
   $$('#status-panel th[data-sort]').forEach(th => th.addEventListener('click', () => updateSort('status', th.dataset.sort)));
@@ -288,6 +304,70 @@ function drawStatusRows() {
   }
   $('#status-body').innerHTML = html || '<tr><td colspan="8" class="empty">Brak wyników</td></tr>';
   $$('#status-body tr[data-id]').forEach(row => row.addEventListener('click', () => openRecord('status', state.status.find(item => item.id === Number(row.dataset.id)))));
+}
+
+function openQuickStatusEditor() {
+  state.quickStatusDraft = state.status.map(item => ({ ...item }));
+  $('#quick-status-search').value = '';
+  renderQuickStatusRows();
+  $('#quick-status-dialog').showModal();
+}
+
+function captureQuickStatusRows() {
+  $$('#quick-status-body tr[data-id]').forEach(row => {
+    const item = state.quickStatusDraft.find(entry => entry.id === Number(row.dataset.id));
+    if (!item) return;
+    row.querySelectorAll('[data-field]').forEach(input => {
+      const field = input.dataset.field;
+      item[field] = ['function_group_id', 'responsible_user_id'].includes(field) ? (Number(input.value) || null) : input.value;
+    });
+  });
+}
+
+function renderQuickStatusRows() {
+  const query = ($('#quick-status-search').value || '').toLowerCase();
+  const rows = state.quickStatusDraft.filter(item => !query || [item.test_id, item.station, item.function_detail, item.category, item.subcategory, item.current_note]
+    .join(' ').toLowerCase().includes(query));
+  $('#quick-status-count').textContent = `${rows.length} z ${state.quickStatusDraft.length} punktów`;
+  $('#quick-status-body').innerHTML = rows.map(item => `<tr data-id="${item.id}">
+    <td><b>${escapeHtml(item.test_id)}</b><small class="sub">${escapeHtml(item.controller)}</small></td>
+    <td><select data-field="controller" class="quick-controller">${selectOptions(state.controllers.map(controller => controller.code), item.controller)}</select></td>
+    <td><select data-field="function_group_id">${selectOptions(functionGroups(item.controller).map(group => ({ value: group.id, label: group.name })), item.function_group_id, 'Bez grupy funkcyjnej')}</select></td>
+    <td><input data-field="function_detail" value="${escapeHtml(item.function_detail)}"></td>
+    <td><select data-field="category" class="quick-category">${selectOptions(statusCategories(), item.category)}</select></td>
+    <td><select data-field="subcategory" class="quick-subcategory">${selectOptions(subcategories('status', item.category), item.subcategory, 'Bez podkategorii')}</select></td>
+    <td><select data-field="criticality">${selectOptions(['Low', 'Medium', 'High', 'Critical'], item.criticality)}</select></td>
+    <td><select data-field="status">${selectOptions(['Not started', 'Ready to test', 'In progress', 'Blocked', 'NOK / Rework', 'Retest required', 'Done', 'N/A'], item.status)}</select></td>
+    <td><select data-field="responsible_user_id">${selectOptions(state.users.filter(user => user.active).map(user => ({ value: user.id, label: user.display_name })), item.responsible_user_id, 'Nieprzypisane')}</select></td>
+    <td><textarea data-field="current_note" rows="2">${escapeHtml(item.current_note)}</textarea></td>
+  </tr>`).join('') || '<tr><td colspan="10" class="empty">Brak wyników</td></tr>';
+  $$('#quick-status-body .quick-controller').forEach(select => select.addEventListener('change', () => {
+    captureQuickStatusRows();
+    const row = select.closest('tr');
+    const item = state.quickStatusDraft.find(entry => entry.id === Number(row.dataset.id));
+    item.function_group_id = null;
+    row.querySelector('[data-field="function_group_id"]').innerHTML = selectOptions(functionGroups(select.value).map(group => ({ value: group.id, label: group.name })), '', 'Bez grupy funkcyjnej');
+  }));
+  $$('#quick-status-body .quick-category').forEach(select => select.addEventListener('change', () => {
+    captureQuickStatusRows();
+    const row = select.closest('tr');
+    const item = state.quickStatusDraft.find(entry => entry.id === Number(row.dataset.id));
+    item.subcategory = '';
+    row.querySelector('.quick-subcategory').innerHTML = selectOptions(subcategories('status', select.value), '', 'Bez podkategorii');
+  }));
+}
+
+async function saveQuickStatus() {
+  captureQuickStatusRows();
+  const button = $('#quick-status-save');
+  button.disabled = true;
+  try {
+    await api('/api/status/batch', { method: 'PATCH', body: JSON.stringify({ items: state.quickStatusDraft }) });
+    $('#quick-status-dialog').close();
+    toast(`Zapisano ${state.quickStatusDraft.length} punktów statusu`);
+    await loadData();
+  } catch (error) { toast(error.message, true); }
+  finally { button.disabled = false; }
 }
 
 function taskCard(item) {
@@ -480,6 +560,14 @@ function categoryConfig(scope, categories, admin) {
   return categories.map((category, index) => `<div class="settings-row">${orderControls(kind, categories, index)}<span><b>${escapeHtml(category.name)}</b></span><button class="mini edit-category" data-scope="${scope}" data-id="${category.id}" data-value="${escapeHtml(category.name)}">Edytuj</button><button class="mini add-sub" data-scope="${scope}" data-id="${category.id}">+ podkategoria</button>${admin ? `<button class="mini delete-config" data-kind="${deleteCategory}" data-id="${category.id}">Usuń</button>` : ''}</div>${category.subcategories.map((sub, subIndex) => `<div class="settings-row">${orderControls(subKind, category.subcategories, subIndex)}<span>↳ ${escapeHtml(sub.name)}</span><button class="mini edit-sub" data-scope="${scope}" data-id="${sub.id}" data-parent="${category.id}" data-value="${escapeHtml(sub.name)}">Edytuj</button>${admin ? `<button class="mini delete-config" data-kind="${deleteSub}" data-id="${sub.id}">Usuń</button>` : ''}</div>`).join('')}`).join('');
 }
 
+function functionGroupConfig(admin) {
+  const groups = functionGroups(state.functionGroupController);
+  return `<section class="settings-card settings-wide"><div class="settings-title-row"><div><h2>Grupy funkcyjne i punkty statusu</h2><p class="sub">Osobna, uporządkowana lista stacji, robotów i innych grup dla każdego sterownika.</p></div><label class="field compact-field"><span>Sterownik</span><select id="function-group-controller">${selectOptions(state.controllers.map(item => item.code), state.functionGroupController)}</select></label></div>
+    <div class="function-group-list">${groups.map((group, index) => `<div class="settings-row function-group-row">${admin ? orderControls('function_groups', groups, index) : ''}<span><b>${escapeHtml(group.name)}</b><small class="sub">${group.check_count} zdefiniowanych punktów · ${group.status_count} wierszy w Statusie</small></span>${admin ? `<button class="mini edit-function-points" data-id="${group.id}">Punkty statusu</button><button class="mini rename-function-group" data-id="${group.id}" data-value="${escapeHtml(group.name)}">Zmień nazwę</button><button class="mini delete-function-group" data-id="${group.id}">Usuń</button>` : ''}</div>`).join('') || '<div class="empty compact-empty">Brak grup funkcyjnych dla wybranego sterownika.</div>'}</div>
+    ${admin ? `<div class="function-group-actions"><form id="new-function-group" class="inline-form"><input name="name" placeholder="Nowa grupa, np. Robot R01" required><button class="mini">Dodaj grupę</button></form><div class="bulk-groups"><label class="field"><span>Szybkie dodawanie — jeden wiersz = jedna grupa funkcyjna</span><textarea id="bulk-function-groups" rows="6" placeholder="Stacja 010\nRobot R01\nRobot R02"></textarea></label><button class="secondary" id="bulk-function-groups-add">Dodaj listę</button></div></div>` : '<p class="sub">Edycja grup funkcyjnych jest dostępna dla administratora.</p>'}
+  </section>`;
+}
+
 function renderSettings() {
   const admin = state.me.role === 'admin';
   const dictionaries = [['waiting_for', 'Oczekiwanie na'], ['shift', 'Zmiany'], ['note_type', 'Typy notatek']].map(([kind, label]) => {
@@ -488,6 +576,7 @@ function renderSettings() {
   }).join('');
   $('#content').innerHTML = `<div class="settings-grid">
     <section class="settings-card"><h2>Sterowniki / obszary</h2>${state.controllers.map((item, index) => `<div class="settings-row">${admin ? orderControls('controllers', state.controllers, index) : ''}<span><b>${escapeHtml(item.code)}</b><small class="sub">${escapeHtml(item.area)} · ${escapeHtml(item.description)}</small></span>${admin ? `<button class="mini edit-controller" data-id="${item.id}">Edytuj</button>` : ''}</div>`).join('')}${admin ? '<button class="secondary" id="new-controller">+ Dodaj sterownik</button>' : ''}</section>
+    ${functionGroupConfig(admin)}
     <section class="settings-card"><h2>Kategorie statusu i otwartych punktów</h2>${categoryConfig('status', state.config.categories, admin)}<form class="inline-form add-category" data-scope="status"><input name="name" placeholder="Nowa kategoria" required><button class="mini">Dodaj</button></form></section>
     <section class="settings-card"><h2>Kategorie zadań</h2>${categoryConfig('task', state.config.task_categories, admin)}<form class="inline-form add-category" data-scope="task"><input name="name" placeholder="Nowa kategoria zadań" required><button class="mini">Dodaj</button></form></section>
     <section class="settings-card"><h2>Użytkownicy</h2>${state.users.map((item, index) => `<div class="settings-row">${admin ? orderControls('users', state.users, index) : ''}<span><b>${escapeHtml(item.display_name)}</b><small class="sub">${escapeHtml(item.username)} · ${roleName(item.role)}${item.active ? '' : ' · nieaktywny'}</small></span>${admin ? `<button class="mini edit-user" data-id="${item.id}">Edytuj</button>` : ''}</div>`).join('')}${admin ? '<button class="secondary" id="new-user">+ Dodaj użytkownika</button>' : ''}</section>
@@ -499,6 +588,38 @@ function renderSettings() {
 
 function bindSettings() {
   $$('.move-item').forEach(button => button.addEventListener('click', () => moveConfigItem(button.dataset.kind, Number(button.dataset.id), Number(button.dataset.direction))));
+  $('#function-group-controller')?.addEventListener('change', event => { state.functionGroupController = event.target.value; renderSettings(); });
+  $('#new-function-group')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    try {
+      await api('/api/function-groups', { method: 'POST', body: JSON.stringify({ controller: state.functionGroupController, name: new FormData(event.currentTarget).get('name') }) });
+      toast('Dodano grupę funkcyjną'); await loadData();
+    } catch (error) { toast(error.message, true); }
+  });
+  $('#bulk-function-groups-add')?.addEventListener('click', async () => {
+    const names = $('#bulk-function-groups').value;
+    if (!names.trim()) return toast('Wklej co najmniej jedną nazwę grupy', true);
+    try {
+      await api('/api/function-groups/bulk', { method: 'POST', body: JSON.stringify({ controller: state.functionGroupController, names }) });
+      toast('Lista grup została dodana'); await loadData();
+    } catch (error) { toast(error.message, true); }
+  });
+  $$('.rename-function-group').forEach(button => button.addEventListener('click', async () => {
+    const name = prompt('Nowa nazwa grupy funkcyjnej:', button.dataset.value);
+    if (!name) return;
+    try {
+      await api(`/api/function-groups/${button.dataset.id}`, { method: 'PATCH', body: JSON.stringify({ controller: state.functionGroupController, name }) });
+      toast('Nazwa grupy została zmieniona'); await loadData();
+    } catch (error) { toast(error.message, true); }
+  }));
+  $$('.delete-function-group').forEach(button => button.addEventListener('click', async () => {
+    if (!confirm('Usunąć grupę funkcyjną i wszystkie przypisane do niej punkty statusu?')) return;
+    try {
+      await api(`/api/function-groups/${button.dataset.id}`, { method: 'DELETE' });
+      toast('Usunięto grupę funkcyjną'); await loadData();
+    } catch (error) { toast(error.message, true); }
+  }));
+  $$('.edit-function-points').forEach(button => button.addEventListener('click', () => openFunctionGroupPoints(Number(button.dataset.id))));
   $$('.add-category').forEach(form => form.addEventListener('submit', async event => { event.preventDefault(); const scope = form.dataset.scope; const endpoint = scope === 'task' ? '/api/task-categories' : '/api/categories'; await api(endpoint, { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) }); await loadData(); }));
   $$('.edit-category').forEach(button => button.addEventListener('click', async () => { const name = prompt('Nowa nazwa kategorii:', button.dataset.value); if (!name) return; await api(button.dataset.scope === 'task' ? `/api/task-categories/${button.dataset.id}` : `/api/categories/${button.dataset.id}`, { method: 'PATCH', body: JSON.stringify({ name }) }); await loadData(); }));
   $$('.add-sub').forEach(button => button.addEventListener('click', async () => { const name = prompt('Nazwa podkategorii:'); if (!name) return; await api(button.dataset.scope === 'task' ? '/api/task-subcategories' : '/api/subcategories', { method: 'POST', body: JSON.stringify({ category_id: Number(button.dataset.id), name }) }); await loadData(); }));
@@ -514,10 +635,89 @@ function bindSettings() {
   $('#warning-days')?.addEventListener('change', event => saveSetting('reminder_warning_days', event.target.value));
 }
 
+function openFunctionGroupPoints(groupId) {
+  const group = (state.config.function_groups || []).find(item => item.id === groupId);
+  if (!group) return;
+  state.functionPointGroup = group;
+  state.functionPointDraft = (group.checks || []).map(check => ({
+    id: check.id, title: check.title, category: check.category,
+    criticality: check.criticality, subcategory_ids: [...(check.subcategory_ids || [])]
+  }));
+  $('#function-points-title').textContent = `Punkty · ${group.name}`;
+  $('#function-points-subtitle').textContent = `Sterownik ${group.controller} · ${state.functionPointDraft.length} zdefiniowanych punktów`;
+  renderFunctionPointDraft();
+  $('#function-points-dialog').showModal();
+}
+
+function captureFunctionPointDraft() {
+  $$('#function-points-content [data-point-index]').forEach(row => {
+    const point = state.functionPointDraft[Number(row.dataset.pointIndex)];
+    if (!point) return;
+    point.title = row.querySelector('[data-point-title]').value;
+    point.category = row.querySelector('[data-point-category]').value;
+    point.criticality = row.querySelector('[data-point-criticality]').value;
+    point.subcategory_ids = [...row.querySelectorAll('[data-point-subcategory]:checked')].map(input => Number(input.value));
+  });
+}
+
+function renderFunctionPointDraft() {
+  $('#function-points-subtitle').textContent = `Sterownik ${state.functionPointGroup.controller} · ${state.functionPointDraft.length} zdefiniowanych punktów`;
+  $('#function-points-content').innerHTML = state.functionPointDraft.map((point, index) => {
+    const category = point.category || statusCategories()[0] || '';
+    const categoryConfig = state.config.categories.find(item => item.name === category);
+    const selected = new Set(point.subcategory_ids || []);
+    return `<article class="function-point" data-point-index="${index}"><header><strong>Punkt ${index + 1}</strong><span class="order-buttons"><button type="button" class="mini move-function-point" data-direction="-1" ${index === 0 ? 'disabled' : ''}>↑</button><button type="button" class="mini move-function-point" data-direction="1" ${index === state.functionPointDraft.length - 1 ? 'disabled' : ''}>↓</button><button type="button" class="mini remove-function-point">Usuń</button></span></header><div class="function-point-fields">
+      <label class="field"><span>Nazwa punktu / funkcji</span><input data-point-title value="${escapeHtml(point.title)}" placeholder="Np. Ruch osi w trybie ręcznym"></label>
+      <label class="field"><span>Kategoria statusu</span><select data-point-category>${selectOptions(statusCategories(), category)}</select></label>
+      <label class="field"><span>Krytyczność</span><select data-point-criticality>${selectOptions(['Low', 'Medium', 'High', 'Critical'], point.criticality || 'Medium')}</select></label>
+    </div><div class="subcategory-picks"><span>Podkategorie dotyczące punktu</span><div>${categoryConfig?.subcategories.length ? categoryConfig.subcategories.map(subcategory => `<label class="mention"><input type="checkbox" data-point-subcategory value="${subcategory.id}" ${selected.has(subcategory.id) ? 'checked' : ''}>${escapeHtml(subcategory.name)}</label>`).join('') : '<span class="sub">Ta kategoria nie ma podkategorii — zostanie utworzony jeden punkt na poziomie kategorii.</span>'}</div></div></article>`;
+  }).join('') || '<div class="empty">Dodaj pierwszy punkt do sprawdzenia dla tej grupy.</div>';
+  $$('.remove-function-point').forEach(button => button.addEventListener('click', () => {
+    captureFunctionPointDraft();
+    state.functionPointDraft.splice(Number(button.closest('[data-point-index]').dataset.pointIndex), 1);
+    renderFunctionPointDraft();
+  }));
+  $$('.move-function-point').forEach(button => button.addEventListener('click', () => {
+    captureFunctionPointDraft();
+    const index = Number(button.closest('[data-point-index]').dataset.pointIndex);
+    const target = index + Number(button.dataset.direction);
+    [state.functionPointDraft[index], state.functionPointDraft[target]] = [state.functionPointDraft[target], state.functionPointDraft[index]];
+    renderFunctionPointDraft();
+  }));
+  $$('[data-point-category]').forEach(select => select.addEventListener('change', () => {
+    captureFunctionPointDraft();
+    const point = state.functionPointDraft[Number(select.closest('[data-point-index]').dataset.pointIndex)];
+    point.category = select.value;
+    point.subcategory_ids = [];
+    renderFunctionPointDraft();
+  }));
+}
+
+function addFunctionPointDraft() {
+  captureFunctionPointDraft();
+  state.functionPointDraft.push({ id: null, title: '', category: statusCategories()[0] || '', criticality: 'Medium', subcategory_ids: [] });
+  renderFunctionPointDraft();
+  $('#function-points-content').lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+async function saveFunctionGroupPoints() {
+  captureFunctionPointDraft();
+  const button = $('#function-points-save');
+  button.disabled = true;
+  try {
+    await api(`/api/function-groups/${state.functionPointGroup.id}/checks`, { method: 'PUT', body: JSON.stringify({ points: state.functionPointDraft }) });
+    $('#function-points-dialog').close();
+    toast('Punkty grupy zapisano i zsynchronizowano ze Statusem');
+    await loadData();
+  } catch (error) { toast(error.message, true); }
+  finally { button.disabled = false; }
+}
+
 async function moveConfigItem(kind, id, direction) {
   let items;
   if (kind === 'controllers') items = state.controllers;
   else if (kind === 'users') items = state.users;
+  else if (kind === 'function_groups') items = functionGroups(state.functionGroupController);
   else if (kind === 'categories') items = state.config.categories;
   else if (kind === 'task_categories') items = state.config.task_categories;
   else if (kind === 'options') {
@@ -546,7 +746,7 @@ async function saveSetting(key, value) {
 
 const formDefinitions = {
   status: { endpoint: '/api/status', title: 'test', fields: [
-    ['controller', 'Sterownik', 'controller'], ['test_id', 'Test ID'], ['station', 'Stacja / obiekt'], ['function_detail', 'Test / funkcja'],
+    ['controller', 'Sterownik', 'controller'], ['function_group_id', 'Grupa funkcyjna', 'function-group'], ['test_id', 'Test ID'], ['station', 'Stacja / obiekt'], ['function_detail', 'Test / funkcja'],
     ['category', 'Kategoria', 'category', 'status'], ['subcategory', 'Podkategoria', 'subcategory', 'status'],
     ['status', 'Status', 'select', ['Not started', 'Ready to test', 'In progress', 'Blocked', 'NOK / Rework', 'Retest required', 'Done', 'N/A']],
     ['criticality', 'Krytyczność', 'select', ['Low', 'Medium', 'High', 'Critical']], ['responsible_user_id', 'Odpowiedzialny', 'user'],
@@ -613,7 +813,11 @@ function fieldHtml([name, label, type = 'text', extra], record) {
   if (type === 'checklist') return checklistField(record);
   if (type === 'goal-links') return goalLinksField();
   let input;
-  if (type === 'controller') input = `<select name="${name}">${selectOptions(state.controllers.map(item => item.code), value)}</select>`;
+  if (type === 'controller') input = `<select name="${name}" id="form-controller">${selectOptions(state.controllers.map(item => item.code), value)}</select>`;
+  else if (type === 'function-group') {
+    const controllerCode = record?.controller || defaultValue('controller');
+    input = `<select name="${name}" id="form-function-group">${selectOptions(functionGroups(controllerCode).map(item => ({ value: item.id, label: item.name })), value, 'Bez grupy funkcyjnej')}</select>`;
+  }
   else if (type === 'user') input = `<select name="${name}">${selectOptions(state.users.filter(item => item.active).map(item => ({ value: item.id, label: item.display_name })), value, 'Nieprzypisane')}</select>`;
   else if (type === 'select') input = `<select name="${name}">${selectOptions(extra, value)}</select>`;
   else if (type === 'category') input = `<select name="${name}" id="form-category" data-scope="${extra}">${selectOptions(extra === 'task' ? taskCategories() : statusCategories(), value)}</select>`;
@@ -657,6 +861,15 @@ function goalLinksField() {
 function bindDynamicFields(type) {
   $('#form-category')?.addEventListener('change', event => { const scope = event.target.dataset.scope; $('#form-subcategory').innerHTML = selectOptions(subcategories(scope, event.target.value)); });
   $('#entity-type')?.addEventListener('change', fillEntitySelect);
+  if (type === 'status') {
+    $('#form-controller')?.addEventListener('change', event => {
+      $('#form-function-group').innerHTML = selectOptions(functionGroups(event.target.value).map(item => ({ value: item.id, label: item.name })), '', 'Bez grupy funkcyjnej');
+    });
+    $('#form-function-group')?.addEventListener('change', event => {
+      const group = (state.config.function_groups || []).find(item => item.id === Number(event.target.value));
+      if (group) $('#fields [name="station"]').value = group.name;
+    });
+  }
   if ($('#entity-type')) fillEntitySelect();
   $('#go-entity')?.addEventListener('click', () => { const type = $('#entity-type').value; const id = Number($('#entity-id').value); $('#modal').close(); jumpTo(type, id); });
   $$('[data-toggle]').forEach(checkbox => checkbox.addEventListener('change', () => { $('#' + checkbox.dataset.toggle).disabled = !checkbox.checked; }));

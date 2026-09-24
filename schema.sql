@@ -71,6 +71,36 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS function_groups (
+  id INTEGER PRIMARY KEY,
+  controller_id INTEGER NOT NULL REFERENCES controllers(id) ON DELETE CASCADE,
+  name TEXT NOT NULL COLLATE NOCASE,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(controller_id,name)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS function_group_checks (
+  id INTEGER PRIMARY KEY,
+  function_group_id INTEGER NOT NULL REFERENCES function_groups(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  category TEXT NOT NULL,
+  criticality TEXT NOT NULL DEFAULT 'Medium',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(function_group_id,title,category)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS function_group_check_subcategories (
+  check_id INTEGER NOT NULL REFERENCES function_group_checks(id) ON DELETE CASCADE,
+  subcategory_id INTEGER NOT NULL REFERENCES subcategories(id) ON DELETE CASCADE,
+  PRIMARY KEY(check_id,subcategory_id)
+) STRICT, WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS status_items (
   id INTEGER PRIMARY KEY,
   controller_id INTEGER NOT NULL REFERENCES controllers(id) ON DELETE CASCADE,
@@ -89,6 +119,8 @@ CREATE TABLE IF NOT EXISTS status_items (
   environment TEXT NOT NULL DEFAULT 'Factory',
   current_note TEXT NOT NULL DEFAULT '',
   evidence_link TEXT NOT NULL DEFAULT '',
+  function_group_id INTEGER REFERENCES function_groups(id) ON DELETE SET NULL,
+  function_group_check_id INTEGER REFERENCES function_group_checks(id) ON DELETE SET NULL,
   created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -208,6 +240,8 @@ CREATE TABLE IF NOT EXISTS audit_log (
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_status_controller_status ON status_items(controller_id,status);
+CREATE INDEX IF NOT EXISTS idx_function_groups_controller ON function_groups(controller_id,sort_order);
+CREATE INDEX IF NOT EXISTS idx_function_checks_group ON function_group_checks(function_group_id,sort_order);
 CREATE INDEX IF NOT EXISTS idx_tasks_controller_status ON tasks(controller_id,status);
 CREATE INDEX IF NOT EXISTS idx_points_controller_status ON open_points(controller_id,status);
 CREATE INDEX IF NOT EXISTS idx_notes_controller_date ON daily_notes(controller_id,note_date DESC);

@@ -1,4 +1,4 @@
-# PLC Commissioning Hub V3.1
+# PLC Commissioning Hub V3.2
 
 Samodzielna aplikacja WWW do prowadzenia dużego projektu uruchomienia PLC. Działa na Node.js 24 i SQLite, bez zewnętrznych usług i bez zależności npm.
 
@@ -9,6 +9,10 @@ Samodzielna aplikacja WWW do prowadzenia dużego projektu uruchomienia PLC. Dzia
 - główny **Overview** z liczbowym i procentowym stanem projektu oraz podziałem na sterowniki;
 - **Moje podsumowanie** z zadaniami przypisanymi, utworzonymi, ogólnymi oraz elementami, w których wspomniano użytkownika;
 - status z kolejnością zgodną z konfiguracją, grupowaniem, filtrami i sortowaniem każdej kolumny;
+- grupy funkcyjne konfigurowane osobno dla każdego sterownika (np. stacja, robot), z kolejnością definiowaną przez administratora;
+- szybkie wklejanie listy grup funkcyjnych — każdy wiersz tworzy osobną grupę;
+- szablony punktów kontrolnych grupy: kategoria, dowolny podzbiór podkategorii i krytyczność, automatycznie synchronizowane z modułem Status;
+- duże okno szybkiej edycji całej listy statusowej z zapisem zbiorczym;
 - tablica zadań z drag & drop oraz alternatywny widok listy z grupowaniem, filtrami i sortowaniem;
 - osobne kategorie zadań, osoba odpowiedzialna wybierana z kont użytkowników, checklisty, terminy i czas trwania;
 - powiązania zadań ze statusem, otwartym punktem albo dziennikiem;
@@ -77,7 +81,9 @@ Po wdrożeniu trzeba zalogować się ponownie, ponieważ sesje są przechowywane
 
 ## Migracja i wariant czystego startu
 
-Przy starcie V3 automatycznie dodaje nowe tabele i kolumny do istniejącej bazy V2. Rekordy pozostają zachowane, a dla danych historycznych tworzony jest pierwszy wpis migracyjny w historii zmian.
+Przy starcie V3.2 automatycznie dodaje nowe tabele i kolumny do istniejącej bazy V2/V3. Rekordy pozostają zachowane, a istniejące wartości pola „Stacja” są jednorazowo przekształcane w grupy funkcyjne odpowiedniego sterownika. Dla danych historycznych zachowywana jest historia zmian.
+
+W edytorze punktów grupy każda zaznaczona podkategoria tworzy osobny wiersz Statusu. Jeśli nie zaznaczono podkategorii, powstaje jeden wiersz na poziomie kategorii. Usunięcie grupy funkcyjnej usuwa także przypisane do niej punkty Statusu i zapisuje tę operację w historii, dlatego interfejs wymaga potwierdzenia.
 
 Jeżeli podczas fazy koncepcyjnej potrzebny jest całkowicie czysty start, usuń wyłącznie plik `/app/data/plc-status.db` (oraz ewentualne pliki `-wal` i `-shm`) z Railway Volume, a następnie wykonaj redeploy. Aplikacja utworzy nową bazę i dane demonstracyjne. Nie usuwaj całego Volume, jeśli znajdują się na nim inne potrzebne pliki.
 
@@ -91,6 +97,7 @@ Jeżeli podczas fazy koncepcyjnej potrzebny jest całkowicie czysty start, usuń
 | Usunięcie własnej notatki | ✓ | — | ✓ |
 | Usunięcie własnego, niezmienionego przez innych zadania | ✓ | — | ✓ |
 | Kategorie, podkategorie i słowniki | pełne | dodawanie, edycja, kolejność | — |
+| Grupy funkcyjne i ich szablony punktów | pełne | podgląd | — |
 | Sterowniki i użytkownicy | pełne | podgląd | — |
 | Ustawienia globalne przypomnień | ✓ | — | — |
 

@@ -76,7 +76,7 @@ async function handleApi(request, response, url) {
   const controller = url.searchParams.get('controller') || 'all';
   const user = currentUser(request);
 
-  if (method === 'GET' && path === '/api/health') return json(response, 200, { status: 'ok', version: 3, release: '3.1.0' });
+  if (method === 'GET' && path === '/api/health') return json(response, 200, { status: 'ok', version: 3, release: '3.2.0' });
   if (method === 'POST' && path === '/api/login') {
     const input = await readJson(request);
     const account = repository.authenticate(input.username);
@@ -102,6 +102,9 @@ async function handleApi(request, response, url) {
     const type = url.searchParams.get('type');
     const id = Number(url.searchParams.get('id'));
     return json(response, 200, repository.audit(type, id));
+  }
+  if (method === 'PATCH' && path === '/api/status/batch') {
+    return json(response, 200, repository.batchUpdateStatus(await readJson(request), user));
   }
 
   const resources = [
@@ -157,6 +160,26 @@ async function handleApi(request, response, url) {
     if (method === 'DELETE') { repository.deleteController(id); response.writeHead(204); return response.end(); }
   }
 
+  if (path === '/api/function-groups' && method === 'POST') {
+    requireRole(user, 'admin');
+    return json(response, 201, repository.saveFunctionGroup(null, await readJson(request), user));
+  }
+  if (path === '/api/function-groups/bulk' && method === 'POST') {
+    requireRole(user, 'admin');
+    return json(response, 201, repository.bulkFunctionGroups(await readJson(request)));
+  }
+  const checksMatch = path.match(/^\/api\/function-groups\/(\d+)\/checks$/);
+  if (checksMatch && method === 'PUT') {
+    requireRole(user, 'admin');
+    return json(response, 200, repository.saveFunctionGroupChecks(Number(checksMatch[1]), await readJson(request), user));
+  }
+  id = numericId(path, '/api/function-groups');
+  if (id !== null) {
+    requireRole(user, 'admin');
+    if (method === 'PATCH') return json(response, 200, repository.saveFunctionGroup(id, await readJson(request), user));
+    if (method === 'DELETE') { repository.deleteFunctionGroup(id, user); response.writeHead(204); return response.end(); }
+  }
+
   const configResources = [
     { path: '/api/categories', scope: 'status', type: 'category', save: (id, body) => repository.saveCategory('status', id, body) },
     { path: '/api/subcategories', scope: 'status', type: 'subcategory', save: (id, body) => repository.saveSubcategory('status', id, body) },
@@ -179,7 +202,7 @@ async function handleApi(request, response, url) {
 
   if (method === 'PATCH' && path === '/api/reorder') {
     const input = await readJson(request);
-    if (['controllers', 'users'].includes(input.kind)) requireRole(user, 'admin');
+    if (['controllers', 'users', 'function_groups'].includes(input.kind)) requireRole(user, 'admin');
     else requireRole(user, 'moderator');
     repository.reorder(input.kind, input.ids);
     return json(response, 200, { ok: true });
@@ -225,7 +248,7 @@ export const server = createServer(async (request, response) => {
 });
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  server.listen(port, '0.0.0.0', () => console.log(`PLC Commissioning Hub V3.1 running on port ${port}`));
+  server.listen(port, '0.0.0.0', () => console.log(`PLC Commissioning Hub V3.2 running on port ${port}`));
 }
 
 function shutdown() {

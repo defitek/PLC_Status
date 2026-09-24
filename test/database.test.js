@@ -139,3 +139,55 @@ test('configured controller order survives a database restart', () => {
     rmSync(temporary.directory, { recursive: true, force: true });
   }
 });
+
+test('V3.2 manages controller function groups, check templates and batch status editing', () => {
+  const temporary = temporaryDatabase();
+  let repository = openDatabase(temporary.path);
+  try {
+    const admin = repository.me(repository.authenticate('admin').id);
+    const initialStatusCount = repository.status('all', admin).length;
+    const group = repository.saveFunctionGroup(null, { controller: 'HB522', name: 'Test Station 900' }, admin);
+    repository.bulkFunctionGroups({ controller: 'HB522', names: 'Robot TEST 01\nRobot TEST 02\nRobot TEST 01' });
+    assert.ok(repository.config().function_groups.some(item => item.id === group.id));
+
+    const hardware = repository.config().categories.find(item => item.name === 'Hardware');
+    const selectedSubcategories = hardware.subcategories.slice(0, 2).map(item => item.id);
+    repository.saveFunctionGroupChecks(group.id, { points: [{
+      title: 'Sprawdzenie grupy testowej', category: 'Hardware', criticality: 'High', subcategory_ids: selectedSubcategories
+    }] }, admin);
+
+    let configuredGroup = repository.config().function_groups.find(item => item.id === group.id);
+    assert.equal(configuredGroup.checks.length, 1);
+    assert.deepEqual(configuredGroup.checks[0].subcategory_ids, selectedSubcategories);
+    let generated = repository.status('all', admin).filter(item => item.function_group_id === group.id);
+    assert.equal(generated.length, 2);
+    assert.equal(repository.status('all', admin).length, initialStatusCount + 2);
+    assert.ok(generated.every(item => item.station === 'Test Station 900' && item.category === 'Hardware'));
+
+    repository.batchUpdateStatus({ items: [{ ...generated[0], status: 'Done', current_note: 'Zapis zbiorczy działa' }] }, admin);
+    assert.equal(repository.status('all', admin).find(item => item.id === generated[0].id).status, 'Done');
+
+    repository.saveFunctionGroupChecks(group.id, { points: [{
+      id: configuredGroup.checks[0].id, title: 'Sprawdzenie grupy po edycji', category: 'Hardware', criticality: 'Critical', subcategory_ids: [selectedSubcategories[0]]
+    }] }, admin);
+    generated = repository.status('all', admin).filter(item => item.function_group_id === group.id);
+    assert.equal(generated.length, 1);
+    assert.equal(generated[0].function_detail, 'Sprawdzenie grupy po edycji');
+    assert.equal(generated[0].status, 'Done');
+
+    repository.saveFunctionGroup(group.id, { controller: 'UB512', name: 'Test Station 901' }, admin);
+    generated = repository.status('all', admin).filter(item => item.function_group_id === group.id);
+    assert.equal(generated[0].controller, 'UB512');
+    assert.equal(generated[0].station, 'Test Station 901');
+
+    const beforeRestart = repository.status('all', admin).length;
+    repository.close();
+    repository = openDatabase(temporary.path);
+    assert.equal(repository.status('all', repository.me(admin.id)).length, beforeRestart);
+    repository.deleteFunctionGroup(group.id, repository.me(admin.id));
+    assert.equal(repository.status('all', repository.me(admin.id)).filter(item => item.function_group_id === group.id).length, 0);
+  } finally {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
