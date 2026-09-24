@@ -1,109 +1,171 @@
-# PLC Commissioning Hub V3.2
+# PLC Commissioning Hub V4.0.0
 
-Samodzielna aplikacja WWW do prowadzenia dużego projektu uruchomienia PLC. Działa na Node.js 24 i SQLite, bez zewnętrznych usług i bez zależności npm.
+Samodzielna aplikacja WWW do zarządzania uruchomieniem PLC, zespołem i kilkoma projektami. Działa na Node.js 24 oraz SQLite, bez zewnętrznych usług i bez zależności npm.
 
-## Najważniejsze funkcje V3
+## Najważniejsze zmiany V4
 
-- konta i role `admin`, `moderator`, `user`;
-- konfigurowalna kolejność sterowników, użytkowników, kategorii, podkategorii i słowników;
-- główny **Overview** z liczbowym i procentowym stanem projektu oraz podziałem na sterowniki;
-- **Moje podsumowanie** z zadaniami przypisanymi, utworzonymi, ogólnymi oraz elementami, w których wspomniano użytkownika;
-- status z kolejnością zgodną z konfiguracją, grupowaniem, filtrami i sortowaniem każdej kolumny;
-- grupy funkcyjne konfigurowane osobno dla każdego sterownika (np. stacja, robot), z kolejnością definiowaną przez administratora;
-- szybkie wklejanie listy grup funkcyjnych — każdy wiersz tworzy osobną grupę;
-- szablony punktów kontrolnych grupy: kategoria, dowolny podzbiór podkategorii i krytyczność, automatycznie synchronizowane z modułem Status;
-- duże okno szybkiej edycji całej listy statusowej z zapisem zbiorczym;
-- tablica zadań z drag & drop oraz alternatywny widok listy z grupowaniem, filtrami i sortowaniem;
-- osobne kategorie zadań, osoba odpowiedzialna wybierana z kont użytkowników, checklisty, terminy i czas trwania;
-- powiązania zadań ze statusem, otwartym punktem albo dziennikiem;
-- widok alertów dla przedawnionych i zbliżających się przypomnień otwartych punktów;
-- cele z przejrzystą listą powiązań i osobnym oknem wyboru statusów, zadań i otwartych punktów;
-- dzienne notatki z zakresem dat, calendar weeks (poniedziałek–niedziela), grupowaniem i nazwanymi typami powiązań;
-- automatyczne pola autora i daty utworzenia w widoku szczegółowym;
-- historia zmian statusu, zadania, otwartego punktu i notatki: użytkownik, dokładna data oraz zmienione pola;
-- jednorazowy, idempotentny zestaw danych demonstracyjnych do testów dużej listy;
-- migracja istniejącej bazy V2 do V3 bez kasowania rekordów.
+### Projekty, użytkownicy i uprawnienia
+
+- środowisko wieloprojektowe z przełączaniem projektu po zalogowaniu i z górnego paska;
+- użytkownicy globalni oraz niezależna rola i dostępność konta w każdym projekcie;
+- role: `system_admin`, `project_admin`, `moderator`, `user`;
+- administrator systemu zarządza projektami, kontami globalnymi oraz wszystkimi rolami;
+- administrator projektu zarządza swoim projektem i rolami moderator/użytkownik;
+- projekt niedostępny dla użytkownika nie pojawia się na liście wyboru;
+- istniejące dane są przypisane do projektu W371, a projekt W520 zawiera odrębne dane demonstracyjne;
+- identyfikatory punktów są nadawane automatycznie i nie można ich edytować.
+
+### Wygląd i praca z oknami
+
+- domyślny, nowy motyw niebiesko-biały;
+- warianty ciemny, grafitowy, wysokiego kontrastu oraz klasyczny wygląd V3 jako backup;
+- wybór motywu jest zapisany dla konta użytkownika;
+- kliknięcie poza oknem zamyka je od razu, gdy nic nie zmieniono;
+- przy niezapisanych zmianach pierwsze kliknięcie ostrzega, a drugie odrzuca zmiany i zamyka okno.
+
+### Sterowniki i konfiguracja
+
+- hierarchiczne grupy obszarów/sterowników, np. HB → HB52 → HB521/HB522/HB523;
+- wszystkie listy konfiguracji mają definiowaną kolejność;
+- grupy funkcyjne konfigurowane osobno dla każdego sterownika;
+- każda grupa funkcyjna może mieć własne elementy, np. stacja `080VR_001` → `QM1`, `QM2`, `BZ1`;
+- szybkie dodawanie grup i elementów przez wklejenie listy, jeden wiersz na pozycję;
+- szablony punktów statusu z kategorią, wybranymi podkategoriami, elementem grupy i krytycznością;
+- domyślna instrukcja „Test / funkcja” dla podkategorii, widoczna w szczegółach i podpowiedzi;
+- duże okno szybkiej edycji statusu.
+
+### Overview i Moje podsumowanie
+
+- nowoczesne KPI projektu dla statusu, zadań i otwartych punktów;
+- zakres: cały projekt, wybrana grupa sterowników albo pojedynczy sterownik;
+- trendy dzienne, tygodniowe i miesięczne;
+- podział zarządczy według sterowników i alarmy dotyczące blokad, terminów oraz przypomnień;
+- osobny moduł pracownika z pozycjami utworzonymi, przypisanymi i wzmiankami.
+
+### Status
+
+- grupowanie w kolejności zdefiniowanej w konfiguracji;
+- filtrowanie i sortowanie po kolumnach;
+- grupa funkcyjna oraz opcjonalny element grupy;
+- instrukcja testu w szczegółach i po wskazaniu kursorem;
+- menu prawego przycisku umożliwia utworzenie zadania, otwartego punktu lub wpisu dziennika;
+- wiele powiązań z zadaniami, otwartymi punktami i dziennikiem wraz z przejściem do elementu;
+- osobny procent ukończenia prac powiązanych, niewliczany do bazowego postępu Statusu;
+- historia każdej zmiany: użytkownik, dokładny czas i zmienione pola.
+
+### Zadania
+
+- tablica Kanban z przeciąganiem pomiędzy „Do zrobienia”, „W trakcie” i „Ukończone”;
+- alternatywny widok listy z grupowaniem, filtrowaniem i sortowaniem;
+- osobne kategorie i podkategorie zadań;
+- odpowiedzialny wybierany z listy aktywnych użytkowników projektu;
+- checklista, link/informacje dodatkowe, start, deadline i automatyczny czas pozostały;
+- gdy brak deadline'u, pokazywany jest czas trwania od utworzenia;
+- grupa funkcyjna + element albo ręczne pole „Inne” z wzajemnym blokowaniem pól;
+- wiele powiązań ze Statusem, otwartymi punktami i dziennikiem;
+- autor, data utworzenia i pełna historia zmian w szczegółach;
+- użytkownik może usunąć własne zadanie, jeśli nikt inny go nie zmieniał.
+
+### Otwarte punkty, cele i dziennik
+
+- sortowanie każdej kolumny i filtrowanie wszystkich informacji;
+- widok przypomnień: przedawnione oraz zbliżające się w ciągu 7 dni;
+- domyślne przypomnienie konfigurowalne przez administratora, startowo 14 dni;
+- cele z czytelną listą elementów i osobnym selektorem Status/Zadania/Otwarte punkty;
+- dziennik z filtrem i grupowaniem według calendar week (poniedziałek–niedziela);
+- jawne typy powiązań w szczegółach notatki;
+- autor i data utworzenia we wszystkich widokach szczegółowych;
+- użytkownik może usunąć własną notatkę;
+- historia zmian Statusu, zadania, otwartego punktu i notatki.
+
+### Backup i eksporty
+
+- administrator systemu lub projektu może pobrać backup bieżącego projektu jako JSON i odtworzyć go w konfiguracji;
+- przywrócenie wymaga backupu o tym samym kodzie projektu i zastępuje dane tylko bieżącego projektu;
+- eksport całego projektu do jednego pliku Excel: Podsumowanie, Status, Zadania, Cele, Otwarte punkty i Dziennik;
+- eksport otwartych punktów dla wybranego zakresu, filtrów i sortowania;
+- eksport Statusu według sterownika/grupy oraz na poziomie: sterowniki, kategorie, grupy funkcyjne lub pełne szczegóły;
+- administrator może przygotować predefiniowane szablony eksportu Statusu;
+- wszystkie arkusze używają wspólnego niebiesko-białego stylu, tabel, filtrów i zamrożonych nagłówków.
 
 ## Dane demonstracyjne
 
-Przy pierwszym uruchomieniu tej wersji aplikacja uzupełnia bazę maksymalnie do:
+Przy pierwszym uruchomieniu aplikacja uzupełnia projekt W371 maksymalnie do wartości `DEMO_DATA_LIMIT` dla głównych modułów (maksymalnie 100). Powstają różne statusy, priorytety, terminy, przypomnienia, checklisty, autorzy, powiązania i historia. Projekt W520 otrzymuje odrębny, mniejszy zestaw testowy: 40 statusów, 35 zadań, 30 otwartych punktów, 30 notatek i 8 celów.
 
-- 100 punktów statusu;
-- 100 zadań z checklistami;
-- 100 otwartych punktów;
-- 100 wpisów w dzienniku;
-- 20 celów z powiązaniami;
-- 6 przykładowych sterowników i 9 dodatkowych użytkowników zespołu.
-
-Rekordy mają różne statusy, kategorie, odpowiedzialnych, terminy, przedawnione i zbliżające się przypomnienia, wzmianki oraz powiązania pomiędzy modułami. Generator zapisuje swój stan w bazie, dlatego restart lub redeploy nie tworzy duplikatów. W istniejącej bazie uzupełniane są tylko brakujące rekordy do limitu — wcześniejsze dane nie są usuwane ani nadpisywane.
-
-Konta o loginach zaczynających się od `demo.` mają losowe, nieudostępniane hasła i służą jako osoby do przypisywania rekordów. Administrator może nadać im własne hasła w konfiguracji, jeśli chce użyć ich do logowania.
+Generator jest idempotentny: restart albo redeploy nie tworzy duplikatów. Konta rozpoczynające się od `demo.` mają losowe, nieudostępniane hasła; administrator systemu może ustawić im nowe hasło.
 
 ## Wdrożenie na Railway
 
-Konfiguracja serwera pozostaje taka sama jak w poprzedniej wersji.
+Konfiguracja serwera pozostaje zgodna z poprzednimi ustaleniami.
 
-1. Rozpakuj paczkę i podmień zawartość repozytorium plikami z katalogu `plc-commissioning-hub`.
-2. Wypchnij commit do GitHuba. Railway uruchomi deployment automatycznie; w razie potrzeby wybierz **Redeploy**.
-3. Pozostaw Railway Volume zamontowany pod ścieżką:
+1. Rozpakuj paczkę. Jej katalog główny jest gotowy do użycia jako zawartość repozytorium.
+2. Podmień pliki w repozytorium i wypchnij commit do GitHuba albo użyj ręcznego redeploy w Railway.
+3. Zachowaj Railway Volume zamontowany dokładnie pod:
 
    ```text
    /app/data
    ```
 
-4. Pozostaw zmienną:
+4. Zachowaj zmienną:
 
    ```text
    DB_PATH=/app/data/plc-status.db
    ```
 
-5. Dla nowej bazy ustaw dane pierwszego administratora:
+5. Dla zupełnie nowej bazy ustaw pierwszego administratora systemu:
 
    ```text
    APP_USER=admin
    APP_PASSWORD=ustaw-dlugie-losowe-haslo
    ```
 
-6. Nie ustawiaj ręcznie `PORT`. Railway przekaże go do kontenera automatycznie.
-
-Generator można kontrolować opcjonalnymi zmiennymi:
+6. Nie ustawiaj ręcznie `PORT`; Railway przekaże tę wartość do kontenera.
+7. Opcjonalne ustawienia danych demonstracyjnych:
 
    ```text
    SEED_DEMO_DATA=true
    DEMO_DATA_LIMIT=100
    ```
 
-`DEMO_DATA_LIMIT` jest ograniczany do zakresu 1–100. Ustaw `SEED_DEMO_DATA=false`, jeśli tworzona baza produkcyjna nie powinna otrzymać danych demonstracyjnych.
+`DEMO_DATA_LIMIT` jest ograniczany do 1–100. Dla bazy bez danych testowych ustaw `SEED_DEMO_DATA=false` jeszcze przed pierwszym uruchomieniem.
 
-`Dockerfile` celowo nie deklaruje `VOLUME`. Skrypt `docker-entrypoint.sh` ustawia prawa do katalogu danych dopiero po zamontowaniu Railway Volume, a następnie uruchamia aplikację jako użytkownik `node`. Zachowuje to wcześniejszą poprawkę błędu SQLite `unable to open database file`.
+`Dockerfile` nie deklaruje `VOLUME`. `docker-entrypoint.sh` ustawia prawa katalogu po zamontowaniu Railway Volume i dopiero wtedy uruchamia aplikację jako użytkownik `node`. Zachowuje to wcześniejszą poprawkę błędu SQLite `unable to open database file`.
 
-Po wdrożeniu trzeba zalogować się ponownie, ponieważ sesje są przechowywane w pamięci procesu. Zmiana `APP_USER` albo `APP_PASSWORD` nie zmienia istniejącego konta; po utworzeniu bazy kontami zarządza się w **Konfiguracja → Użytkownicy**.
+Po redeployu trzeba zalogować się ponownie, ponieważ sesje są przechowywane w pamięci procesu. `APP_USER` i `APP_PASSWORD` służą tylko do utworzenia pierwszego konta w nowej bazie; nie resetują istniejących danych logowania.
 
-## Migracja i wariant czystego startu
+## Aktualizacja istniejącej bazy
 
-Przy starcie V3.2 automatycznie dodaje nowe tabele i kolumny do istniejącej bazy V2/V3. Rekordy pozostają zachowane, a istniejące wartości pola „Stacja” są jednorazowo przekształcane w grupy funkcyjne odpowiedniego sterownika. Dla danych historycznych zachowywana jest historia zmian.
+V4 automatycznie migruje bazę V2/V3, nie kasując rekordów. Dotychczasowe dane zostają przypisane do projektu W371, a istniejący administrator staje się administratorem systemu i projektu. Tworzone są nowe struktury projektów, członkostw, hierarchii, elementów grup, powiązań, eksportów i numeracji.
 
-W edytorze punktów grupy każda zaznaczona podkategoria tworzy osobny wiersz Statusu. Jeśli nie zaznaczono podkategorii, powstaje jeden wiersz na poziomie kategorii. Usunięcie grupy funkcyjnej usuwa także przypisane do niej punkty Statusu i zapisuje tę operację w historii, dlatego interfejs wymaga potwierdzenia.
+Przed wdrożeniem produkcyjnym zalecany jest snapshot Railway Volume lub kopia pliku `/app/data/plc-status.db`. Po uruchomieniu V4 można też używać kopii projektowych w **Konfiguracja → Backup projektu**.
 
-Jeżeli podczas fazy koncepcyjnej potrzebny jest całkowicie czysty start, usuń wyłącznie plik `/app/data/plc-status.db` (oraz ewentualne pliki `-wal` i `-shm`) z Railway Volume, a następnie wykonaj redeploy. Aplikacja utworzy nową bazę i dane demonstracyjne. Nie usuwaj całego Volume, jeśli znajdują się na nim inne potrzebne pliki.
+Jeśli w fazie koncepcyjnej potrzebny jest czysty start, usuń wyłącznie pliki:
 
-## Uprawnienia prototypowe
+```text
+/app/data/plc-status.db
+/app/data/plc-status.db-wal
+/app/data/plc-status.db-shm
+```
 
-| Czynność | Administrator | Moderator | Użytkownik |
-|---|:---:|:---:|:---:|
-| Dodawanie i edycja danych roboczych | ✓ | ✓ | ✓ |
-| Zmiana sterownika w danych roboczych | ✓ | ✓ | ✓ |
-| Usuwanie statusów, punktów i celów | ✓ | — | — |
-| Usunięcie własnej notatki | ✓ | — | ✓ |
-| Usunięcie własnego, niezmienionego przez innych zadania | ✓ | — | ✓ |
-| Kategorie, podkategorie i słowniki | pełne | dodawanie, edycja, kolejność | — |
-| Grupy funkcyjne i ich szablony punktów | pełne | podgląd | — |
-| Sterowniki i użytkownicy | pełne | podgląd | — |
-| Ustawienia globalne przypomnień | ✓ | — | — |
+Następnie wykonaj redeploy. Nie usuwaj całego Volume, jeśli znajdują się na nim inne pliki.
 
-Jest to nadal wstępna macierz, zgodna z ustaleniem, że szczegółowe uprawnienia zostaną dopracowane na końcu projektu.
+## Uprawnienia prototypowe V4
 
-## Lokalny test przez Docker
+| Czynność | Administrator systemu | Administrator projektu | Moderator | Użytkownik |
+|---|:---:|:---:|:---:|:---:|
+| Projekty i konta globalne | pełne | — | — | — |
+| Role w projekcie | pełne | moderator/użytkownik | — | — |
+| Backup i odtwarzanie projektu | ✓ | ✓ | — | — |
+| Sterowniki, hierarchia, grupy funkcyjne | pełne | pełne | podgląd | podgląd |
+| Kategorie i słowniki | pełne | pełne | dodawanie/edycja/kolejność | podgląd |
+| Dane robocze i zmiana sterownika | ✓ | ✓ | ✓ | ✓ |
+| Usuwanie danych innych osób | ✓ | ✓ | — | — |
+| Usuwanie własnej notatki | ✓ | ✓ | — | ✓ |
+| Usuwanie własnego niezmienionego zadania | ✓ | ✓ | — | ✓ |
+
+Jest to nadal wstępna macierz uprawnień, zgodnie z założeniem, że szczegółowe prawa zostaną dopracowane na końcu projektu.
+
+## Test lokalny
 
 ```bash
 cp .env.example .env
@@ -112,7 +174,15 @@ docker compose up -d --build
 
 Aplikacja będzie dostępna pod `http://localhost:8080`.
 
-## Testy
+Kontrola zdrowia i wersji:
+
+```bash
+curl http://localhost:8080/api/health
+```
+
+Oczekiwany release: `4.0.0`.
+
+## Testy automatyczne
 
 W Node.js 24 lub nowszym:
 
@@ -120,6 +190,4 @@ W Node.js 24 lub nowszym:
 npm test
 ```
 
-## Dane i kopie zapasowe
-
-Baza jest pojedynczym plikiem wskazanym przez `DB_PATH`; na Railway jest to `/app/data/plc-status.db`. Przed istotną aktualizacją warto pobrać kopię pliku lub wykonać snapshot Railway Volume.
+Testy obejmują tworzenie nowej bazy, migracje V2/V3, kolejność konfiguracji, grupy funkcyjne, izolację projektów, hierarchię, niezmienność ID, elementy grup, wielokrotne powiązania i backup/restore.

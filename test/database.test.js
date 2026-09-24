@@ -191,3 +191,65 @@ test('V3.2 manages controller function groups, check templates and batch status 
     rmSync(temporary.directory, { recursive: true, force: true });
   }
 });
+
+test('V4 isolates projects, supports hierarchy, immutable IDs, elements, links and backup restore', () => {
+  const temporary = temporaryDatabase();
+  const repository = openDatabase(temporary.path);
+  try {
+    const account = repository.authenticate('admin');
+    const beforeSelection = repository.me(account.id, null);
+    assert.equal(beforeSelection.current_project, null);
+    assert.equal(beforeSelection.projects.length, 2);
+
+    repository.withProject(1, () => {
+      const admin = repository.me(account.id, 1);
+      assert.equal(admin.role, 'system_admin');
+      assert.ok(repository.controllerGroups().length >= 2);
+      assert.ok(repository.status('group:' + repository.controllerGroups()[0].id, admin).length > 0);
+
+      const group = repository.saveFunctionGroup(null, { controller: 'HB522', name: '080VR_001' }, admin);
+      repository.bulkFunctionGroupElements(group.id, { names: 'QM1\nQM2\nQM3\nBZ1\nBZ2' });
+      const configured = repository.config().function_groups.find(item => item.id === group.id);
+      assert.deepEqual(configured.elements.map(item => item.name), ['QM1', 'QM2', 'QM3', 'BZ1', 'BZ2']);
+
+      const status = repository.saveStatus(null, {
+        controller: 'HB522', function_group_id: group.id, function_group_element_id: configured.elements[0].id,
+        test_id: 'EDIT-ME', category: 'Hardware', subcategory: '+24V Connection', status: 'Not started'
+      }, admin);
+      assert.match(status.test_id, /^W371-ST-/);
+      assert.notEqual(status.test_id, 'EDIT-ME');
+      const editedStatus = repository.saveStatus(status.id, { ...status, test_id: 'HACKED-ID', status: 'In progress' }, admin);
+      assert.equal(editedStatus.test_id, status.test_id);
+
+      const task = repository.saveTask(null, {
+        controller: 'HB522', title: 'Sprawdź QM1', function_group_id: group.id,
+        function_group_element_id: configured.elements[0].id, links: [{ entity_type: 'status', entity_id: status.id }]
+      }, admin);
+      assert.equal(task.links[0].entity_type, 'status');
+      const linkedStatus = repository.status('all', admin).find(item => item.id === status.id);
+      assert.equal(linkedStatus.related_work_total, 1);
+      assert.equal(linkedStatus.related_work_progress, 0);
+      repository.saveTask(task.id, { ...task, controller: 'HB522', status: 'Done', links: task.links }, admin);
+      assert.equal(repository.status('all', admin).find(item => item.id === status.id).related_work_progress, 100);
+
+      const backup = repository.projectBackup();
+      const countBefore = repository.tasks('all', admin).length;
+      repository.saveTask(null, { controller: 'HB522', title: 'Temporary record' }, admin);
+      assert.equal(repository.tasks('all', admin).length, countBefore + 1);
+      repository.restoreProjectBackup(backup);
+      assert.equal(repository.tasks('all', admin).length, countBefore);
+    });
+
+    repository.withProject(2, () => {
+      const admin = repository.me(account.id, 2);
+      assert.equal(admin.current_project.code, 'W520');
+      assert.equal(repository.tasks('all', admin).length, 35);
+      assert.ok(repository.controllers().some(item => item.code === 'HB521'));
+      assert.equal(repository.controllers().some(item => item.code === 'HB522'), true);
+      assert.equal(repository.tasks('all', admin).some(item => item.title === 'Sprawdź QM1'), false);
+    });
+  } finally {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});

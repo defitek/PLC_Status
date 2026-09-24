@@ -1,0 +1,4 @@
+PLC Commissioning Hub V4.0.0
+Release: 2026-09-24
+
+Po poprawnym wdrożeniu adres /api/health zwraca release 4.0.0.

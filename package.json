@@ -1,9 +1,9 @@
 {
   "name": "plc-commissioning-hub",
-  "version": "3.2.0",
+  "version": "4.0.0",
   "private": true,
   "type": "module",
-  "description": "Self-hosted PLC commissioning status application",
+  "description": "Multi-project PLC commissioning and team coordination hub",
   "engines": {
     "node": ">=24.0.0"
   },

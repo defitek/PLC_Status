@@ -5,37 +5,76 @@ CREATE TABLE IF NOT EXISTS app_meta (
   value TEXT NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS projects (
+  id INTEGER PRIMARY KEY,
+  code TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  active INTEGER NOT NULL DEFAULT 1,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY,
   username TEXT NOT NULL UNIQUE COLLATE NOCASE,
   display_name TEXT NOT NULL,
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'user' CHECK(role IN ('admin','moderator','user')),
+  system_role TEXT NOT NULL DEFAULT 'user' CHECK(system_role IN ('system_admin','user')),
+  theme TEXT NOT NULL DEFAULT 'blue',
   active INTEGER NOT NULL DEFAULT 1,
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS project_memberships (
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL DEFAULT 'user' CHECK(role IN ('project_admin','moderator','user')),
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(project_id,user_id)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS controller_groups (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  parent_id INTEGER REFERENCES controller_groups(id) ON DELETE CASCADE,
+  name TEXT NOT NULL COLLATE NOCASE,
+  description TEXT NOT NULL DEFAULT '',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
+  UNIQUE(project_id,parent_id,name)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS controllers (
   id INTEGER PRIMARY KEY,
-  code TEXT NOT NULL UNIQUE,
+  project_id INTEGER NOT NULL DEFAULT 1 REFERENCES projects(id) ON DELETE CASCADE,
+  group_id INTEGER REFERENCES controller_groups(id) ON DELETE SET NULL,
+  code TEXT NOT NULL,
   area TEXT NOT NULL DEFAULT 'Body Shop',
   description TEXT NOT NULL DEFAULT '',
   sort_order INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(project_id,code)
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS categories (
   id INTEGER PRIMARY KEY,
-  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  project_id INTEGER NOT NULL DEFAULT 1 REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL COLLATE NOCASE,
   sort_order INTEGER NOT NULL DEFAULT 0,
-  active INTEGER NOT NULL DEFAULT 1
+  active INTEGER NOT NULL DEFAULT 1,
+  UNIQUE(project_id,name)
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS subcategories (
   id INTEGER PRIMARY KEY,
   category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
+  default_function TEXT NOT NULL DEFAULT '',
   sort_order INTEGER NOT NULL DEFAULT 0,
   active INTEGER NOT NULL DEFAULT 1,
   UNIQUE(category_id,name)
@@ -43,9 +82,11 @@ CREATE TABLE IF NOT EXISTS subcategories (
 
 CREATE TABLE IF NOT EXISTS task_categories (
   id INTEGER PRIMARY KEY,
-  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  project_id INTEGER NOT NULL DEFAULT 1 REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL COLLATE NOCASE,
   sort_order INTEGER NOT NULL DEFAULT 0,
-  active INTEGER NOT NULL DEFAULT 1
+  active INTEGER NOT NULL DEFAULT 1,
+  UNIQUE(project_id,name)
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS task_subcategories (
@@ -59,20 +100,24 @@ CREATE TABLE IF NOT EXISTS task_subcategories (
 
 CREATE TABLE IF NOT EXISTS options (
   id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL DEFAULT 1 REFERENCES projects(id) ON DELETE CASCADE,
   kind TEXT NOT NULL,
   value TEXT NOT NULL,
   sort_order INTEGER NOT NULL DEFAULT 0,
   active INTEGER NOT NULL DEFAULT 1,
-  UNIQUE(kind,value)
+  UNIQUE(project_id,kind,value)
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS settings (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL
-) STRICT;
+  project_id INTEGER NOT NULL DEFAULT 1 REFERENCES projects(id) ON DELETE CASCADE,
+  key TEXT NOT NULL,
+  value TEXT NOT NULL,
+  PRIMARY KEY(project_id,key)
+) STRICT, WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS function_groups (
   id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL DEFAULT 1 REFERENCES projects(id) ON DELETE CASCADE,
   controller_id INTEGER NOT NULL REFERENCES controllers(id) ON DELETE CASCADE,
   name TEXT NOT NULL COLLATE NOCASE,
   sort_order INTEGER NOT NULL DEFAULT 0,
@@ -82,9 +127,20 @@ CREATE TABLE IF NOT EXISTS function_groups (
   UNIQUE(controller_id,name)
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS function_group_elements (
+  id INTEGER PRIMARY KEY,
+  function_group_id INTEGER NOT NULL REFERENCES function_groups(id) ON DELETE CASCADE,
+  name TEXT NOT NULL COLLATE NOCASE,
+  description TEXT NOT NULL DEFAULT '',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
+  UNIQUE(function_group_id,name)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS function_group_checks (
   id INTEGER PRIMARY KEY,
   function_group_id INTEGER NOT NULL REFERENCES function_groups(id) ON DELETE CASCADE,
+  element_id INTEGER REFERENCES function_group_elements(id) ON DELETE SET NULL,
   title TEXT NOT NULL,
   category TEXT NOT NULL,
   criticality TEXT NOT NULL DEFAULT 'Medium',
@@ -103,6 +159,7 @@ CREATE TABLE IF NOT EXISTS function_group_check_subcategories (
 
 CREATE TABLE IF NOT EXISTS status_items (
   id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL DEFAULT 1 REFERENCES projects(id) ON DELETE CASCADE,
   controller_id INTEGER NOT NULL REFERENCES controllers(id) ON DELETE CASCADE,
   test_id TEXT NOT NULL UNIQUE,
   station TEXT NOT NULL,
@@ -120,6 +177,7 @@ CREATE TABLE IF NOT EXISTS status_items (
   current_note TEXT NOT NULL DEFAULT '',
   evidence_link TEXT NOT NULL DEFAULT '',
   function_group_id INTEGER REFERENCES function_groups(id) ON DELETE SET NULL,
+  function_group_element_id INTEGER REFERENCES function_group_elements(id) ON DELETE SET NULL,
   function_group_check_id INTEGER REFERENCES function_group_checks(id) ON DELETE SET NULL,
   created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -128,6 +186,7 @@ CREATE TABLE IF NOT EXISTS status_items (
 
 CREATE TABLE IF NOT EXISTS tasks (
   id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL DEFAULT 1 REFERENCES projects(id) ON DELETE CASCADE,
   controller_id INTEGER NOT NULL REFERENCES controllers(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
@@ -144,6 +203,9 @@ CREATE TABLE IF NOT EXISTS tasks (
   linked_test_id TEXT,
   linked_entity_type TEXT NOT NULL DEFAULT '',
   linked_entity_id INTEGER,
+  function_group_id INTEGER REFERENCES function_groups(id) ON DELETE SET NULL,
+  function_group_element_id INTEGER REFERENCES function_group_elements(id) ON DELETE SET NULL,
+  other_object TEXT NOT NULL DEFAULT '',
   created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -159,6 +221,7 @@ CREATE TABLE IF NOT EXISTS task_checklist (
 
 CREATE TABLE IF NOT EXISTS open_points (
   id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL DEFAULT 1 REFERENCES projects(id) ON DELETE CASCADE,
   controller_id INTEGER NOT NULL REFERENCES controllers(id) ON DELETE CASCADE,
   issue_id TEXT NOT NULL UNIQUE,
   title TEXT NOT NULL,
@@ -186,6 +249,7 @@ CREATE TABLE IF NOT EXISTS open_points (
 
 CREATE TABLE IF NOT EXISTS daily_notes (
   id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL DEFAULT 1 REFERENCES projects(id) ON DELETE CASCADE,
   controller_id INTEGER REFERENCES controllers(id) ON DELETE SET NULL,
   note_date TEXT NOT NULL,
   shift TEXT NOT NULL DEFAULT 'Dzień',
@@ -202,6 +266,7 @@ CREATE TABLE IF NOT EXISTS daily_notes (
 
 CREATE TABLE IF NOT EXISTS goals (
   id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL DEFAULT 1 REFERENCES projects(id) ON DELETE CASCADE,
   controller_id INTEGER REFERENCES controllers(id) ON DELETE SET NULL,
   title TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
@@ -214,6 +279,7 @@ CREATE TABLE IF NOT EXISTS goals (
 
 CREATE TABLE IF NOT EXISTS goal_links (
   id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL DEFAULT 1 REFERENCES projects(id) ON DELETE CASCADE,
   goal_id INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
   entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point')),
   entity_id INTEGER NOT NULL,
@@ -222,14 +288,28 @@ CREATE TABLE IF NOT EXISTS goal_links (
 
 CREATE TABLE IF NOT EXISTS entity_mentions (
   id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL DEFAULT 1 REFERENCES projects(id) ON DELETE CASCADE,
   entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point','note')),
   entity_id INTEGER NOT NULL,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   UNIQUE(entity_type,entity_id,user_id)
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS entity_links (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  source_type TEXT NOT NULL CHECK(source_type IN ('status','task','point','note','goal')),
+  source_id INTEGER NOT NULL,
+  target_type TEXT NOT NULL CHECK(target_type IN ('status','task','point','note','goal')),
+  target_id INTEGER NOT NULL,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(project_id,source_type,source_id,target_type,target_id)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL DEFAULT 1 REFERENCES projects(id) ON DELETE CASCADE,
   entity_type TEXT NOT NULL,
   entity_id INTEGER NOT NULL,
   action TEXT NOT NULL CHECK(action IN ('create','update','delete','migrate')),
@@ -239,7 +319,31 @@ CREATE TABLE IF NOT EXISTS audit_log (
   snapshot_json TEXT NOT NULL DEFAULT '{}'
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS export_templates (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  detail_level TEXT NOT NULL DEFAULT 'detailed',
+  columns_json TEXT NOT NULL DEFAULT '[]',
+  filters_json TEXT NOT NULL DEFAULT '{}',
+  sort_key TEXT NOT NULL DEFAULT '',
+  sort_direction TEXT NOT NULL DEFAULT 'asc',
+  active INTEGER NOT NULL DEFAULT 1,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(project_id,name)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS project_sequences (
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  entity_type TEXT NOT NULL,
+  next_value INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY(project_id,entity_type)
+) STRICT, WITHOUT ROWID;
+
 CREATE INDEX IF NOT EXISTS idx_status_controller_status ON status_items(controller_id,status);
+CREATE INDEX IF NOT EXISTS idx_controller_groups_project ON controller_groups(project_id,parent_id,sort_order);
 CREATE INDEX IF NOT EXISTS idx_function_groups_controller ON function_groups(controller_id,sort_order);
 CREATE INDEX IF NOT EXISTS idx_function_checks_group ON function_group_checks(function_group_id,sort_order);
 CREATE INDEX IF NOT EXISTS idx_tasks_controller_status ON tasks(controller_id,status);
@@ -248,3 +352,5 @@ CREATE INDEX IF NOT EXISTS idx_notes_controller_date ON daily_notes(controller_i
 CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type,entity_id,changed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_log(user_id,changed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mentions_user ON entity_mentions(user_id,entity_type);
+CREATE INDEX IF NOT EXISTS idx_entity_links_source ON entity_links(project_id,source_type,source_id);
+CREATE INDEX IF NOT EXISTS idx_entity_links_target ON entity_links(project_id,target_type,target_id);

@@ -4,7 +4,7 @@ RUN apk add --no-cache su-exec
 
 WORKDIR /app
 COPY package.json ./
-COPY server.js database.js demo-data.js schema.sql ./
+COPY server.js database.js demo-data.js schema.sql exports.js xlsx.js ./
 COPY public ./public
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
@@ -19,7 +19,7 @@ ENV DB_PATH=/app/data/plc-status.db
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:3000/api/health || exit 1
+  CMD wget -qO- "http://127.0.0.1:${PORT:-3000}/api/health" || exit 1
 
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["node", "server.js"]

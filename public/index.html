@@ -5,19 +5,19 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#172554">
   <title>PLC Commissioning Hub</title>
-  <link rel="stylesheet" href="/styles.css">
-  <script type="module" src="/app.js"></script>
+  <link rel="stylesheet" href="/styles.css?v=4.0.0">
+  <script type="module" src="/app.js?v=4.0.0"></script>
 </head>
 <body>
   <header class="topbar">
     <div class="logo">PLC</div>
-    <div class="brand"><strong>Commissioning Hub</strong><span>Project status & team workspace · V3.2</span></div>
-    <div class="userbox"><span id="me"></span><button id="logout" class="ghost">Wyloguj</button></div>
+    <div class="brand"><strong>Commissioning Hub</strong><span>Multi-project status & team workspace · V4.0</span></div>
+    <div class="top-actions"><button id="project-switch" class="ghost project-chip">Wybierz projekt</button><button id="theme-switch" class="ghost" title="Zmień wygląd">◐ Motyw</button><div class="userbox"><span id="me"></span><button id="logout" class="ghost">Wyloguj</button></div></div>
   </header>
   <div class="layout">
     <aside class="sidebar">
-      <label class="select-label">Sterownik
-        <select id="controller"><option value="all">Wszystkie sterowniki</option></select>
+      <label class="select-label">Zakres danych
+        <select id="controller"><option value="all">Cały projekt</option></select>
       </label>
       <nav id="nav">
         <button data-view="overview" class="active"><span>◫</span><span>Overview</span></button>
@@ -33,7 +33,7 @@
     <main>
       <header class="pagehead">
         <div><h1 id="title">Overview</h1><p id="desc"></p></div>
-        <button id="add" class="primary">+ Dodaj</button>
+        <div class="page-actions"><button id="export" class="secondary">Eksportuj</button><button id="add" class="primary">+ Dodaj</button></div>
       </header>
       <section id="content"><div class="loading">Ładowanie…</div></section>
     </main>
@@ -69,9 +69,33 @@
   <dialog id="quick-status-dialog" class="wide-dialog quick-status-dialog">
     <header class="dialog-head"><div><h2>Szybka edycja statusu</h2><p>Cała bieżąca lista w jednym oknie — zmiany zostaną zapisane zbiorczo.</p></div><button type="button" class="x" id="quick-status-close">×</button></header>
     <div class="picker-tools"><input id="quick-status-search" type="search" placeholder="Szukaj po ID, grupie, punkcie, kategorii lub notatce…"></div>
-    <div class="tablewrap quick-status-wrap"><table class="quick-status-table"><thead><tr><th>Test ID</th><th>Sterownik</th><th>Grupa funkcyjna</th><th>Punkt / funkcja</th><th>Kategoria</th><th>Podkategoria</th><th>Krytyczność</th><th>Status</th><th>Odpowiedzialny</th><th>Notatka</th></tr></thead><tbody id="quick-status-body"></tbody></table></div>
+    <div class="tablewrap quick-status-wrap"><table class="quick-status-table"><thead><tr><th>Test ID</th><th>Sterownik</th><th>Grupa funkcyjna</th><th>Element</th><th>Punkt / funkcja</th><th>Kategoria</th><th>Podkategoria</th><th>Krytyczność</th><th>Status</th><th>Odpowiedzialny</th><th>Notatka</th></tr></thead><tbody id="quick-status-body"></tbody></table></div>
     <footer class="dialog-actions"><span id="quick-status-count" class="dialog-count"></span><span></span><button type="button" class="secondary" id="quick-status-cancel">Anuluj</button><button type="button" class="primary" id="quick-status-save">Zapisz wszystkie zmiany</button></footer>
   </dialog>
+
+  <dialog id="project-dialog" class="choice-dialog">
+    <header class="dialog-head"><div><h2>Wybierz projekt</h2><p>Wyświetlane są wyłącznie projekty dostępne dla Twojego konta.</p></div><button type="button" class="x" id="project-close">×</button></header>
+    <div id="project-list" class="choice-list"></div>
+  </dialog>
+
+  <dialog id="theme-dialog" class="choice-dialog">
+    <header class="dialog-head"><div><h2>Szata graficzna</h2><p>Wybrany motyw jest zapisywany na Twoim koncie.</p></div><button type="button" class="x" id="theme-close">×</button></header>
+    <div id="theme-list" class="theme-list"></div>
+  </dialog>
+
+  <dialog id="export-dialog" class="record-dialog">
+    <header class="dialog-head"><div><h2>Eksport do Excel</h2><p>Niebiesko-biały raport z tabelami, filtrami i zamrożonym nagłówkiem.</p></div><button type="button" class="x" id="export-close">×</button></header>
+    <form id="export-form"><div class="formgrid">
+      <label class="field"><span>Rodzaj eksportu</span><select id="export-type"><option value="project">Cały projekt</option><option value="status">Status</option><option value="points">Otwarte punkty</option></select></label>
+      <label class="field"><span>Zakres sterowników</span><select id="export-scope"></select></label>
+      <label class="field export-status-field"><span>Szablon statusu</span><select id="export-template"><option value="">Ustawienia ręczne</option></select></label>
+      <label class="field export-status-field"><span>Poziom szczegółowości</span><select id="export-detail"><option value="controller">Tylko sterowniki</option><option value="category">Sterowniki i kategorie</option><option value="function_group">Grupy funkcyjne</option><option value="detailed" selected>Pełna lista szczegółowa</option></select></label>
+      <label class="field export-filter-field"><span>Filtr statusu</span><select id="export-status-filter"><option value="">Wszystkie</option><option>Not started</option><option>In progress</option><option>Blocked</option><option>NOK / Rework</option><option>Done</option></select></label>
+      <label class="field export-filter-field"><span>Sortowanie</span><select id="export-sort"><option value="">Kolejność konfiguracji</option><option value="controller">Sterownik</option><option value="category">Kategoria</option><option value="status">Status</option><option value="due_date">Deadline</option><option value="reminder_date">Przypomnienie</option></select></label>
+    </div><footer class="dialog-actions"><span></span><button type="button" class="secondary" id="export-cancel">Anuluj</button><button class="primary">Pobierz Excel</button></footer></form>
+  </dialog>
+
+  <div id="context-menu" class="context-menu hidden"></div>
 
   <div id="toast" class="toast"></div>
 </body>
