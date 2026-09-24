@@ -61,6 +61,21 @@ async function handleProjectApi(request, response, url, user) {
   if (method === 'GET' && path === '/api/overview') return json(response, 200, repository.overview(scope));
   if (method === 'GET' && path === '/api/my-summary') return json(response, 200, repository.mySummary(user));
   if (method === 'GET' && path === '/api/audit') return json(response, 200, repository.audit(url.searchParams.get('type'), Number(url.searchParams.get('id'))));
+  if (method === 'GET' && path === '/api/history') return json(response, 200, repository.history({ types: url.searchParams.getAll('type'), limit: url.searchParams.get('limit') }));
+  if (method === 'GET' && path === '/api/daily-summary') return json(response, 200, repository.dailySummary(url.searchParams.get('from'), url.searchParams.get('to')));
+  if (method === 'GET' && path === '/api/planner') return json(response, 200, repository.planner(url.searchParams.get('from'), url.searchParams.get('to')));
+  if (method === 'PUT' && path === '/api/planner/day') { requireRole(user, 'moderator'); return json(response, 200, repository.savePlannerDay(await readJson(request), user)); }
+  if (method === 'GET' && path === '/api/calendar') return json(response, 200, repository.calendar({
+    from: url.searchParams.get('from'), to: url.searchParams.get('to'), scope,
+    types: url.searchParams.getAll('type'), category: url.searchParams.get('category'), only_mine: url.searchParams.get('only_mine') === '1'
+  }, user));
+  if (method === 'POST' && path === '/api/calendar/annotations') { requireRole(user, 'moderator'); return json(response, 201, repository.saveCalendarAnnotation(null, await readJson(request), user)); }
+  let annotationMatch = path.match(/^\/api\/calendar\/annotations\/(\d+)$/);
+  if (annotationMatch) {
+    requireRole(user, 'moderator');
+    if (method === 'PATCH') return json(response, 200, repository.saveCalendarAnnotation(Number(annotationMatch[1]), await readJson(request), user));
+    if (method === 'DELETE') { repository.deleteCalendarAnnotation(Number(annotationMatch[1])); response.writeHead(204); return response.end(); }
+  }
 
   if (method === 'GET' && path === '/api/backup') {
     requireRole(user, 'project_admin');
@@ -122,6 +137,8 @@ async function handleProjectApi(request, response, url, user) {
     }
     if (method === 'DELETE') { requireRole(user, 'system_admin'); if (id === user.id) throw Object.assign(new Error('Nie możesz usunąć własnego konta'), { statusCode: 400 }); repository.deleteUser(id); response.writeHead(204); return response.end(); }
   }
+  const userAreaMatch = path.match(/^\/api\/users\/(\d+)\/areas$/);
+  if (userAreaMatch && method === 'PUT') { requireRole(user, 'project_admin'); return json(response, 200, repository.saveUserAreas(Number(userAreaMatch[1]), await readJson(request))); }
 
   if (path === '/api/controller-groups' && method === 'POST') { requireRole(user, 'project_admin'); return json(response, 201, repository.saveControllerGroup(null, await readJson(request))); }
   id = numericId(path, '/api/controller-groups');
@@ -142,6 +159,15 @@ async function handleProjectApi(request, response, url, user) {
     if (method === 'POST' && !elementId) return json(response, 201, repository.saveFunctionGroupElement(groupId, null, await readJson(request)));
     if (method === 'PATCH' && elementId) return json(response, 200, repository.saveFunctionGroupElement(groupId, elementId, await readJson(request)));
     if (method === 'DELETE' && elementId) { repository.deleteFunctionGroupElement(groupId, elementId); response.writeHead(204); return response.end(); }
+  }
+  match = path.match(/^\/api\/function-groups\/(\d+)\/subcategories\/bulk$/);
+  if (match && method === 'POST') { requireRole(user, 'project_admin'); return json(response, 201, repository.bulkFunctionGroupSubcategories(Number(match[1]), await readJson(request))); }
+  match = path.match(/^\/api\/function-groups\/(\d+)\/subcategories(?:\/(\d+))?$/);
+  if (match) {
+    requireRole(user, 'project_admin'); const groupId = Number(match[1]); const subcategoryId = match[2] ? Number(match[2]) : null;
+    if (method === 'POST' && !subcategoryId) return json(response, 201, repository.saveFunctionGroupSubcategory(groupId, null, await readJson(request)));
+    if (method === 'PATCH' && subcategoryId) return json(response, 200, repository.saveFunctionGroupSubcategory(groupId, subcategoryId, await readJson(request)));
+    if (method === 'DELETE' && subcategoryId) { repository.deleteFunctionGroupSubcategory(groupId, subcategoryId); response.writeHead(204); return response.end(); }
   }
   id = numericId(path, '/api/function-groups');
   if (id !== null) { requireRole(user, 'project_admin'); if (method === 'PATCH') return json(response, 200, repository.saveFunctionGroup(id, await readJson(request), user)); if (method === 'DELETE') { repository.deleteFunctionGroup(id, user); response.writeHead(204); return response.end(); } }
@@ -164,7 +190,7 @@ async function handleProjectApi(request, response, url, user) {
   if (id !== null) { requireRole(user, 'project_admin'); if (method === 'PATCH') return json(response, 200, repository.saveExportTemplate(id, await readJson(request), user)); if (method === 'DELETE') { repository.deleteExportTemplate(id); response.writeHead(204); return response.end(); } }
   if (method === 'PATCH' && path === '/api/reorder') {
     const input = await readJson(request);
-    if (['controllers', 'controller_groups', 'users', 'function_groups', 'function_group_elements', 'export_templates'].includes(input.kind)) requireRole(user, 'project_admin'); else requireRole(user, 'moderator');
+    if (['controllers', 'controller_groups', 'users', 'function_groups', 'function_group_elements', 'function_group_subcategories', 'export_templates'].includes(input.kind)) requireRole(user, 'project_admin'); else requireRole(user, 'moderator');
     repository.reorder(input.kind, input.ids); return json(response, 200, { ok: true });
   }
   if (method === 'PATCH' && path.startsWith('/api/settings/')) { requireRole(user, 'project_admin'); const input = await readJson(request); repository.saveSetting(decodeURIComponent(path.slice('/api/settings/'.length)), input.value); return json(response, 200, { ok: true }); }
@@ -173,7 +199,7 @@ async function handleProjectApi(request, response, url, user) {
 
 async function handleApi(request, response, url) {
   const method = request.method || 'GET'; const path = url.pathname;
-  if (method === 'GET' && path === '/api/health') return json(response, 200, { status: 'ok', version: 4, release: '4.0.0' });
+  if (method === 'GET' && path === '/api/health') return json(response, 200, { status: 'ok', version: 5, release: '5.0.0' });
   if (method === 'POST' && path === '/api/login') {
     const input = await readJson(request); const account = repository.authenticate(input.username);
     if (!account || !verifyPassword(input.password || '', account.password_hash)) return json(response, 401, { error: 'Nieprawidłowy login lub hasło' });
@@ -203,7 +229,7 @@ async function handleApi(request, response, url) {
 function serveStatic(response, pathname) {
   const requested = pathname === '/' ? '/index.html' : pathname; const normalized = normalize(requested).replace(/^(\.\.[/\\])+/, ''); const filePath = join(publicDir, normalized);
   if (!filePath.startsWith(publicDir) || !existsSync(filePath) || !statSync(filePath).isFile()) return json(response, 404, { error: 'Nie znaleziono pliku' });
-  response.writeHead(200, { 'Content-Type': mimeTypes[extname(filePath)] || 'application/octet-stream', 'Cache-Control': ['.html', '.js', '.css'].includes(extname(filePath)) ? 'no-cache, no-store, must-revalidate' : 'public,max-age=3600', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin', 'X-Frame-Options': 'SAMEORIGIN', 'Content-Security-Policy': "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'self'; form-action 'self'" });
+  response.writeHead(200, { 'Content-Type': mimeTypes[extname(filePath)] || 'application/octet-stream', 'Cache-Control': ['.html', '.js', '.css'].includes(extname(filePath)) ? 'no-cache, no-store, must-revalidate' : 'public,max-age=3600', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin', 'X-Frame-Options': 'SAMEORIGIN', 'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'self'; form-action 'self'" });
   createReadStream(filePath).pipe(response);
 }
 
@@ -220,6 +246,6 @@ export const server = createServer(async (request, response) => {
     return json(response, statusCode, { error: statusCode === 500 ? `Nieoczekiwany błąd serwera: ${error.message}` : error.message });
   }
 });
-if (process.argv[1] === fileURLToPath(import.meta.url)) server.listen(port, '0.0.0.0', () => console.log(`PLC Commissioning Hub V4.0.0 running on port ${port}`));
+if (process.argv[1] === fileURLToPath(import.meta.url)) server.listen(port, '0.0.0.0', () => console.log(`PLC Commissioning Hub V5.0.0 running on port ${port}`));
 function shutdown() { server.close(() => { repository.close(); process.exit(0); }); }
 process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);

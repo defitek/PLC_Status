@@ -21,7 +21,8 @@ function filterAndSort(rows, options = {}) {
 
 const statusColumns = [
   ['test_id', 'ID punktu', 18], ['controller', 'Sterownik', 14], ['function_group_name', 'Grupa funkcyjna', 22],
-  ['function_group_element_name', 'Element grupy', 20], ['category', 'Kategoria', 20], ['subcategory', 'Podkategoria', 24],
+  ['function_group_subcategory_name', 'Podkategoria grupy', 22], ['function_group_element_name', 'Element grupy', 20],
+  ['category', 'Kategoria', 20], ['subcategory', 'Podkategoria', 24],
   ['status', 'Status', 18], ['related_work_progress', 'Prace powiązane [%]', 19], ['criticality', 'Krytyczność', 15],
   ['responsible_name', 'Odpowiedzialny', 22], ['checked_by', 'Sprawdził', 20], ['checked_on', 'Data sprawdzenia', 16],
   ['function_detail', 'Test / funkcja', 42], ['current_note', 'Notatka', 46], ['links_text', 'Powiązania', 34],
@@ -32,7 +33,7 @@ const taskColumns = [
   ['function_group_element_name', 'Element grupy', 20], ['other_object', 'Inne', 20], ['category', 'Kategoria', 20],
   ['subcategory', 'Podkategoria', 22], ['status', 'Status', 16], ['priority', 'Priorytet', 14],
   ['owner_name', 'Odpowiedzialny', 22], ['start_date', 'Planowany start', 16], ['due_date', 'Deadline', 16],
-  ['checklist_progress', 'Checklista', 15], ['description', 'Opis', 45], ['info_link', 'Informacje / link', 34],
+  ['checklist_progress', 'Postęp ważony', 18], ['description', 'Opis', 45], ['info_link', 'Informacje / link', 34],
   ['links_text', 'Powiązania', 34], ['created_by_name', 'Utworzone przez', 22], ['created_at', 'Data utworzenia', 20], ['updated_at', 'Aktualizacja', 20]
 ];
 const pointColumns = [
@@ -51,7 +52,8 @@ function taskRows(rows) {
   return enrich(rows).map(row => {
     const total = row.checklist?.length || 0;
     const done = row.checklist?.filter(item => item.done).length || 0;
-    return { ...row, checklist_progress: total ? `${done}/${total} (${percent(done, total)}%)` : '—' };
+    const progress = Number.isFinite(Number(row.progress)) ? Number(row.progress) : percent(done, total);
+    return { ...row, checklist_progress: total ? `${progress}% · ${done}/${total} podzadań` : `${progress}%` };
   });
 }
 

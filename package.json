@@ -1,6 +1,6 @@
 {
   "name": "plc-commissioning-hub",
-  "version": "4.0.0",
+  "version": "5.0.0",
   "private": true,
   "type": "module",
   "description": "Multi-project PLC commissioning and team coordination hub",

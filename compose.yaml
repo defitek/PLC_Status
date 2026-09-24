@@ -10,6 +10,8 @@ services:
       DB_PATH: /app/data/plc-status.db
       APP_USER: ${APP_USER:-}
       APP_PASSWORD: ${APP_PASSWORD:-}
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
+      DEMO_DATA_LIMIT: ${DEMO_DATA_LIMIT:-100}
     volumes:
       - plc_status_data:/app/data
 

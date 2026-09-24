@@ -172,7 +172,7 @@ test('V3.2 manages controller function groups, check templates and batch status 
     }] }, admin);
     generated = repository.status('all', admin).filter(item => item.function_group_id === group.id);
     assert.equal(generated.length, 1);
-    assert.equal(generated[0].function_detail, 'Sprawdzenie grupy po edycji');
+    assert.equal(generated[0].function_detail, hardware.subcategories[0].default_function || 'Sprawdzenie grupy po edycji');
     assert.equal(generated[0].status, 'Done');
 
     repository.saveFunctionGroup(group.id, { controller: 'UB512', name: 'Test Station 901' }, admin);
@@ -247,6 +247,66 @@ test('V4 isolates projects, supports hierarchy, immutable IDs, elements, links a
       assert.ok(repository.controllers().some(item => item.code === 'HB521'));
       assert.equal(repository.controllers().some(item => item.code === 'HB522'), true);
       assert.equal(repository.tasks('all', admin).some(item => item.title === 'Sprawdź QM1'), false);
+    });
+  } finally {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
+test('V5 supports planner, calendar, weighted teamwork, canonical links and daily summaries', () => {
+  const temporary = temporaryDatabase();
+  const repository = openDatabase(temporary.path);
+  try {
+    const account = repository.authenticate('admin');
+    repository.withProject(1, () => {
+      const admin = repository.me(account.id, 1);
+      const workerRecord = repository.saveUser(null, { username: 'v5worker', display_name: 'V5 Worker', password: 'secret123', project_role: 'user' });
+      const worker = repository.me(workerRecord.id, 1);
+      const root = repository.saveControllerGroup(null, { name: 'V5 Area' });
+      const subarea = repository.saveControllerGroup(null, { name: 'V5 Subarea', parent_id: root.id });
+      assert.throws(() => repository.saveControllerGroup(null, { name: 'Too deep', parent_id: subarea.id }), /maksymalnie/);
+      repository.saveUserAreas(worker.id, { area_ids: [root.id, subarea.id, root.id] });
+      assert.deepEqual(repository.users().find(item => item.id === worker.id).area_ids, [root.id, subarea.id]);
+
+      const task = repository.saveTask(null, {
+        controller: 'HB522', title: 'Weighted teamwork V5', direct_assignee_user_ids: [admin.id, worker.id, worker.id],
+        checklist: [{ text: 'PLC', done: true, weight: 3, owner_user_id: admin.id }, { text: 'Robot', done: false, weight: 1, owner_user_id: worker.id }]
+      }, admin);
+      assert.deepEqual(task.assignee_user_ids.sort((a, b) => a - b), [admin.id, worker.id].sort((a, b) => a - b));
+      assert.equal(task.progress, 75);
+
+      const status = repository.saveStatus(null, { controller: 'HB522', category: 'Hardware', status: 'Not started', function_detail: 'V5 link target' }, admin);
+      repository.saveTask(task.id, { ...task, controller: 'HB522', links: [{ entity_type: 'status', entity_id: status.id }, { entity_type: 'status', entity_id: status.id }] }, admin);
+      let savedTask = repository.tasks('all', admin).find(item => item.id === task.id);
+      assert.equal(savedTask.links.filter(link => link.entity_type === 'status' && link.entity_id === status.id).length, 1);
+      repository.saveStatus(status.id, { ...status, controller: 'HB522', links: [{ entity_type: 'task', entity_id: task.id }, { entity_type: 'task', entity_id: task.id }] }, admin);
+      savedTask = repository.tasks('all', admin).find(item => item.id === task.id);
+      assert.equal(savedTask.links.filter(link => link.entity_type === 'status' && link.entity_id === status.id).length, 1);
+      repository.saveTask(task.id, { ...savedTask, controller: 'HB522', status: 'Done', links: savedTask.links }, admin);
+
+      const planDate = new Date().toISOString().slice(0, 10);
+      repository.savePlannerDay({ user_id: worker.id, plan_date: planDate, entries: [
+        { controller_group_id: root.id, shift: 'Dzień', transport_mode: 'transport_work' },
+        { controller_group_id: subarea.id, shift: 'Noc', transport_mode: 'none' }
+      ] }, admin);
+      const planner = repository.planner(planDate, planDate);
+      assert.equal(planner.entries.filter(item => item.user_id === worker.id).length, 2);
+
+      const annotation = repository.saveCalendarAnnotation(null, { title: 'V5 milestone', start_date: planDate, end_date: planDate, assigned_user_id: worker.id }, admin);
+      assert.ok(repository.calendar({ from: planDate, to: planDate, types: ['annotation'], only_mine: true }, worker).events.some(item => item.entity_id === annotation.id));
+      assert.ok(repository.history({ limit: 20 }).some(item => item.entity_type === 'task' && item.entity_id === task.id));
+      const summary = repository.dailySummary(planDate, planDate);
+      assert.ok(summary.totals.added >= 1);
+      assert.ok(summary.totals.closed >= 1);
+      assert.equal(summary.modules.task.items.find(item => item.entity_id === task.id)?.classification, 'closed');
+      assert.throws(() => repository.dailySummary('2026-01-01', '2026-01-15'), /14 dni/);
+
+      const backup = repository.projectBackup();
+      assert.equal(backup.version, 5);
+      assert.ok(Array.isArray(backup.tables.planner_entries));
+      assert.ok(Array.isArray(backup.tables.task_assignees));
+      assert.ok(Array.isArray(backup.tables.calendar_annotations));
     });
   } finally {
     repository.close();
