@@ -132,15 +132,18 @@ async function handleProjectApi(request, response, url, user) {
     if (method === 'PATCH') {
       const input = await readJson(request);
       const target = repository.users().find(item => item.id === id);
-      if (user.role !== 'system_admin' && (target?.system_role === 'system_admin' || target?.project_role === 'project_admin')) throw Object.assign(new Error('Tylko administrator systemu może modyfikować administratorów'), { statusCode: 403 });
-      const safe = user.role === 'system_admin' ? input : { project_role: input.project_role, project_active: input.project_active };
-      if (user.role !== 'system_admin' && !['user', 'moderator'].includes(safe.project_role)) throw Object.assign(new Error('Administrator projektu może przydzielać wyłącznie role moderatora i użytkownika'), { statusCode: 403 });
+      if (user.role !== 'system_admin' && (target?.system_role === 'system_admin' || target?.project_role === 'project_admin') && Object.keys(input).some(key => key !== 'planner_enabled')) throw Object.assign(new Error('Dla administratora możesz tutaj zmienić wyłącznie udział w Plannerze'), { statusCode: 403 });
+      const safe = user.role === 'system_admin' ? input : (target?.system_role === 'system_admin' || target?.project_role === 'project_admin') ? { planner_enabled: input.planner_enabled } : { project_role: input.project_role, project_active: input.project_active, planner_enabled: input.planner_enabled };
+      if (user.role !== 'system_admin' && Object.hasOwn(safe, 'project_role') && !['user', 'moderator'].includes(safe.project_role)) throw Object.assign(new Error('Administrator projektu może przydzielać wyłącznie role moderatora i użytkownika'), { statusCode: 403 });
       return json(response, 200, repository.saveUser(id, safe));
     }
     if (method === 'DELETE') { requireRole(user, 'system_admin'); if (id === user.id) throw Object.assign(new Error('Nie możesz usunąć własnego konta'), { statusCode: 400 }); repository.deleteUser(id); response.writeHead(204); return response.end(); }
   }
   const userAreaMatch = path.match(/^\/api\/users\/(\d+)\/areas$/);
   if (userAreaMatch && method === 'PUT') { requireRole(user, 'project_admin'); return json(response, 200, repository.saveUserAreas(Number(userAreaMatch[1]), await readJson(request))); }
+  const userPlannerMatch = path.match(/^\/api\/users\/(\d+)\/planner$/);
+  if (userPlannerMatch && method === 'PUT') { requireRole(user, 'project_admin'); return json(response, 200, repository.setPlannerEnabled(Number(userPlannerMatch[1]), await readJson(request))); }
+  if (path === '/api/my-summary/preferences' && method === 'PUT') return json(response, 200, repository.saveSummaryPreference(user.id, await readJson(request)));
 
   if (path === '/api/controller-groups' && method === 'POST') { requireRole(user, 'project_admin'); return json(response, 201, repository.saveControllerGroup(null, await readJson(request))); }
   id = numericId(path, '/api/controller-groups');
@@ -201,7 +204,7 @@ async function handleProjectApi(request, response, url, user) {
 
 async function handleApi(request, response, url) {
   const method = request.method || 'GET'; const path = url.pathname;
-  if (method === 'GET' && path === '/api/health') return json(response, 200, { status: 'ok', version: 6, release: '6.0.0' });
+  if (method === 'GET' && path === '/api/health') return json(response, 200, { status: 'ok', version: 7, release: '7.0.0' });
   if (method === 'POST' && path === '/api/login') {
     const input = await readJson(request); const account = repository.authenticate(input.username);
     if (!account || !verifyPassword(input.password || '', account.password_hash)) return json(response, 401, { error: 'Nieprawidłowy login lub hasło' });
@@ -256,6 +259,6 @@ export const server = createServer(async (request, response) => {
     return json(response, statusCode, { error: statusCode === 500 ? `Nieoczekiwany błąd serwera: ${error.message}` : error.message });
   }
 });
-if (process.argv[1] === fileURLToPath(import.meta.url)) server.listen(port, '0.0.0.0', () => console.log(`PLC Commissioning Hub V6.0.0 running on port ${port}`));
+if (process.argv[1] === fileURLToPath(import.meta.url)) server.listen(port, '0.0.0.0', () => console.log(`PLC Commissioning Hub V7.0.0 running on port ${port}`));
 function shutdown() { server.close(() => { repository.close(); process.exit(0); }); }
 process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);

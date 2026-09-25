@@ -1,7 +1,7 @@
 import { createWorkbook } from './xlsx.js';
 
 const dateTime = value => value ? String(value).replace('T', ' ').replace('Z', '') : '';
-const linkText = links => (links || []).map(link => `${link.entity_type} #${link.entity_id}${link.status ? ` (${link.status})` : ''}`).join(', ');
+const linkText = links => (links || []).map(link => `${({ status: 'Status', task: 'Zadanie', point: 'Otwarty punkt', note: 'Dziennik', goal: 'Cel' })[link.entity_type] || 'Element'}${link.status ? ` (${link.status})` : ''}`).join(', ');
 const percent = (done, total) => total ? Math.round(Number(done || 0) * 100 / Number(total)) : 0;
 
 function filterAndSort(rows, options = {}) {
@@ -20,7 +20,7 @@ function filterAndSort(rows, options = {}) {
 }
 
 const statusColumns = [
-  ['test_id', 'ID punktu', 18], ['controller', 'Sterownik', 14], ['function_group_name', 'Grupa funkcyjna', 22],
+  ['controller', 'Sterownik', 18], ['function_group_name', 'Grupa funkcyjna', 22],
   ['function_group_subcategory_name', 'Podkategoria grupy', 22], ['function_group_element_name', 'Element grupy', 20],
   ['category', 'Kategoria', 20], ['subcategory', 'Podkategoria', 24],
   ['status', 'Status', 18], ['related_work_progress', 'Prace powiązane [%]', 19], ['criticality', 'Krytyczność', 15],
@@ -37,7 +37,7 @@ const taskColumns = [
   ['links_text', 'Powiązania', 34], ['created_by_name', 'Utworzone przez', 22], ['created_at', 'Data utworzenia', 20], ['updated_at', 'Aktualizacja', 20]
 ];
 const pointColumns = [
-  ['issue_id', 'ID punktu', 18], ['title', 'Otwarty punkt', 36], ['controller', 'Sterownik', 14], ['category', 'Kategoria', 20],
+  ['title', 'Otwarty punkt', 36], ['controller', 'Sterownik', 18], ['category', 'Kategoria', 20],
   ['subcategory', 'Podkategoria', 22], ['status', 'Status', 16], ['priority', 'Priorytet', 14], ['owner_name', 'Odpowiedzialny', 22],
   ['waiting_for', 'Oczekiwanie na', 22], ['next_action', 'Następny krok', 36], ['start_date', 'Planowany start', 16],
   ['due_date', 'Deadline', 16], ['reminder_date', 'Przypomnienie', 16], ['description', 'Opis', 45], ['impact', 'Wpływ', 34],
@@ -46,12 +46,13 @@ const pointColumns = [
 ];
 
 const cols = definitions => definitions.map(([key, label, width]) => ({ key, label, width }));
-const enrich = rows => rows.map(row => ({ ...row, controller: row.controller_label || row.controller, links_text: linkText(row.links), created_at: dateTime(row.created_at), updated_at: dateTime(row.updated_at) }));
+const enrich = rows => rows.map(row => ({ ...row, controller: row.scope_label || row.controller_label || row.controller, links_text: linkText(row.links), created_at: dateTime(row.created_at), updated_at: dateTime(row.updated_at) }));
 
 function taskRows(rows) {
   return enrich(rows).map(row => {
-    const total = row.checklist?.length || 0;
-    const done = row.checklist?.filter(item => item.done).length || 0;
+    const checks = [...(row.checklist || []), ...(row.scope_checklist || [])];
+    const total = checks.length;
+    const done = checks.filter(item => item.done).length;
     const progress = Number.isFinite(Number(row.progress)) ? Number(row.progress) : percent(done, total);
     return { ...row, checklist_progress: total ? `${progress}% · ${done}/${total} podzadań` : `${progress}%` };
   });
@@ -110,7 +111,8 @@ export function projectWorkbook(data, project) {
   const overviewRows = [
     { module: 'Status', total: overview.overall.status.total, completed: overview.overall.status.done, progress: overview.overall.status.progress, alerts: overview.overall.status.blocked },
     { module: 'Zadania', total: overview.overall.tasks.total, completed: overview.overall.tasks.done, progress: overview.overall.tasks.progress, alerts: overview.overall.tasks.overdue },
-    { module: 'Otwarte punkty', total: overview.overall.points.total, completed: overview.overall.points.closed, progress: overview.overall.points.progress, alerts: overview.overall.points.reminders_overdue }
+    { module: 'Otwarte punkty', total: overview.overall.points.total, completed: overview.overall.points.closed, progress: overview.overall.points.progress, alerts: overview.overall.points.reminders_overdue },
+    { module: 'Cele', total: overview.overall.goals?.total || 0, completed: overview.overall.goals?.done || 0, progress: overview.overall.goals?.progress || 0, alerts: overview.overall.goals?.overdue || 0 }
   ];
   const goalRows = enrich(data.goals).map(row => ({ ...row, links_text: linkText(row.links) }));
   const noteRows = enrich(data.notes).map(row => ({ ...row, links_text: linkText(row.links) }));

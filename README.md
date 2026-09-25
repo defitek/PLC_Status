@@ -1,17 +1,26 @@
-# PLC Commissioning Hub V6.0.0
+# PLC Commissioning Hub V7.0.0
 
 Samodzielna aplikacja WWW do zarządzania uruchomieniem PLC, zespołem i kilkoma projektami. Działa na Node.js 24 oraz SQLite, bez zewnętrznych usług i bez zależności npm.
 
-## Najważniejsze zmiany V6
+## Najważniejsze zmiany V7
 
-Wydanie V6 rozwija poprzednią wersję bez zmiany konfiguracji Railway. Porządkuje czteropoziomową hierarchię projektu, rozbudowuje Planner o tryb online/offline i operacje kopiowania, dodaje cele i priorytety do Kalendarza oraz umożliwia bezpieczne usuwanie projektów. Interfejs Plannera, zadań, Statusu, Historii i podsumowań został dodatkowo zagęszczony.
+Wydanie V7 rozwija poprzednią wersję bez zmiany konfiguracji Railway. Poprawia identyfikację sterowników według pełnej hierarchii, czytelność historii zmian i usuwanie projektów. Dodaje zadania dla całych obszarów, szczegółowy Overview, dzienne zestawienie obsady per obszar oraz indywidualną konfigurację źródła danych w „Moim podsumowaniu”.
 
-### Skrót zmian V6
+### Skrót zmian V7
 
-- pełna ścieżka `projekt → obszar → podobszar → sterownik`; nazwa liścia jest prezentowana jako np. `UB51 PLC1`;
+- pełna ścieżka `projekt → obszar → podobszar → sterownik`; techniczny identyfikator liścia ma postać np. `UB-UB51-SPS1`, a użytkownik nadal widzi przyjazne `UB51 SPS1`;
+- dwa sterowniki mogą mieć tę samą nazwę liścia w różnych gałęziach, lecz duplikat w tej samej gałęzi jest blokowany;
+- systemowe identyfikatory punktów nie są prezentowane użytkownikom w listach, oknach ani eksportach;
 - dwustopniowo zabezpieczone usuwanie projektu, dostępne wyłącznie administratorowi systemu;
-- przełączane źródło obszarów w „Moim podsumowaniu”: konfiguracja użytkownika albo Planner z najbliższych 14 dni;
-- Planner bez administratorów systemu, z osobnymi sekcjami i statystykami `online · fabryka` oraz `offline · biuro`;
+- indywidualnie przełączane źródło obszarów w „Moim podsumowaniu”: konfiguracja użytkownika albo Planner z najbliższych 14 dni;
+- Planner z niezależnym włączaniem każdego aktywnego użytkownika, także administratora systemu, oraz osobnymi sekcjami `online · fabryka` i `offline · biuro`;
+- ostrzeżenie przy równoczesnym zaplanowaniu osoby online i offline oraz dzienna obsada online dla każdego głównego obszaru;
+- zadania można przypisać do dowolnego poziomu hierarchii; dla obszaru powstaje automatyczna checklista wszystkich sterowników końcowych;
+- ukończone zadania są domyślnie ukryte w widoku listy;
+- historia checklist i złożonych pól pokazuje opis zmian, wykonawcę, wagę i stan zamiast surowego JSON;
+- selektory powiązań są pogrupowane według hierarchii, pokazują nazwę sterownika na początku i blokują duplikaty;
+- punkt Statusu można powiązać bezpośrednio z celem, a relacja jest widoczna z obu stron;
+- Overview zawiera łączne i rozdzielone trendy Status/Zadania/Otwarte punkty/Cele oraz szczegóły kategorii i podkategorii Statusu;
 - kopiowanie pojedynczego przypisania lub całego dnia i wklejanie do innej osoby/daty z menu prawego przycisku;
 - blokowanie duplikatów oraz jednoczesnego przypisania obszaru nadrzędnego i jego podobszaru;
 - przypisywanie z Plannera zadań, Statusu i otwartych punktów do osoby;
@@ -29,7 +38,7 @@ Wydanie V6 rozwija poprzednią wersję bez zmiany konfiguracji Railway. Porządk
 - administrator projektu zarządza swoim projektem i rolami moderator/użytkownik;
 - projekt niedostępny dla użytkownika nie pojawia się na liście wyboru;
 - istniejące dane są przypisane do projektu W371, a projekt W520 zawiera odrębne dane demonstracyjne;
-- identyfikatory punktów są nadawane automatycznie i nie można ich edytować.
+- identyfikatory punktów są nadawane automatycznie, nie można ich edytować i pozostają ukryte w interfejsie.
 
 ### Wygląd i praca z oknami
 
@@ -66,7 +75,7 @@ Wydanie V6 rozwija poprzednią wersję bez zmiany konfiguracji Railway. Porządk
 ### Planner, Kalendarz, Historia i podsumowanie dnia
 
 - Planner manpoweru pokazuje aktywnych pracowników w wierszach i kolejne dni pogrupowane na tygodnie oraz miesiące;
-- moderator, administrator projektu i administrator systemu mogą przypisać na jeden dzień wiele obszarów, zmianę oraz `T` (transport) albo `T+P` (transport i praca); administrator systemu nie jest pokazywany jako pracownik planowany;
+- moderator, administrator projektu i administrator systemu mogą przypisać na jeden dzień wiele obszarów, zmianę oraz `T` (transport) albo `T+P` (transport i praca); udział każdego konta w Plannerze jest włączany osobno przez administratora projektu lub systemu;
 - praca online na fabryce i offline w biurze jest grupowana i liczona osobno;
 - menu prawego przycisku umożliwia kopiowanie wpisu/dnia oraz przypisanie pracy z istniejących zadań, Statusu i otwartych punktów;
 - Planner pokazuje obciążenie zadaniami, otwartymi punktami, Statusem i notatkami oraz podsumowania liczby osób per obszar i zmiana;
@@ -172,9 +181,9 @@ Po redeployu trzeba zalogować się ponownie, ponieważ sesje są przechowywane 
 
 ## Aktualizacja istniejącej bazy
 
-V6 automatycznie migruje bazy ze starszych wydań, nie kasując rekordów. Dotychczasowe dane zostają przypisane do projektu W371, a istniejący administrator staje się administratorem systemu i projektu. Migracja dodaje między innymi tryb pracy Plannera, wieloosobowy Status, priorytety celów i ręczne umieszczanie istniejących elementów w Kalendarzu. Starsze powiązania są scalane do jednej kanonicznej relacji.
+V7 automatycznie migruje bazy ze starszych wydań, nie kasując rekordów. Migracja zachowuje nazwę liścia sterownika, a jego techniczny kod przebudowuje z pełnej ścieżki. Dodaje ustawienie udziału w Plannerze, indywidualne źródło obszarów w „Moim podsumowaniu”, zakres hierarchiczny zadań oraz checklisty sterowników. Dotychczasowe powiązania celów są synchronizowane z relacjami pozostałych modułów.
 
-Przed wdrożeniem produkcyjnym zalecany jest snapshot Railway Volume lub kopia pliku `/app/data/plc-status.db`. Po uruchomieniu V6 można też używać kopii projektowych w **Konfiguracja → Backup projektu**.
+Przed wdrożeniem produkcyjnym zalecany jest snapshot Railway Volume lub kopia pliku `/app/data/plc-status.db`. Po uruchomieniu V7 można też używać kopii projektowych w **Konfiguracja → Backup projektu**.
 
 Jeśli w fazie koncepcyjnej potrzebny jest czysty start, usuń wyłącznie pliki:
 
@@ -186,7 +195,7 @@ Jeśli w fazie koncepcyjnej potrzebny jest czysty start, usuń wyłącznie pliki
 
 Następnie wykonaj redeploy. Nie usuwaj całego Volume, jeśli znajdują się na nim inne pliki.
 
-## Uprawnienia prototypowe V6
+## Uprawnienia prototypowe V7
 
 | Czynność | Administrator systemu | Administrator projektu | Moderator | Użytkownik |
 |---|:---:|:---:|:---:|:---:|
@@ -219,7 +228,7 @@ Kontrola zdrowia i wersji:
 curl http://localhost:8080/api/health
 ```
 
-Oczekiwany release: `6.0.0`.
+Oczekiwany release: `7.0.0`.
 
 ## Testy automatyczne
 
@@ -229,4 +238,4 @@ W Node.js 24 lub nowszym:
 npm test
 ```
 
-Testy obejmują tworzenie nowej bazy, migracje, kolejność konfiguracji, grupy funkcyjne, izolację i zabezpieczone usuwanie projektów, hierarchię, niezmienność ID, backup/restore, tryby Plannera, Kalendarz z celami, ważone zadania, wieloosobowy Status, kanoniczne powiązania i podsumowanie dnia.
+Testy obejmują tworzenie nowej bazy, migracje, kolejność konfiguracji, grupy funkcyjne, izolację i zabezpieczone usuwanie projektów, pełne identyfikatory hierarchii, zadania obszarowe, backup/restore, udział w Plannerze, Kalendarz z celami, ważone zadania, wieloosobowy Status, dwukierunkowe powiązania z celami i podsumowanie dnia.

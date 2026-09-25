@@ -45,8 +45,11 @@ export function openDatabase(databasePath) {
   migrateToV4(db);
   migrateToV5(db);
   migrateToV6(db);
+  migrateToV7(db);
   db.exec('CREATE INDEX IF NOT EXISTS idx_status_function_group ON status_items(function_group_id,function_group_check_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_status_project ON status_items(project_id,controller_id,status)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_task_scope_group ON tasks(project_id,controller_group_id,status)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_task_scope_checklist ON task_scope_checklist(task_id,sort_order)');
   seedConfiguration(db, 1);
   if (String(process.env.SEED_DEMO_DATA || 'true').toLowerCase() !== 'false') {
     seedDemoData(db, hashPassword, process.env.DEMO_DATA_LIMIT || 100, { projectId: 1, variant: 'main' });
@@ -59,9 +62,10 @@ export function openDatabase(databasePath) {
   backfillV4Links(db);
   backfillV5(db);
   backfillV6(db);
+  backfillV7(db);
   if (String(process.env.SEED_DEMO_DATA || 'true').toLowerCase() !== 'false') seedV5Demo(db);
   seedMigrationAudit(db);
-  db.prepare("INSERT INTO app_meta(key,value) VALUES('schema_version','6.0') ON CONFLICT(key) DO UPDATE SET value='6.0'").run();
+  db.prepare("INSERT INTO app_meta(key,value) VALUES('schema_version','7.0') ON CONFLICT(key) DO UPDATE SET value='7.0'").run();
   return createRepository(db);
 }
 
@@ -170,6 +174,54 @@ function migrateToV6(db) {
     ['goals', 'priority', "TEXT NOT NULL DEFAULT 'Medium'"]
   ];
   for (const addition of additions) ensureColumn(db, ...addition);
+}
+
+function migrateToV7(db) {
+  const additions = [
+    ['project_memberships', 'planner_enabled', 'INTEGER NOT NULL DEFAULT 1'],
+    ['project_memberships', 'summary_area_source', "TEXT NOT NULL DEFAULT 'configuration'"],
+    ['controllers', 'leaf_code', "TEXT NOT NULL DEFAULT ''"],
+    ['tasks', 'controller_group_id', 'INTEGER']
+  ];
+  for (const addition of additions) ensureColumn(db, ...addition);
+}
+
+function canonicalControllerPart(value) {
+  return String(value || '').trim().normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, '-').replace(/[^A-Za-z0-9_-]/g, '').replace(/-+/g, '-').replace(/^-|-$/g, '').toUpperCase() || 'PLC';
+}
+
+function refreshControllerCodesForProject(db, projectId) {
+  const groups = db.prepare('SELECT id,parent_id,name FROM controller_groups WHERE project_id=?').all(projectId);
+  const groupMap = new Map(groups.map(group => [group.id, group]));
+  const pathCache = new Map();
+  const groupPath = id => {
+    if (!id || !groupMap.has(id)) return [];
+    if (pathCache.has(id)) return pathCache.get(id);
+    const group = groupMap.get(id);
+    const path = [...groupPath(group.parent_id), group.name];
+    pathCache.set(id, path);
+    return path;
+  };
+  const controllers = db.prepare('SELECT id,group_id,code,leaf_code FROM controllers WHERE project_id=? ORDER BY sort_order,id').all(projectId);
+  if (!controllers.length) return;
+  const setLeaf = db.prepare('UPDATE controllers SET leaf_code=? WHERE id=?');
+  for (const item of controllers) if (!String(item.leaf_code || '').trim()) setLeaf.run(String(item.code || '').trim(), item.id);
+  const refreshed = db.prepare('SELECT id,group_id,leaf_code FROM controllers WHERE project_id=? ORDER BY sort_order,id').all(projectId);
+  const temporary = db.prepare('UPDATE controllers SET code=? WHERE id=?');
+  for (const item of refreshed) temporary.run(`__V7_${item.id}`, item.id);
+  const used = new Set();
+  const update = db.prepare('UPDATE controllers SET code=? WHERE id=?');
+  for (const item of refreshed) {
+    const parts = [...groupPath(item.group_id), item.leaf_code].map(canonicalControllerPart).filter(Boolean)
+      .filter((part, index, list) => index === 0 || part !== list[index - 1]);
+    const base = parts.join('-') || `PLC-${item.id}`;
+    let code = base;
+    let suffix = 2;
+    while (used.has(code)) code = `${base}-${suffix++}`;
+    used.add(code);
+    update.run(code, item.id);
+  }
 }
 
 function rebuildProjectConfiguration(db) {
@@ -519,13 +571,31 @@ function backfillV5(db) {
 function backfillV6(db) {
   db.exec(`
     UPDATE planner_entries SET work_mode='online' WHERE work_mode IS NULL OR work_mode NOT IN ('online','offline');
-    DELETE FROM planner_entries WHERE user_id IN (SELECT id FROM users WHERE system_role='system_admin');
     UPDATE goals SET priority='Medium' WHERE priority IS NULL OR priority='';
     INSERT OR IGNORE INTO status_assignees(project_id,status_id,user_id)
       SELECT project_id,id,responsible_user_id FROM status_items WHERE responsible_user_id IS NOT NULL;
     INSERT OR IGNORE INTO settings(project_id,key,value)
       SELECT id,'my_summary_area_source','configuration' FROM projects;
   `);
+}
+
+function backfillV7(db) {
+  const previousVersion = Number(db.prepare("SELECT value FROM app_meta WHERE key='schema_version'").get()?.value || 0);
+  if (previousVersion < 7) {
+    db.exec(`
+      UPDATE project_memberships
+      SET planner_enabled=CASE WHEN user_id IN (SELECT id FROM users WHERE system_role='system_admin') THEN 0 ELSE 1 END;
+      UPDATE project_memberships
+      SET summary_area_source=COALESCE((SELECT CASE WHEN s.value='planner' THEN 'planner' ELSE 'configuration' END
+        FROM settings s WHERE s.project_id=project_memberships.project_id AND s.key='my_summary_area_source'),'configuration');
+    `);
+  }
+  db.exec("UPDATE project_memberships SET summary_area_source='configuration' WHERE summary_area_source NOT IN ('configuration','planner') OR summary_area_source IS NULL");
+  db.exec("DELETE FROM entity_mentions WHERE entity_type='task'");
+  db.exec(`INSERT OR IGNORE INTO entity_links(project_id,source_type,source_id,target_type,target_id,created_by)
+    SELECT gl.project_id,gl.entity_type,gl.entity_id,'goal',gl.goal_id,g.created_by
+    FROM goal_links gl JOIN goals g ON g.id=gl.goal_id AND g.project_id=gl.project_id`);
+  for (const project of db.prepare('SELECT id FROM projects ORDER BY id').all()) refreshControllerCodesForProject(db, project.id);
 }
 
 function seedV5Demo(db) {
@@ -586,12 +656,16 @@ function createRepository(db) {
   const activeProjectId = () => Number(projectStorage.getStore()) || 1;
   const one = (sql, ...params) => db.prepare(sql).get(...params);
   const all = (sql, ...params) => db.prepare(sql).all(...params);
+  const refreshControllerCodes = () => refreshControllerCodesForProject(db, activeProjectId());
 
   function controller(code) {
     const normalized = clean(code).replace(/^controller:/, '');
-    const value = one('SELECT * FROM controllers WHERE project_id=? AND code=?', activeProjectId(), normalized);
-    if (!value) throw appError('Nieznany sterownik');
-    return value;
+    const exact = one('SELECT * FROM controllers WHERE project_id=? AND code=?', activeProjectId(), normalized);
+    if (exact) return exact;
+    const legacyMatches = all('SELECT * FROM controllers WHERE project_id=? AND leaf_code=? COLLATE NOCASE ORDER BY id', activeProjectId(), normalized);
+    if (legacyMatches.length === 1) return legacyMatches[0];
+    if (legacyMatches.length > 1) throw appError('Nazwa sterownika jest niejednoznaczna. Wybierz pełną ścieżkę w hierarchii.');
+    throw appError('Nieznany sterownik');
   }
 
   function functionGroup(id) {
@@ -633,9 +707,10 @@ function createRepository(db) {
     const groupMap = new Map(groups.map(group => [group.id, group]));
     const controllers = all('SELECT * FROM controllers WHERE project_id=? ORDER BY sort_order,code,id', activeProjectId()).map(source => {
       const group = groupMap.get(Number(source.group_id));
-      const hierarchyPath = [...(group?.path_names || []), source.code];
+      const leafCode = source.leaf_code || source.code;
+      const hierarchyPath = [...(group?.path_names || []), leafCode];
       return {
-        ...source,
+        ...source, leaf_code: leafCode,
         group_name: group?.name || '',
         group_parent_id: group?.parent_id || null,
         group_depth: group?.depth || 0,
@@ -644,7 +719,7 @@ function createRepository(db) {
         group_path_label: group?.path_label || '',
         hierarchy_path: hierarchyPath,
         hierarchy_label: hierarchyPath.join(' / '),
-        display_name: group ? `${group.name} ${source.code}` : source.code
+        display_name: group ? `${group.name} ${leafCode}` : leafCode
       };
     });
     return { groups, controllers, groupMap };
@@ -726,6 +801,7 @@ function createRepository(db) {
     if (!row) return null;
     if (type === 'task') {
       row.checklist = all('SELECT text,done,weight,owner_user_id,sort_order FROM task_checklist WHERE task_id=? ORDER BY sort_order,id', id);
+      row.scope_checklist = all('SELECT controller_id,done,sort_order FROM task_scope_checklist WHERE task_id=? ORDER BY sort_order,controller_id', id);
       row.direct_assignee_user_ids = all('SELECT user_id FROM task_assignees WHERE project_id=? AND task_id=? AND assigned_directly=1 ORDER BY user_id', activeProjectId(), id).map(item => item.user_id);
     }
     if (type === 'status') row.responsible_user_ids = all('SELECT user_id FROM status_assignees WHERE project_id=? AND status_id=? ORDER BY user_id', activeProjectId(), id).map(item => item.user_id);
@@ -773,8 +849,11 @@ function createRepository(db) {
   function setEntityLinks(sourceType, sourceId, links, currentUser) {
     db.prepare(`DELETE FROM entity_links WHERE project_id=? AND
       ((source_type=? AND source_id=?) OR (target_type=? AND target_id=?))`).run(activeProjectId(), sourceType, sourceId, sourceType, sourceId);
+    if (sourceType === 'goal') db.prepare('DELETE FROM goal_links WHERE project_id=? AND goal_id=?').run(activeProjectId(), sourceId);
+    else if (['status', 'task', 'point'].includes(sourceType)) db.prepare('DELETE FROM goal_links WHERE project_id=? AND entity_type=? AND entity_id=?').run(activeProjectId(), sourceType, sourceId);
     const insert = db.prepare(`INSERT OR IGNORE INTO entity_links(project_id,source_type,source_id,target_type,target_id,created_by)
       VALUES(?,?,?,?,?,?)`);
+    const insertGoalLink = db.prepare('INSERT OR IGNORE INTO goal_links(project_id,goal_id,entity_type,entity_id) VALUES(?,?,?,?)');
     const seen = new Set();
     for (const link of Array.isArray(links) ? links : []) {
       if (!['status', 'task', 'point', 'note', 'goal'].includes(link.entity_type) || !asId(link.entity_id)) continue;
@@ -786,6 +865,8 @@ function createRepository(db) {
       if (seen.has(key)) continue;
       seen.add(key);
       insert.run(activeProjectId(), pair[0], pair[1], pair[2], pair[3], currentUser?.id || null);
+      if (sourceType === 'goal' && ['status', 'task', 'point'].includes(link.entity_type)) insertGoalLink.run(activeProjectId(), sourceId, link.entity_type, asId(link.entity_id));
+      if (link.entity_type === 'goal' && ['status', 'task', 'point'].includes(sourceType)) insertGoalLink.run(activeProjectId(), asId(link.entity_id), sourceType, sourceId);
     }
   }
 
@@ -828,21 +909,31 @@ function createRepository(db) {
   function decorateTask(row, currentUser) {
     const checklist = all(`SELECT tc.*,u.display_name owner_name FROM task_checklist tc
       LEFT JOIN users u ON u.id=tc.owner_user_id WHERE tc.task_id=? ORDER BY tc.sort_order,tc.id`, row.id);
+    const hierarchy = hierarchyData();
+    const scopeGroup = hierarchy.groups.find(group => group.id === Number(row.controller_group_id));
+    const scopeChecklist = all('SELECT * FROM task_scope_checklist WHERE task_id=? ORDER BY sort_order,controller_id', row.id).map(item => {
+      const controllerItem = hierarchy.controllers.find(controller => controller.id === Number(item.controller_id));
+      return { ...item, controller: controllerItem?.code || '', controller_label: controllerItem?.display_name || '', controller_path: controllerItem?.hierarchy_label || '' };
+    });
     const assignees = all(`SELECT ta.user_id,ta.assigned_directly,u.display_name FROM task_assignees ta
       JOIN users u ON u.id=ta.user_id WHERE ta.project_id=? AND ta.task_id=? ORDER BY u.sort_order,u.display_name`, activeProjectId(), row.id);
-    const totalWeight = checklist.reduce((sum, item) => sum + Number(item.weight || 1), 0);
-    const doneWeight = checklist.filter(item => item.done).reduce((sum, item) => sum + Number(item.weight || 1), 0);
+    const totalWeight = checklist.reduce((sum, item) => sum + Number(item.weight || 1), 0) + scopeChecklist.length;
+    const doneWeight = checklist.filter(item => item.done).reduce((sum, item) => sum + Number(item.weight || 1), 0) + scopeChecklist.filter(item => item.done).length;
     const progress = totalWeight ? Math.round(doneWeight * 100 / totalWeight) : row.status === 'Done' ? 100 : row.status === 'In progress' ? 50 : 0;
     return {
       ...row,
       checklist,
+      scope_checklist: scopeChecklist,
+      scope_is_group: Boolean(scopeGroup),
+      scope_label: scopeGroup?.path_label || row.controller_label || row.controller,
+      scope_path: scopeGroup?.path_label || row.controller_path || row.controller,
       assignees,
       assignee_user_ids: assignees.map(item => item.user_id),
       direct_assignee_user_ids: assignees.filter(item => item.assigned_directly).map(item => item.user_id),
       owner_name: assignees.map(item => item.display_name).join(', ') || row.owner_name || '',
       progress,
       links: entityLinkRows('task', row.id),
-      mentioned_user_ids: mentionIds('task', row.id),
+      mentioned_user_ids: [],
       can_delete: canDeleteTask(row, currentUser)
     };
   }
@@ -865,6 +956,23 @@ function createRepository(db) {
       const weight = Math.max(0.1, Math.min(1000, Number(item.weight) || 1));
       if (clean(item.text)) insert.run(taskId, clean(item.text), item.done ? 1 : 0, weight, ownerId, index);
     });
+  }
+
+  function controllersInGroup(groupId) {
+    const descendantIds = new Set(groupDescendantIds(groupId));
+    return hierarchyData().controllers.filter(item => descendantIds.has(Number(item.group_id)));
+  }
+
+  function saveTaskScopeChecklist(taskId, groupId, requested) {
+    const existing = new Map(all('SELECT controller_id,done FROM task_scope_checklist WHERE task_id=?', taskId).map(item => [item.controller_id, Boolean(item.done)]));
+    const submitted = Array.isArray(requested) ? new Map(requested.map(item => [asId(item.controller_id), Boolean(item.done)]).filter(([id]) => id)) : null;
+    db.prepare('DELETE FROM task_scope_checklist WHERE task_id=?').run(taskId);
+    if (!groupId) return [];
+    const controllers = controllersInGroup(groupId);
+    if (!controllers.length) throw appError('Wybrany obszar nie zawiera żadnego sterownika końcowego');
+    const insert = db.prepare('INSERT INTO task_scope_checklist(task_id,controller_id,done,sort_order) VALUES(?,?,?,?)');
+    controllers.forEach((item, index) => insert.run(taskId, item.id, (submitted?.get(item.id) ?? existing.get(item.id)) ? 1 : 0, index));
+    return controllers;
   }
 
   function saveTaskAssignees(taskId, directUserIds, checklist) {
@@ -925,7 +1033,14 @@ function createRepository(db) {
   }
 
   function taskRows(code, currentUser) {
-    const filter = controllerFilter(code, 't');
+    const selectedControllerIds = new Set(controllersForScope(code).map(item => item.id));
+    const groupControllerCache = new Map();
+    const matchesScope = row => {
+      if (!code || code === 'all') return true;
+      if (!row.controller_group_id) return selectedControllerIds.has(Number(row.controller_id));
+      if (!groupControllerCache.has(row.controller_group_id)) groupControllerCache.set(row.controller_group_id, new Set(controllersInGroup(row.controller_group_id).map(item => item.id)));
+      return [...groupControllerCache.get(row.controller_group_id)].some(id => selectedControllerIds.has(id));
+    };
     return all(`SELECT t.*,c.code controller,c.sort_order controller_order,
       creator.display_name created_by_name,owner.display_name owner_name,
       fg.name function_group_name,fge.name function_group_element_name,
@@ -938,8 +1053,8 @@ function createRepository(db) {
       LEFT JOIN function_group_elements fge ON fge.id=t.function_group_element_id
       LEFT JOIN task_categories cat ON cat.project_id=t.project_id AND cat.name=t.category
       LEFT JOIN task_subcategories sub ON sub.category_id=cat.id AND sub.name=t.subcategory
-      ${filter.sql}
-      ORDER BY c.sort_order,t.created_at DESC,t.id DESC`, ...filter.params).map(row => decorateTask(attachControllerMeta(row), currentUser));
+      WHERE t.project_id=?
+      ORDER BY c.sort_order,t.created_at DESC,t.id DESC`, activeProjectId()).filter(matchesScope).map(row => decorateTask(attachControllerMeta(row), currentUser));
   }
 
   function pointRows(code, currentUser) {
@@ -984,46 +1099,49 @@ function createRepository(db) {
   }
 
   function dashboardForController(controllerId) {
-    const status = one(`SELECT COUNT(*) total,
-      SUM(CASE WHEN status='Done' THEN 1 ELSE 0 END) done,
-      SUM(CASE WHEN status='In progress' THEN 1 ELSE 0 END) in_progress,
-      SUM(CASE WHEN status IN ('Blocked','NOK / Rework') THEN 1 ELSE 0 END) blocked
-      FROM status_items WHERE controller_id=?`, controllerId);
-    const tasks = one(`SELECT COUNT(*) total,
-      SUM(CASE WHEN status='To do' THEN 1 ELSE 0 END) todo,
-      SUM(CASE WHEN status='In progress' THEN 1 ELSE 0 END) in_progress,
-      SUM(CASE WHEN status='Done' THEN 1 ELSE 0 END) done,
-      SUM(CASE WHEN status!='Done' AND due_date IS NOT NULL AND due_date<date('now') THEN 1 ELSE 0 END) overdue
-      FROM tasks WHERE controller_id=?`, controllerId);
-    const points = one(`SELECT COUNT(*) total,
-      SUM(CASE WHEN status!='Closed' THEN 1 ELSE 0 END) open,
-      SUM(CASE WHEN status='Waiting' THEN 1 ELSE 0 END) waiting,
-      SUM(CASE WHEN status='Closed' THEN 1 ELSE 0 END) closed,
-      SUM(CASE WHEN status!='Closed' AND reminder_date IS NOT NULL AND reminder_date<date('now') THEN 1 ELSE 0 END) reminders_overdue
-      FROM open_points WHERE controller_id=?`, controllerId);
-    const normalize = object => Object.fromEntries(Object.entries(object).map(([key, value]) => [key, Number(value || 0)]));
-    const result = { status: normalize(status), tasks: normalize(tasks), points: normalize(points) };
-    result.status.progress = result.status.total ? Math.round(result.status.done * 100 / result.status.total) : 0;
-    result.tasks.progress = result.tasks.total ? Math.round(result.tasks.done * 100 / result.tasks.total) : 0;
-    result.points.progress = result.points.total ? Math.round(result.points.closed * 100 / result.points.total) : 0;
-    return result;
+    return dashboardForControllers([controllerId]);
+  }
+
+  function taskMetricRows(controllerIds) {
+    const selected = new Set(controllerIds.map(Number));
+    const groupCache = new Map();
+    return all('SELECT id,controller_id,controller_group_id,status,due_date,created_at FROM tasks WHERE project_id=?', activeProjectId()).filter(row => {
+      if (!row.controller_group_id) return selected.has(Number(row.controller_id));
+      if (!groupCache.has(row.controller_group_id)) groupCache.set(row.controller_group_id, controllersInGroup(row.controller_group_id).map(item => item.id));
+      return groupCache.get(row.controller_group_id).some(id => selected.has(Number(id)));
+    });
+  }
+
+  function taskMetrics(controllerIds) {
+    const rows = taskMetricRows(controllerIds);
+    const todayValue = new Date().toISOString().slice(0, 10);
+    return {
+      total: rows.length,
+      todo: rows.filter(row => row.status === 'To do').length,
+      in_progress: rows.filter(row => row.status === 'In progress').length,
+      done: rows.filter(row => row.status === 'Done').length,
+      overdue: rows.filter(row => row.status !== 'Done' && row.due_date && row.due_date < todayValue).length
+    };
   }
 
   function dashboardForControllers(controllerIds) {
     if (!controllerIds.length) return {
       status: { total: 0, done: 0, in_progress: 0, blocked: 0, progress: 0 },
       tasks: { total: 0, todo: 0, in_progress: 0, done: 0, overdue: 0, progress: 0 },
-      points: { total: 0, open: 0, waiting: 0, closed: 0, reminders_overdue: 0, progress: 0 }
+      points: { total: 0, open: 0, waiting: 0, closed: 0, reminders_overdue: 0, progress: 0 },
+      goals: { total: 0, done: 0, in_progress: 0, overdue: 0, progress: 0 }
     };
     const placeholders = controllerIds.map(() => '?').join(',');
     const status = one(`SELECT COUNT(*) total,SUM(status='Done') done,SUM(status='In progress') in_progress,SUM(status IN ('Blocked','NOK / Rework')) blocked FROM status_items WHERE project_id=? AND controller_id IN (${placeholders})`, activeProjectId(), ...controllerIds);
-    const tasks = one(`SELECT COUNT(*) total,SUM(status='To do') todo,SUM(status='In progress') in_progress,SUM(status='Done') done,SUM(status!='Done' AND due_date IS NOT NULL AND due_date<date('now')) overdue FROM tasks WHERE project_id=? AND controller_id IN (${placeholders})`, activeProjectId(), ...controllerIds);
+    const tasks = taskMetrics(controllerIds);
     const points = one(`SELECT COUNT(*) total,SUM(status!='Closed') open,SUM(status='Waiting') waiting,SUM(status='Closed') closed,SUM(status!='Closed' AND reminder_date IS NOT NULL AND reminder_date<date('now')) reminders_overdue FROM open_points WHERE project_id=? AND controller_id IN (${placeholders})`, activeProjectId(), ...controllerIds);
+    const goals = one(`SELECT COUNT(*) total,SUM(status='Done') done,SUM(status='In progress') in_progress,SUM(status!='Done' AND due_date IS NOT NULL AND due_date<date('now')) overdue FROM goals WHERE project_id=? AND controller_id IN (${placeholders})`, activeProjectId(), ...controllerIds);
     const normalize = object => Object.fromEntries(Object.entries(object).map(([key, value]) => [key, Number(value || 0)]));
-    const result = { status: normalize(status), tasks: normalize(tasks), points: normalize(points) };
+    const result = { status: normalize(status), tasks: normalize(tasks), points: normalize(points), goals: normalize(goals) };
     result.status.progress = result.status.total ? Math.round(result.status.done * 100 / result.status.total) : 0;
     result.tasks.progress = result.tasks.total ? Math.round(result.tasks.done * 100 / result.tasks.total) : 0;
     result.points.progress = result.points.total ? Math.round(result.points.closed * 100 / result.points.total) : 0;
+    result.goals.progress = result.goals.total ? Math.round(result.goals.done * 100 / result.goals.total) : 0;
     return result;
   }
 
@@ -1032,12 +1150,13 @@ function createRepository(db) {
     const placeholders = controllerIds.map(() => '?').join(',');
     const entityData = {
       status: all(`SELECT id,status,created_at FROM status_items WHERE project_id=? AND controller_id IN (${placeholders})`, activeProjectId(), ...controllerIds),
-      task: all(`SELECT id,status,created_at FROM tasks WHERE project_id=? AND controller_id IN (${placeholders})`, activeProjectId(), ...controllerIds),
-      point: all(`SELECT id,status,created_at FROM open_points WHERE project_id=? AND controller_id IN (${placeholders})`, activeProjectId(), ...controllerIds)
+      task: taskMetricRows(controllerIds).map(({ id, status, created_at }) => ({ id, status, created_at })),
+      point: all(`SELECT id,status,created_at FROM open_points WHERE project_id=? AND controller_id IN (${placeholders})`, activeProjectId(), ...controllerIds),
+      goal: all(`SELECT id,status,created_at FROM goals WHERE project_id=? AND controller_id IN (${placeholders})`, activeProjectId(), ...controllerIds)
     };
     const idsByType = Object.fromEntries(Object.entries(entityData).map(([type, rows]) => [type, new Set(rows.map(row => row.id))]));
     const audits = all(`SELECT entity_type,entity_id,changed_at,snapshot_json FROM audit_log
-      WHERE project_id=? AND entity_type IN ('status','task','point') ORDER BY changed_at,id`, activeProjectId()).filter(row => idsByType[row.entity_type]?.has(row.entity_id));
+      WHERE project_id=? AND entity_type IN ('status','task','point','goal') ORDER BY changed_at,id`, activeProjectId()).filter(row => idsByType[row.entity_type]?.has(row.entity_id));
     const auditMap = new Map();
     for (const row of audits) {
       const key = `${row.entity_type}:${row.entity_id}`;
@@ -1066,7 +1185,7 @@ function createRepository(db) {
         if (kind === 'week') { end.setUTCDate(end.getUTCDate() - offset * 7); end.setUTCDate(end.getUTCDate() + (7 - (end.getUTCDay() || 7))); }
         if (kind === 'month') { end.setUTCMonth(end.getUTCMonth() - offset + 1, 0); }
         const label = kind === 'day' ? end.toISOString().slice(5, 10) : kind === 'week' ? `CW${isoWeekNumber(end)}` : end.toLocaleString('pl-PL', { month: 'short', timeZone: 'UTC' });
-        result.push({ label, status: progressAt('status', end), tasks: progressAt('task', end), points: progressAt('point', end) });
+        result.push({ label, status: progressAt('status', end), tasks: progressAt('task', end), points: progressAt('point', end), goals: progressAt('goal', end) });
       }
       return result;
     };
@@ -1092,6 +1211,7 @@ function createRepository(db) {
     ['function_group_check_subcategories', 'check_id IN (SELECT id FROM function_group_checks WHERE function_group_id IN (SELECT id FROM function_groups WHERE project_id=?))'],
     ['status_items', 'project_id=?'], ['status_assignees', 'project_id=?'], ['tasks', 'project_id=?'],
     ['task_checklist', 'task_id IN (SELECT id FROM tasks WHERE project_id=?)'],
+    ['task_scope_checklist', 'task_id IN (SELECT id FROM tasks WHERE project_id=?)'],
     ['task_assignees', 'project_id=?'], ['project_user_areas', 'project_id=?'], ['planner_entries', 'project_id=?'],
     ['calendar_annotations', 'project_id=?'], ['calendar_item_dates', 'project_id=?'],
     ['open_points', 'project_id=?'], ['daily_notes', 'project_id=?'], ['goals', 'project_id=?'],
@@ -1102,7 +1222,7 @@ function createRepository(db) {
   const projectRestoreOrder = [
     'controller_groups', 'controllers', 'categories', 'subcategories', 'task_categories', 'task_subcategories',
     'options', 'settings', 'function_groups', 'function_group_elements', 'function_group_subcategories', 'function_group_checks',
-    'function_group_check_subcategories', 'status_items', 'status_assignees', 'tasks', 'task_checklist', 'task_assignees', 'open_points',
+    'function_group_check_subcategories', 'status_items', 'status_assignees', 'tasks', 'task_checklist', 'task_scope_checklist', 'task_assignees', 'open_points',
     'daily_notes', 'goals', 'goal_links', 'entity_mentions', 'entity_links', 'audit_log',
     'export_templates', 'project_sequences', 'project_user_areas', 'planner_entries', 'calendar_annotations', 'calendar_item_dates'
   ];
@@ -1112,7 +1232,7 @@ function createRepository(db) {
     const project = one('SELECT * FROM projects WHERE id=?', projectId);
     const tables = Object.fromEntries(projectBackupTables.map(([table, condition]) => [table, all(`SELECT * FROM ${table} WHERE ${condition}`, projectId)]));
     return {
-      format: 'plc-commissioning-hub-project-backup', version: 6,
+      format: 'plc-commissioning-hub-project-backup', version: 7,
       generated_at: new Date().toISOString(), project,
       users: all(`SELECT u.id,u.username,u.display_name,u.system_role,u.theme,u.active,u.sort_order,u.created_at,pm.role project_role,pm.active project_active
         FROM users u JOIN project_memberships pm ON pm.user_id=u.id WHERE pm.project_id=? ORDER BY u.id`, projectId),
@@ -1143,7 +1263,7 @@ function createRepository(db) {
   }
 
   function restoreProjectBackup(payload) {
-    if (!payload || payload.format !== 'plc-commissioning-hub-project-backup' || ![4, 5, 6].includes(Number(payload.version)) || !payload.tables) throw appError('Nieprawidłowy lub nieobsługiwany plik backupu');
+    if (!payload || payload.format !== 'plc-commissioning-hub-project-backup' || ![4, 5, 6, 7].includes(Number(payload.version)) || !payload.tables) throw appError('Nieprawidłowy lub nieobsługiwany plik backupu');
     const projectId = activeProjectId();
     const currentProject = one('SELECT * FROM projects WHERE id=?', projectId);
     if (!currentProject || clean(payload.project?.code).toLowerCase() !== clean(currentProject.code).toLowerCase()) throw appError(`Backup dotyczy innego projektu (${payload.project?.code || 'brak kodu'})`);
@@ -1157,13 +1277,21 @@ function createRepository(db) {
       for (const table of projectRestoreOrder) insertBackupRows(table, payload.tables[table], projectId);
       for (const membership of Array.isArray(payload.memberships) ? payload.memberships : []) {
         if (!one('SELECT 1 FROM users WHERE id=?', membership.user_id)) continue;
-        db.prepare(`INSERT INTO project_memberships(project_id,user_id,role,active,created_at) VALUES(?,?,?,?,?)
-          ON CONFLICT(project_id,user_id) DO UPDATE SET role=excluded.role,active=excluded.active`).run(projectId, membership.user_id, membership.role, membership.active, membership.created_at || new Date().toISOString());
+        db.prepare(`INSERT INTO project_memberships(project_id,user_id,role,active,planner_enabled,summary_area_source,created_at) VALUES(?,?,?,?,?,?,?)
+          ON CONFLICT(project_id,user_id) DO UPDATE SET role=excluded.role,active=excluded.active,planner_enabled=excluded.planner_enabled,summary_area_source=excluded.summary_area_source`).run(
+          projectId, membership.user_id, membership.role, membership.active, Number(membership.planner_enabled ?? 1) ? 1 : 0,
+          membership.summary_area_source === 'planner' ? 'planner' : 'configuration', membership.created_at || new Date().toISOString()
+        );
       }
       db.prepare(`INSERT OR IGNORE INTO task_assignees(project_id,task_id,user_id,assigned_directly)
         SELECT project_id,id,owner_user_id,1 FROM tasks WHERE project_id=? AND owner_user_id IS NOT NULL`).run(projectId);
       db.prepare(`INSERT OR IGNORE INTO status_assignees(project_id,status_id,user_id)
         SELECT project_id,id,responsible_user_id FROM status_items WHERE project_id=? AND responsible_user_id IS NOT NULL`).run(projectId);
+      db.prepare("UPDATE controllers SET leaf_code=code WHERE project_id=? AND (leaf_code IS NULL OR trim(leaf_code)='')").run(projectId);
+      refreshControllerCodesForProject(db, projectId);
+      db.prepare(`INSERT OR IGNORE INTO entity_links(project_id,source_type,source_id,target_type,target_id,created_by)
+        SELECT gl.project_id,gl.entity_type,gl.entity_id,'goal',gl.goal_id,g.created_by
+        FROM goal_links gl JOIN goals g ON g.id=gl.goal_id AND g.project_id=gl.project_id WHERE gl.project_id=?`).run(projectId);
       db.exec('COMMIT');
     } catch (error) {
       db.exec('ROLLBACK');
@@ -1187,16 +1315,17 @@ function createRepository(db) {
     const range = safeDateRange(fromValue, toValue, 366);
     const hierarchy = hierarchyData();
     const groupMap = new Map(hierarchy.groups.map(group => [group.id, group]));
-    const users = all(`SELECT u.id,u.display_name,u.username,pm.role
+    const users = all(`SELECT u.id,u.display_name,u.username,pm.role,pm.planner_enabled
       FROM users u JOIN project_memberships pm ON pm.user_id=u.id AND pm.project_id=? AND pm.active=1
-      WHERE u.active=1 AND u.system_role!='system_admin' ORDER BY u.sort_order,u.display_name`, activeProjectId()).map(user => {
+      WHERE u.active=1 AND pm.planner_enabled=1 ORDER BY u.sort_order,u.display_name`, activeProjectId()).map(user => {
         const areaIds = all('SELECT controller_group_id FROM project_user_areas WHERE project_id=? AND user_id=? ORDER BY sort_order', activeProjectId(), user.id).map(row => row.controller_group_id);
         return { ...user, configured_area_ids: areaIds, configured_areas: areaIds.map(id => groupMap.get(id)?.path_label).filter(Boolean).join(', ') };
       });
     const entries = all(`SELECT pe.*,u.display_name,creator.display_name created_by_name
       FROM planner_entries pe JOIN users u ON u.id=pe.user_id
+      JOIN project_memberships pm ON pm.project_id=pe.project_id AND pm.user_id=pe.user_id AND pm.active=1 AND pm.planner_enabled=1
       LEFT JOIN users creator ON creator.id=pe.created_by
-      WHERE pe.project_id=? AND pe.plan_date BETWEEN ? AND ? AND u.system_role!='system_admin'
+      WHERE pe.project_id=? AND pe.plan_date BETWEEN ? AND ?
       ORDER BY pe.plan_date,u.sort_order,pe.id`, activeProjectId(), range.from, range.to).map(entry => {
         const area = groupMap.get(Number(entry.controller_group_id));
         return { ...entry, area_name: area?.name || '', area_path: area?.path_label || '', area_depth: area?.depth || 0, root_area_id: area?.root_group_id || null };
@@ -1219,7 +1348,7 @@ function createRepository(db) {
       COUNT(DISTINCT CASE WHEN pe.work_mode='online' THEN pe.user_id END) online_headcount,
       COUNT(DISTINCT CASE WHEN pe.work_mode='offline' THEN pe.user_id END) offline_headcount,
       SUM(pe.transport_mode='transport_only') transport_only,SUM(pe.transport_mode='transport_work') transport_work
-      FROM planner_entries pe JOIN users u ON u.id=pe.user_id AND u.system_role!='system_admin'
+      FROM planner_entries pe JOIN project_memberships pm ON pm.project_id=pe.project_id AND pm.user_id=pe.user_id AND pm.active=1 AND pm.planner_enabled=1
       WHERE pe.project_id=? AND pe.plan_date BETWEEN ? AND ? GROUP BY pe.plan_date ORDER BY pe.plan_date`, activeProjectId(), range.from, range.to);
     const area_summary = hierarchy.groups.filter(group => !group.parent_id).map(group => {
       const descendants = new Set(groupDescendantIds(group.id));
@@ -1240,7 +1369,7 @@ function createRepository(db) {
       };
     });
     const shift_summary = all(`SELECT pe.shift,COUNT(DISTINCT pe.user_id||':'||pe.plan_date) assignments FROM planner_entries pe
-      JOIN users u ON u.id=pe.user_id AND u.system_role!='system_admin'
+      JOIN project_memberships pm ON pm.project_id=pe.project_id AND pm.user_id=pe.user_id AND pm.active=1 AND pm.planner_enabled=1
       WHERE pe.project_id=? AND pe.plan_date BETWEEN ? AND ? GROUP BY pe.shift ORDER BY assignments DESC`, activeProjectId(), range.from, range.to);
     const currentDate = new Date().toISOString().slice(0, 10);
     const todayEntries = entries.filter(entry => entry.plan_date === currentDate);
@@ -1250,17 +1379,28 @@ function createRepository(db) {
       today_offline: uniquePeople(todayEntries.filter(entry => entry.work_mode === 'offline')),
       range_online: uniquePeople(entries.filter(entry => entry.work_mode === 'online')),
       range_offline: uniquePeople(entries.filter(entry => entry.work_mode === 'offline')),
-      online_person_days: new Set(entries.filter(entry => entry.work_mode === 'online').map(entry => `${entry.user_id}:${entry.plan_date}`)).size,
-      offline_person_days: new Set(entries.filter(entry => entry.work_mode === 'offline').map(entry => `${entry.user_id}:${entry.plan_date}`)).size
+      online_planned_days: new Set(entries.filter(entry => entry.work_mode === 'online').map(entry => `${entry.user_id}:${entry.plan_date}`)).size,
+      offline_planned_days: new Set(entries.filter(entry => entry.work_mode === 'offline').map(entry => `${entry.user_id}:${entry.plan_date}`)).size
     };
-    return { ...range, users, entries, work, summary, area_summary, shift_summary, mode_summary, areas: hierarchy.groups };
+    const area_day_summary = hierarchy.groups.filter(group => !group.parent_id).map(group => {
+      const descendants = new Set(groupDescendantIds(group.id));
+      return {
+        id: group.id, name: group.name, path_label: group.path_label,
+        days: range.days ? Array.from({ length: range.days }, (_, index) => {
+          const date = new Date(`${range.from}T12:00:00Z`); date.setUTCDate(date.getUTCDate() + index); const value = date.toISOString().slice(0, 10);
+          const related = entries.filter(entry => entry.plan_date === value && descendants.has(Number(entry.controller_group_id)));
+          return { date: value, online: new Set(related.filter(entry => entry.work_mode === 'online').map(entry => entry.user_id)).size, offline: new Set(related.filter(entry => entry.work_mode === 'offline').map(entry => entry.user_id)).size };
+        }) : []
+      };
+    });
+    return { ...range, users, entries, work, summary, area_summary, area_day_summary, shift_summary, mode_summary, areas: hierarchy.groups };
   }
 
   function savePlannerDay(input, currentUser) {
     const userId = asId(input.user_id);
     const planDate = nullableDate(input.plan_date);
     if (!userId || !planDate) throw appError('Użytkownik i dzień planu są wymagane');
-    if (!one(`SELECT 1 FROM users u JOIN project_memberships pm ON pm.user_id=u.id WHERE u.id=? AND u.active=1 AND u.system_role!='system_admin' AND pm.project_id=? AND pm.active=1`, userId, activeProjectId())) throw appError('Użytkownik nie jest aktywnym pracownikiem projektu');
+    if (!one(`SELECT 1 FROM users u JOIN project_memberships pm ON pm.user_id=u.id WHERE u.id=? AND u.active=1 AND pm.project_id=? AND pm.active=1 AND pm.planner_enabled=1`, userId, activeProjectId())) throw appError('Użytkownik nie jest włączony do Plannera tego projektu');
     const requested = Array.isArray(input.entries) ? input.entries : [];
     const normalized = [];
     const seenGroups = new Set();
@@ -1294,7 +1434,7 @@ function createRepository(db) {
     const userId = asId(input.user_id);
     const planDate = nullableDate(input.plan_date);
     if (!userId || !planDate) throw appError('Pracownik i data są wymagane');
-    if (!one(`SELECT 1 FROM users u JOIN project_memberships pm ON pm.user_id=u.id WHERE u.id=? AND u.active=1 AND u.system_role!='system_admin' AND pm.project_id=? AND pm.active=1`, userId, activeProjectId())) throw appError('Nie znaleziono aktywnego pracownika projektu');
+    if (!one(`SELECT 1 FROM users u JOIN project_memberships pm ON pm.user_id=u.id WHERE u.id=? AND u.active=1 AND pm.project_id=? AND pm.active=1 AND pm.planner_enabled=1`, userId, activeProjectId())) throw appError('Użytkownik nie jest włączony do Plannera tego projektu');
     const items = [...new Map((Array.isArray(input.items) ? input.items : []).map(item => [`${item.entity_type}:${asId(item.entity_id)}`, { entity_type: item.entity_type, entity_id: asId(item.entity_id) }])).values()].filter(item => ['task', 'status', 'point'].includes(item.entity_type) && item.entity_id);
     if (!items.length) throw appError('Wybierz co najmniej jeden element do przypisania');
     db.exec('BEGIN IMMEDIATE');
@@ -1360,7 +1500,7 @@ function createRepository(db) {
     if (types.has('status')) for (const row of statusList) {
       const date = row.checked_on || String(row.created_at).slice(0, 10);
       if (date < range.from || date > range.to) continue;
-      push({ entity_type: 'status', entity_id: row.id, title: `${row.test_id} · ${row.function_detail}`, start_date: date, end_date: date, controller: row.controller, controller_label: row.controller_label, controller_id: row.controller_id, category: row.category, priority: row.criticality, status: row.status, assigned_names: row.responsible_name, color: row.status === 'Done' ? 'green' : row.status === 'Blocked' ? 'red' : 'violet', related_to_me: row.responsible_user_ids.includes(currentUser.id) || row.created_by === currentUser.id });
+      push({ entity_type: 'status', entity_id: row.id, title: row.function_detail, start_date: date, end_date: date, controller: row.controller, controller_label: row.controller_label, controller_id: row.controller_id, category: row.category, priority: row.criticality, status: row.status, assigned_names: row.responsible_name, color: row.status === 'Done' ? 'green' : row.status === 'Blocked' ? 'red' : 'violet', related_to_me: row.responsible_user_ids.includes(currentUser.id) || row.created_by === currentUser.id });
     }
     if (types.has('goal')) for (const row of goalList) if (row.due_date && row.due_date >= range.from && row.due_date <= range.to) push({ entity_type: 'goal', entity_id: row.id, title: row.title, start_date: row.due_date, end_date: row.due_date, controller: row.controller, controller_label: row.controller_label, controller_id: row.controller_id, category: 'Cel', priority: row.priority, status: row.status, assigned_names: row.created_by_name, due_date: row.due_date, color: row.status === 'Done' ? 'green' : 'blue', related_to_me: row.created_by === currentUser.id });
     if (types.has('note')) for (const row of noteList) if (row.note_date >= range.from && row.note_date <= range.to) push({ entity_type: 'note', entity_id: row.id, title: `${row.type} · ${row.content.slice(0, 70)}`, start_date: row.note_date, end_date: row.note_date, controller: row.controller, controller_label: row.controller_label, controller_id: row.controller_id, category: row.type, status: row.shift, assigned_names: row.created_by_name || row.author, color: 'gray', related_to_me: row.created_by === currentUser.id || isMentioned('note', row.id) });
@@ -1378,11 +1518,11 @@ function createRepository(db) {
       const common = { entity_type: placement.entity_type, entity_id: row.id, start_date: placement.calendar_date, end_date: placement.calendar_date, controller: row.controller, controller_label: row.controller_label, controller_id: row.controller_id, category: row.category || row.type || (placement.entity_type === 'goal' ? 'Cel' : ''), priority: row.priority || row.criticality || 'Medium', status: row.status || row.shift, due_date: row.due_date, scheduled: true };
       if (placement.entity_type === 'task') push({ ...common, title: row.title, assigned_names: row.owner_name, color: 'blue', related_to_me: row.assignee_user_ids.includes(currentUser.id) || row.created_by === currentUser.id || isMentioned('task', row.id) });
       if (placement.entity_type === 'point') push({ ...common, title: row.title, assigned_names: row.owner_name, color: 'amber', related_to_me: row.owner_user_id === currentUser.id || row.created_by === currentUser.id || isMentioned('point', row.id) });
-      if (placement.entity_type === 'status') push({ ...common, title: `${row.test_id} · ${row.function_detail}`, assigned_names: row.responsible_name, color: 'violet', related_to_me: row.responsible_user_ids.includes(currentUser.id) || row.created_by === currentUser.id });
+      if (placement.entity_type === 'status') push({ ...common, title: row.function_detail, assigned_names: row.responsible_name, color: 'violet', related_to_me: row.responsible_user_ids.includes(currentUser.id) || row.created_by === currentUser.id });
       if (placement.entity_type === 'note') push({ ...common, title: `${row.type} · ${row.content.slice(0, 70)}`, assigned_names: row.created_by_name || row.author, color: 'gray', related_to_me: row.created_by === currentUser.id || isMentioned('note', row.id) });
       if (placement.entity_type === 'goal') push({ ...common, title: row.title, assigned_names: row.created_by_name, color: 'blue', related_to_me: row.created_by === currentUser.id });
     }
-    events.sort((a, b) => a.start_date.localeCompare(b.start_date) || a.entity_type.localeCompare(b.entity_type) || a.title.localeCompare(b.title, 'pl'));
+    events.sort((a, b) => a.start_date.localeCompare(b.start_date) || Number(b.entity_type === 'annotation') - Number(a.entity_type === 'annotation') || a.entity_type.localeCompare(b.entity_type) || a.title.localeCompare(b.title, 'pl'));
     return { ...range, events };
   }
 
@@ -1435,9 +1575,10 @@ function createRepository(db) {
         let changes = {}; let snapshot = {};
         try { changes = JSON.parse(row.changes_json || '{}'); } catch {}
         try { snapshot = JSON.parse(row.snapshot_json || '{}'); } catch {}
-        const label = snapshot.test_id || snapshot.issue_id || snapshot.title || snapshot.content?.slice(0, 80) || `${row.entity_type} #${row.entity_id}`;
+        const label = snapshot.function_detail || snapshot.title || snapshot.content?.slice(0, 80) || ({ status: 'Punkt statusu', task: 'Zadanie', point: 'Otwarty punkt', note: 'Wpis dziennika' })[row.entity_type] || 'Element';
         const exists = Boolean(one(`SELECT 1 FROM ${TABLES[row.entity_type]} WHERE id=? AND project_id=?`, row.entity_id, activeProjectId()));
-        return { ...row, changes, snapshot, label, exists };
+        const controllerItem = hierarchyData().controllers.find(item => item.id === Number(snapshot.controller_id));
+        return { ...row, changes, snapshot, label, exists, controller_id: snapshot.controller_id || null, controller_label: controllerItem?.display_name || '', controller_path: controllerItem?.hierarchy_label || '', root_group_id: controllerItem?.root_group_id || null };
       });
   }
 
@@ -1459,7 +1600,7 @@ function createRepository(db) {
       const classification = row.action === 'create' ? 'added' : row.action === 'delete' ? 'removed' : ['Done', 'Closed'].includes(nextStatus) && changes.status ? 'closed' : 'changed';
       const key = `${row.entity_type}:${row.entity_id}`;
       const previous = unique.get(key);
-      const label = snapshot.test_id ? `${snapshot.test_id} · ${snapshot.function_detail || ''}` : snapshot.issue_id ? `${snapshot.issue_id} · ${snapshot.title || ''}` : snapshot.title || snapshot.content?.slice(0, 100) || `${moduleNames[row.entity_type]} #${row.entity_id}`;
+      const label = snapshot.function_detail || snapshot.title || snapshot.content?.slice(0, 100) || moduleNames[row.entity_type] || 'Element';
       const item = { entity_type: row.entity_type, entity_id: row.entity_id, classification, label, changed_at: row.changed_at, user_name: row.user_name || 'System', exists: Boolean(one(`SELECT 1 FROM ${TABLES[row.entity_type]} WHERE id=? AND project_id=?`, row.entity_id, activeProjectId())) };
       if (!previous || priorities[classification] > priorities[previous.classification]) unique.set(key, item);
     }
@@ -1539,7 +1680,8 @@ function createRepository(db) {
 
     users() {
       return all(`SELECT u.id,u.username,u.display_name,u.system_role,u.theme,u.active,u.sort_order,u.created_at,
-        pm.role project_role,COALESCE(pm.role,'user') role,COALESCE(pm.active,0) project_active
+        pm.role project_role,COALESCE(pm.role,'user') role,COALESCE(pm.active,0) project_active,
+        COALESCE(pm.planner_enabled,0) planner_enabled,COALESCE(pm.summary_area_source,'configuration') summary_area_source
         FROM users u LEFT JOIN project_memberships pm ON pm.user_id=u.id AND pm.project_id=?
         ORDER BY u.sort_order,u.display_name`, activeProjectId()).map(user => ({
           ...user,
@@ -1554,10 +1696,13 @@ function createRepository(db) {
         if (Object.hasOwn(values, 'system_role')) fields.push('role');
         if (clean(input.password)) { values.password_hash = hashPassword(input.password); fields.push('password_hash'); }
         if (fields.length) db.prepare(`UPDATE users SET ${fields.map(field => `${field}=?`).join(',')} WHERE id=?`).run(...fields.map(field => values[field]), id);
-        if (Object.hasOwn(input, 'project_role') || Object.hasOwn(input, 'project_active') || Object.hasOwn(input, 'role')) {
-          db.prepare(`INSERT INTO project_memberships(project_id,user_id,role,active) VALUES(?,?,?,?)
-            ON CONFLICT(project_id,user_id) DO UPDATE SET role=excluded.role,active=excluded.active`).run(
-            activeProjectId(), id, clean(input.project_role || input.role) || 'user', Number(input.project_active ?? 1) ? 1 : 0
+        if (['project_role', 'project_active', 'role', 'planner_enabled', 'summary_area_source'].some(field => Object.hasOwn(input, field))) {
+          const current = one('SELECT * FROM project_memberships WHERE project_id=? AND user_id=?', activeProjectId(), id) || {};
+          const summarySource = clean(input.summary_area_source || current.summary_area_source) === 'planner' ? 'planner' : 'configuration';
+          db.prepare(`INSERT INTO project_memberships(project_id,user_id,role,active,planner_enabled,summary_area_source) VALUES(?,?,?,?,?,?)
+            ON CONFLICT(project_id,user_id) DO UPDATE SET role=excluded.role,active=excluded.active,planner_enabled=excluded.planner_enabled,summary_area_source=excluded.summary_area_source`).run(
+            activeProjectId(), id, clean(input.project_role || input.role || current.role) || 'user', Number(input.project_active ?? current.active ?? 1) ? 1 : 0,
+            Number(input.planner_enabled ?? current.planner_enabled ?? 1) ? 1 : 0, summarySource
           );
         }
         return this.users().find(user => user.id === id);
@@ -1566,7 +1711,10 @@ function createRepository(db) {
       const nextOrder = one('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM users').value;
       const systemRole = clean(input.system_role) === 'system_admin' ? 'system_admin' : 'user';
       const userId = insertRecord('users', { username: clean(input.username), display_name: clean(input.display_name), password_hash: hashPassword(input.password), role: systemRole === 'system_admin' ? 'admin' : 'user', system_role: systemRole, active: 1, sort_order: nextOrder });
-      db.prepare('INSERT INTO project_memberships(project_id,user_id,role,active) VALUES(?,?,?,?)').run(activeProjectId(), userId, clean(input.project_role || input.role) || 'user', Number(input.project_active ?? 1) ? 1 : 0);
+      db.prepare('INSERT INTO project_memberships(project_id,user_id,role,active,planner_enabled,summary_area_source) VALUES(?,?,?,?,?,?)').run(
+        activeProjectId(), userId, clean(input.project_role || input.role) || 'user', Number(input.project_active ?? 1) ? 1 : 0,
+        Number(input.planner_enabled ?? (systemRole === 'system_admin' ? 0 : 1)) ? 1 : 0, clean(input.summary_area_source) === 'planner' ? 'planner' : 'configuration'
+      );
       return this.users().find(user => user.id === userId);
     },
     deleteUser(id) { db.prepare('DELETE FROM users WHERE id=?').run(id); },
@@ -1585,6 +1733,18 @@ function createRepository(db) {
         db.exec('COMMIT');
       } catch (error) { db.exec('ROLLBACK'); throw error; }
       return { user_id: Number(userId), area_ids: ids };
+    },
+    saveSummaryPreference(userId, input) {
+      const source = clean(input.summary_area_source) === 'planner' ? 'planner' : 'configuration';
+      const result = db.prepare('UPDATE project_memberships SET summary_area_source=? WHERE project_id=? AND user_id=? AND active=1').run(source, activeProjectId(), asId(userId));
+      if (!result.changes) throw appError('Użytkownik nie ma dostępu do projektu', 404);
+      return { summary_area_source: source };
+    },
+    setPlannerEnabled(userId, input) {
+      const enabled = Number(input.planner_enabled) ? 1 : 0;
+      const result = db.prepare('UPDATE project_memberships SET planner_enabled=? WHERE project_id=? AND user_id=? AND active=1').run(enabled, activeProjectId(), asId(userId));
+      if (!result.changes) throw appError('Użytkownik nie ma aktywnego dostępu do projektu', 404);
+      return { user_id: Number(userId), planner_enabled: enabled };
     },
 
     controllerGroups() { return hierarchyData().groups; },
@@ -1605,25 +1765,32 @@ function createRepository(db) {
         ) SELECT 1 FROM descendants WHERE id=?`, id, activeProjectId(), parentId)) throw appError('Nie można przenieść grupy pod jej własną podgrupę');
         const result = db.prepare('UPDATE controller_groups SET name=?,description=?,parent_id=? WHERE id=? AND project_id=?').run(name, clean(input.description), parentId, id, activeProjectId());
         if (!result.changes) throw appError('Nie znaleziono grupy sterowników', 404);
+        refreshControllerCodes();
         return one('SELECT * FROM controller_groups WHERE id=? AND project_id=?', id, activeProjectId());
       }
       const nextOrder = one('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM controller_groups WHERE project_id=? AND parent_id IS ?', activeProjectId(), parentId).value;
       const groupId = insertRecord('controller_groups', { project_id: activeProjectId(), parent_id: parentId, name, description: clean(input.description), sort_order: nextOrder, active: 1 });
       return one('SELECT * FROM controller_groups WHERE id=?', groupId);
     },
-    deleteControllerGroup(id) { db.prepare('DELETE FROM controller_groups WHERE id=? AND project_id=?').run(id, activeProjectId()); },
+    deleteControllerGroup(id) { db.prepare('DELETE FROM controller_groups WHERE id=? AND project_id=?').run(id, activeProjectId()); refreshControllerCodes(); },
     saveController(id, input) {
-      if (!clean(input.code)) throw appError('Kod sterownika jest wymagany');
+      const leafCode = clean(input.leaf_code || input.code);
+      if (!leafCode) throw appError('Nazwa lub kod sterownika jest wymagany');
       const groupId = asId(input.group_id);
       if (groupId && !one('SELECT 1 FROM controller_groups WHERE id=? AND project_id=?', groupId, activeProjectId())) throw appError('Nieprawidłowy obszar sterownika');
+      const duplicate = one(`SELECT id FROM controllers WHERE project_id=? AND COALESCE(group_id,0)=COALESCE(?,0)
+        AND leaf_code=? COLLATE NOCASE AND id!=COALESCE(?,0)`, activeProjectId(), groupId, leafCode, asId(id));
+      if (duplicate) throw appError('W tej samej gałęzi hierarchii istnieje już sterownik o tej nazwie');
       if (id) {
-        const result = db.prepare('UPDATE controllers SET code=?,area=?,description=?,group_id=? WHERE id=? AND project_id=?').run(clean(input.code), clean(input.area), clean(input.description), groupId, id, activeProjectId());
+        const result = db.prepare('UPDATE controllers SET leaf_code=?,area=?,description=?,group_id=? WHERE id=? AND project_id=?').run(leafCode, clean(input.area), clean(input.description), groupId, id, activeProjectId());
         if (!result.changes) throw appError('Nie znaleziono sterownika', 404);
-        return one('SELECT * FROM controllers WHERE id=? AND project_id=?', id, activeProjectId());
+        refreshControllerCodes();
+        return hierarchyData().controllers.find(item => item.id === Number(id));
       }
       const nextOrder = one('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM controllers WHERE project_id=?', activeProjectId()).value;
-      const controllerId = insertRecord('controllers', { project_id: activeProjectId(), group_id: groupId, code: clean(input.code), area: clean(input.area) || 'Body Shop', description: clean(input.description), sort_order: nextOrder });
-      return one('SELECT * FROM controllers WHERE id=?', controllerId);
+      const controllerId = insertRecord('controllers', { project_id: activeProjectId(), group_id: groupId, code: `__NEW_${Date.now()}_${nextOrder}`, leaf_code: leafCode, area: clean(input.area) || 'Body Shop', description: clean(input.description), sort_order: nextOrder });
+      refreshControllerCodes();
+      return hierarchyData().controllers.find(item => item.id === controllerId);
     },
     deleteController(id) { db.prepare('DELETE FROM controllers WHERE id=? AND project_id=?').run(id, activeProjectId()); },
 
@@ -2001,12 +2168,19 @@ function createRepository(db) {
         }).filter(Boolean),
         ...controllers.map(controller => ({ scope: controller.code, id: controller.id, type: 'controller', parent_scope: controller.group_id ? `group:${controller.group_id}` : 'all', label: controller.display_name, path_label: controller.hierarchy_label, depth: (controller.group_depth || 0) + 1, metrics: controller.metrics, trends: controller.trends }))
       ];
+      const status_breakdown = ids.length ? all(`SELECT controller_id,category,subcategory,COUNT(*) total,SUM(status='Done') done
+        FROM status_items WHERE project_id=? AND controller_id IN (${ids.map(() => '?').join(',')})
+        GROUP BY controller_id,category,subcategory`, activeProjectId(), ...ids).map(row => {
+          const controllerItem = hierarchy.controllers.find(item => item.id === Number(row.controller_id));
+          return { ...row, total: Number(row.total || 0), done: Number(row.done || 0), progress: row.total ? Math.round(Number(row.done || 0) * 100 / Number(row.total)) : 0, controller_label: controllerItem?.display_name || '', controller_path: controllerItem?.hierarchy_label || '' };
+        }) : [];
       return {
         scope: clean(code) || 'all',
         overall: dashboardForControllers(ids),
         controllers,
         trends: overviewTrends(ids),
-        hierarchy_trends
+        hierarchy_trends,
+        status_breakdown
       };
     },
 
@@ -2080,15 +2254,26 @@ function createRepository(db) {
       const before = id ? baseSnapshot('task', id) : null;
       if (id && !before) throw appError('Nie znaleziono zadania', 404);
       const checklist = Array.isArray(input.checklist) ? input.checklist : before?.checklist || [];
+      const hierarchyTarget = clean(input.hierarchy_target);
+      const scopeGroupId = hierarchyTarget.startsWith('group:') ? asId(hierarchyTarget.slice(6)) : asId(input.controller_group_id ?? before?.controller_group_id);
+      let targetController;
+      if (scopeGroupId) {
+        if (!one('SELECT 1 FROM controller_groups WHERE id=? AND project_id=? AND active=1', scopeGroupId, activeProjectId())) throw appError('Wybrany obszar nie należy do projektu');
+        targetController = controllersInGroup(scopeGroupId)[0];
+        if (!targetController) throw appError('Wybrany obszar nie zawiera sterowników końcowych');
+      } else {
+        const controllerCode = hierarchyTarget.replace(/^controller:/, '') || clean(input.controller) || before?.controller_id && one('SELECT code FROM controllers WHERE id=?', before.controller_id)?.code;
+        targetController = controller(controllerCode);
+      }
       const requestedDirect = Array.isArray(input.direct_assignee_user_ids) ? input.direct_assignee_user_ids
         : Array.isArray(input.assignee_user_ids) ? input.assignee_user_ids
           : asId(input.owner_user_id) ? [asId(input.owner_user_id)] : before?.direct_assignee_user_ids || [];
       const directUserIds = [...new Set(requestedDirect.map(asId).filter(Boolean))];
       const checklistUserIds = checklist.map(item => asId(item.owner_user_id)).filter(Boolean);
       const ownerId = directUserIds[0] || checklistUserIds[0] || null;
-      const groupId = asId(input.function_group_id);
-      const elementId = asId(input.function_group_element_id);
-      const otherObject = clean(input.other_object);
+      const groupId = scopeGroupId ? null : asId(input.function_group_id);
+      const elementId = scopeGroupId ? null : asId(input.function_group_element_id);
+      const otherObject = scopeGroupId ? '' : clean(input.other_object);
       if (groupId && otherObject) throw appError('Wybierz grupę funkcyjną albo wpisz pole „Inne”, nie oba');
       if (elementId && !groupId) throw appError('Element wymaga wybranej grupy funkcyjnej');
       if (groupId) {
@@ -2096,7 +2281,7 @@ function createRepository(db) {
         if (elementId && !one('SELECT 1 FROM function_group_elements WHERE id=? AND function_group_id=?', elementId, group.id)) throw appError('Element nie należy do wybranej grupy');
       }
       const values = {
-        project_id: activeProjectId(), controller_id: controller(input.controller).id, title: clean(input.title), description: clean(input.description), station: clean(input.station),
+        project_id: activeProjectId(), controller_id: targetController.id, controller_group_id: scopeGroupId, title: clean(input.title), description: clean(input.description), station: clean(input.station),
         function_group_id: groupId, function_group_element_id: elementId, other_object: otherObject,
         priority: clean(input.priority) || 'Medium', owner_user_id: ownerId, owner: userName(ownerId), status: clean(input.status) || 'To do',
         start_date: nullableDate(input.start_date), due_date: nullableDate(input.due_date), category: clean(input.category), subcategory: clean(input.subcategory),
@@ -2106,15 +2291,16 @@ function createRepository(db) {
       if (id) updateRecord('tasks', id, values, Object.keys(values));
       else recordId = insertRecord('tasks', { ...values, created_by: currentUser.id });
       saveChecklist(recordId, checklist);
+      saveTaskScopeChecklist(recordId, scopeGroupId, input.scope_checklist);
       const allAssignees = saveTaskAssignees(recordId, directUserIds, checklist);
       const primaryOwner = allAssignees[0] || null;
       db.prepare('UPDATE tasks SET owner_user_id=?,owner=? WHERE id=? AND project_id=?').run(primaryOwner, userName(primaryOwner), recordId, activeProjectId());
-      setMentions('task', recordId, input.mentioned_user_ids);
+      setMentions('task', recordId, []);
       if (Array.isArray(input.links)) setEntityLinks('task', recordId, input.links, currentUser);
       const after = baseSnapshot('task', recordId);
       writeAudit('task', recordId, id ? 'update' : 'create', currentUser, before, after);
       const row = one(`SELECT t.*,c.code controller,creator.display_name created_by_name,owner.display_name owner_name FROM tasks t JOIN controllers c ON c.id=t.controller_id LEFT JOIN users creator ON creator.id=t.created_by LEFT JOIN users owner ON owner.id=t.owner_user_id WHERE t.id=?`, recordId);
-      return decorateTask(row, currentUser);
+      return decorateTask(attachControllerMeta(row), currentUser);
     },
     deleteTask(id, currentUser) {
       const task = one('SELECT * FROM tasks WHERE id=?', id);
@@ -2190,9 +2376,11 @@ function createRepository(db) {
       if (id) updateRecord('goals', id, values, Object.keys(values));
       else recordId = insertRecord('goals', { ...values, created_by: currentUser.id });
       if (Array.isArray(input.links)) {
-        db.prepare('DELETE FROM goal_links WHERE project_id=? AND goal_id=?').run(activeProjectId(), recordId);
-        const insert = db.prepare('INSERT OR IGNORE INTO goal_links(project_id,goal_id,entity_type,entity_id) VALUES(?,?,?,?)');
-        for (const link of input.links) if (TABLES[link.entity_type] && asId(link.entity_id)) insert.run(activeProjectId(), recordId, link.entity_type, asId(link.entity_id));
+        for (const link of input.links) {
+          if (!['status', 'task', 'point'].includes(link.entity_type) || !asId(link.entity_id)) continue;
+          if (!one(`SELECT 1 FROM ${TABLES[link.entity_type]} WHERE id=? AND project_id=?`, asId(link.entity_id), activeProjectId())) throw appError('Powiązany element celu nie należy do bieżącego projektu');
+        }
+        setEntityLinks('goal', recordId, input.links, currentUser);
       }
       const after = baseSnapshot('goal', recordId);
       writeAudit('goal', recordId, id ? 'update' : 'create', currentUser, before, after);
@@ -2212,8 +2400,8 @@ function createRepository(db) {
       const directTask = row => row.direct_assignee_user_ids.includes(currentUser.id);
       const pendingSubtask = row => row.checklist.some(item => item.owner_user_id === currentUser.id && !item.done);
       const assignedTask = row => directTask(row) || pendingSubtask(row);
-      const relatedTasks = tasks.filter(row => assignedTask(row) || row.created_by === currentUser.id || mentioned('task', row.id));
-      const summaryAreaSource = one("SELECT value FROM settings WHERE project_id=? AND key='my_summary_area_source'", activeProjectId())?.value === 'planner' ? 'planner' : 'configuration';
+      const relatedTasks = tasks.filter(row => assignedTask(row) || row.created_by === currentUser.id);
+      const summaryAreaSource = one("SELECT summary_area_source FROM project_memberships WHERE project_id=? AND user_id=?", activeProjectId(), currentUser.id)?.summary_area_source === 'planner' ? 'planner' : 'configuration';
       const today = new Date().toISOString().slice(0, 10);
       const upcomingLimit = new Date(); upcomingLimit.setUTCDate(upcomingLimit.getUTCDate() + 13);
       const upcomingDate = upcomingLimit.toISOString().slice(0, 10);
@@ -2226,7 +2414,8 @@ function createRepository(db) {
         UNION ALL SELECT cg.id FROM controller_groups cg JOIN selected s ON cg.parent_id=s.id
       ) SELECT DISTINCT c.id FROM controllers c WHERE c.project_id=? AND c.group_id IN (SELECT id FROM selected)`, activeProjectId(), ...areaGroups, activeProjectId()).map(row => row.id) : [];
       const areaControllerSet = new Set(areaControllers);
-      const areaUpcomingTasks = tasks.filter(row => { const date = row.start_date || row.due_date; return areaControllerSet.has(row.controller_id) && row.status !== 'Done' && date && date >= today && date <= upcomingDate; });
+      const taskInAreas = row => row.controller_group_id ? controllersInGroup(row.controller_group_id).some(item => areaControllerSet.has(item.id)) : areaControllerSet.has(row.controller_id);
+      const areaUpcomingTasks = tasks.filter(row => { const date = row.start_date || row.due_date; return taskInAreas(row) && row.status !== 'Done' && date && date >= today && date <= upcomingDate; });
       const areaUpcomingPoints = points.filter(row => { const date = row.start_date || row.due_date || row.reminder_date; return areaControllerSet.has(row.controller_id) && row.status !== 'Closed' && date && date >= today && date <= upcomingDate; });
       const areaUpcomingStatuses = statuses.filter(row => areaControllerSet.has(row.controller_id) && row.status !== 'Done');
       const mine = {

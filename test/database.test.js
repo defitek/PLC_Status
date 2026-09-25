@@ -48,7 +48,7 @@ test('V3 supports overview, ordering, assignment, mentions, audit and deletion r
     assert.equal(repository.audit('task', task.id)[0].action, 'create');
 
     repository.saveTask(task.id, { ...task, controller: 'UB512', title: 'Changed by admin', checklist: task.checklist }, admin);
-    assert.equal(repository.tasks('all', worker).find(item => item.id === task.id).controller, 'UB512');
+    assert.match(repository.tasks('all', worker).find(item => item.id === task.id).controller_label, /UB512/);
     assert.throws(() => repository.deleteTask(task.id, worker), /Nie możesz usunąć/);
 
     const point = repository.savePoint(null, {
@@ -177,7 +177,7 @@ test('V3.2 manages controller function groups, check templates and batch status 
 
     repository.saveFunctionGroup(group.id, { controller: 'UB512', name: 'Test Station 901' }, admin);
     generated = repository.status('all', admin).filter(item => item.function_group_id === group.id);
-    assert.equal(generated[0].controller, 'UB512');
+    assert.match(generated[0].controller_label, /UB512/);
     assert.equal(generated[0].station, 'Test Station 901');
 
     const beforeRestart = repository.status('all', admin).length;
@@ -244,8 +244,8 @@ test('V4 isolates projects, supports hierarchy, immutable IDs, elements, links a
       const admin = repository.me(account.id, 2);
       assert.equal(admin.current_project.code, 'W520');
       assert.equal(repository.tasks('all', admin).length, 35);
-      assert.ok(repository.controllers().some(item => item.code === 'HB521'));
-      assert.equal(repository.controllers().some(item => item.code === 'HB522'), true);
+      assert.ok(repository.controllers().some(item => item.leaf_code === 'HB521'));
+      assert.equal(repository.controllers().some(item => item.leaf_code === 'HB522'), true);
       assert.equal(repository.tasks('all', admin).some(item => item.title === 'Sprawdź QM1'), false);
     });
   } finally {
@@ -307,7 +307,7 @@ test('V5 data remains compatible with planner, calendar, weighted teamwork, cano
       assert.throws(() => repository.dailySummary('2026-01-01', '2026-01-15'), /14 dni/);
 
       const backup = repository.projectBackup();
-      assert.equal(backup.version, 6);
+      assert.equal(backup.version, 7);
       assert.ok(Array.isArray(backup.tables.planner_entries));
       assert.ok(Array.isArray(backup.tables.task_assignees));
       assert.ok(Array.isArray(backup.tables.calendar_annotations));
@@ -328,9 +328,9 @@ test('V6 supports four-level display paths, safe manpower modes, calendar placem
     repository.withProject(1, () => {
       const admin = repository.me(account.id, 1);
       const firstController = repository.controllers().find(item => item.group_id);
-      assert.ok(firstController.display_name.includes(firstController.code));
-      assert.ok(firstController.hierarchy_label.endsWith(firstController.code));
-      assert.equal(firstController.hierarchy_path.length <= 3, true);
+      assert.ok(firstController.display_name.includes(firstController.leaf_code));
+      assert.ok(firstController.hierarchy_label.endsWith(firstController.leaf_code));
+      assert.equal(firstController.hierarchy_path.length <= 4, true);
 
       const workerARecord = repository.saveUser(null, { username: 'v6worker.a', display_name: 'V6 Worker A', password: 'secret123', project_role: 'user' });
       const workerBRecord = repository.saveUser(null, { username: 'v6worker.b', display_name: 'V6 Worker B', password: 'secret123', project_role: 'user' });
@@ -391,7 +391,7 @@ test('V6 supports four-level display paths, safe manpower modes, calendar placem
       const critical = repository.calendar({ from: today, to: today, types: ['status'], priorities: ['Critical'], only_mine: true }, workerA);
       assert.ok(critical.events.some(item => item.entity_id === status.id));
 
-      repository.saveSetting('my_summary_area_source', 'planner');
+      repository.saveSummaryPreference(workerA.id, { summary_area_source: 'planner' });
       const mine = repository.mySummary(workerA);
       assert.equal(mine.area_source, 'planner');
       assert.ok(mine.assigned_areas.some(item => [roots[0].id, roots[1].id].includes(item.id)));
@@ -403,6 +403,71 @@ test('V6 supports four-level display paths, safe manpower modes, calendar placem
     assert.equal(repository.projects().length, 1);
     const remaining = repository.projects()[0];
     assert.throws(() => repository.deleteProject(remaining.id, { project_code: remaining.code, confirmation: `USUŃ ${remaining.code}` }), /ostatniego/);
+  } finally {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
+test('V7 supports canonical hierarchy IDs, area tasks, goal links and configurable Planner participation', () => {
+  const temporary = temporaryDatabase();
+  const repository = openDatabase(temporary.path);
+  try {
+    const account = repository.authenticate('admin');
+    repository.withProject(1, () => {
+      const admin = repository.me(account.id, 1);
+      const root = repository.saveControllerGroup(null, { name: 'TEST V7' });
+      const areaA = repository.saveControllerGroup(null, { name: 'CELL A', parent_id: root.id });
+      const areaB = repository.saveControllerGroup(null, { name: 'CELL B', parent_id: root.id });
+      const plcA = repository.saveController(null, { leaf_code: 'SPS1', group_id: areaA.id, area: 'Test' });
+      const plcB = repository.saveController(null, { leaf_code: 'SPS1', group_id: areaB.id, area: 'Test' });
+
+      assert.equal(plcA.leaf_code, 'SPS1');
+      assert.equal(plcB.leaf_code, 'SPS1');
+      assert.notEqual(plcA.code, plcB.code);
+      assert.match(plcA.code, /TEST-V7-CELL-A-SPS1/);
+      assert.match(plcB.code, /TEST-V7-CELL-B-SPS1/);
+      assert.match(plcA.display_name, /CELL A SPS1/);
+      assert.throws(() => repository.saveController(null, { leaf_code: 'SPS1', group_id: areaA.id }), /już sterownik/);
+
+      const areaTask = repository.saveTask(null, {
+        hierarchy_target: `group:${root.id}`, title: 'Globalne sprawdzenie TEST V7', status: 'In progress'
+      }, admin);
+      assert.equal(areaTask.scope_is_group, true);
+      assert.equal(areaTask.scope_checklist.length, 2);
+      assert.equal(areaTask.progress, 0);
+      const completedController = areaTask.scope_checklist[0].controller_id;
+      const updatedTask = repository.saveTask(areaTask.id, {
+        ...areaTask, hierarchy_target: `group:${root.id}`,
+        scope_checklist: areaTask.scope_checklist.map(item => ({ controller_id: item.controller_id, done: item.controller_id === completedController }))
+      }, admin);
+      assert.equal(updatedTask.progress, 50);
+      const taskAudit = repository.audit('task', areaTask.id)[0];
+      assert.ok(Array.isArray(taskAudit.changes.scope_checklist.to));
+      assert.ok(repository.tasks(plcA.code, admin).some(item => item.id === areaTask.id));
+      assert.ok(repository.tasks(plcB.code, admin).some(item => item.id === areaTask.id));
+      assert.equal(repository.overview(plcA.code).overall.tasks.total, repository.tasks(plcA.code, admin).length);
+
+      const status = repository.saveStatus(null, {
+        controller: plcA.code, function_detail: 'Status przypisany do celu', category: 'Hardware', status: 'In progress'
+      }, admin);
+      const goal = repository.saveGoal(null, { controller: plcA.code, title: 'Cel V7', status: 'Open', links: [] }, admin);
+      const linkedStatus = repository.saveStatus(status.id, { ...status, controller: plcA.code, links: [{ entity_type: 'goal', entity_id: goal.id }] }, admin);
+      assert.equal(linkedStatus.links.filter(link => link.entity_type === 'goal' && link.entity_id === goal.id).length, 1);
+      assert.equal(repository.goals('all', admin).find(item => item.id === goal.id).links.filter(link => link.entity_type === 'status' && link.entity_id === status.id).length, 1);
+
+      assert.equal(repository.users().find(user => user.id === admin.id).planner_enabled, 0);
+      repository.setPlannerEnabled(admin.id, { planner_enabled: 1 });
+      assert.ok(repository.planner(new Date().toISOString().slice(0, 10), new Date().toISOString().slice(0, 10)).users.some(user => user.id === admin.id));
+      repository.saveSummaryPreference(admin.id, { summary_area_source: 'planner' });
+      assert.equal(repository.mySummary(admin).area_source, 'planner');
+
+      const overview = repository.overview('all');
+      assert.ok(overview.overall.goals.total >= 1);
+      assert.ok(Array.isArray(overview.status_breakdown));
+      assert.ok(overview.trends.week.every(point => point.goals && Number.isFinite(point.goals.total)));
+      assert.equal(repository.projectBackup().version, 7);
+    });
   } finally {
     repository.close();
     rmSync(temporary.directory, { recursive: true, force: true });

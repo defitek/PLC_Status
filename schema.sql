@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS project_memberships (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   role TEXT NOT NULL DEFAULT 'user' CHECK(role IN ('project_admin','moderator','user')),
   active INTEGER NOT NULL DEFAULT 1,
+  planner_enabled INTEGER NOT NULL DEFAULT 1,
+  summary_area_source TEXT NOT NULL DEFAULT 'configuration' CHECK(summary_area_source IN ('configuration','planner')),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY(project_id,user_id)
 ) STRICT, WITHOUT ROWID;
@@ -54,6 +56,7 @@ CREATE TABLE IF NOT EXISTS controllers (
   project_id INTEGER NOT NULL DEFAULT 1 REFERENCES projects(id) ON DELETE CASCADE,
   group_id INTEGER REFERENCES controller_groups(id) ON DELETE SET NULL,
   code TEXT NOT NULL,
+  leaf_code TEXT NOT NULL DEFAULT '',
   area TEXT NOT NULL DEFAULT 'Body Shop',
   description TEXT NOT NULL DEFAULT '',
   sort_order INTEGER NOT NULL DEFAULT 0,
@@ -200,6 +203,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   id INTEGER PRIMARY KEY,
   project_id INTEGER NOT NULL DEFAULT 1 REFERENCES projects(id) ON DELETE CASCADE,
   controller_id INTEGER NOT NULL REFERENCES controllers(id) ON DELETE CASCADE,
+  controller_group_id INTEGER REFERENCES controller_groups(id) ON DELETE SET NULL,
   title TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   station TEXT NOT NULL DEFAULT '',
@@ -232,6 +236,14 @@ CREATE TABLE IF NOT EXISTS task_checklist (
   owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
   sort_order INTEGER NOT NULL DEFAULT 0
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS task_scope_checklist (
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  controller_id INTEGER NOT NULL REFERENCES controllers(id) ON DELETE CASCADE,
+  done INTEGER NOT NULL DEFAULT 0,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(task_id,controller_id)
+) STRICT, WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS task_assignees (
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
