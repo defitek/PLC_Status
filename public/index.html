@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#172554">
   <title>PLC Commissioning Hub</title>
-  <link rel="stylesheet" href="/styles.css?v=5.0.0">
-  <script type="module" src="/app.js?v=5.0.0"></script>
+  <link rel="stylesheet" href="/styles.css?v=6.0.0">
+  <script type="module" src="/app.js?v=6.0.0"></script>
 </head>
 <body>
   <header class="topbar">
     <div class="logo">PLC</div>
-    <div class="brand"><strong>Commissioning Hub</strong><span>Multi-project status & team workspace · V5.0</span></div>
+    <div class="brand"><strong>Commissioning Hub</strong><span>Multi-project status & team workspace · V6.0</span></div>
     <div class="top-actions"><button id="daily-summary-open" class="ghost" title="Podsumowanie zmian">☀ Podsumowanie</button><button id="project-switch" class="ghost project-chip">Wybierz projekt</button><button id="theme-switch" class="ghost" title="Zmień wygląd">◐ Motyw</button><div class="userbox"><span id="me"></span><button id="logout" class="ghost">Wyloguj</button></div></div>
   </header>
   <div class="layout">
@@ -114,6 +114,7 @@
   <dialog id="link-picker-dialog" class="wide-dialog">
     <header class="dialog-head"><div><h2>Wybierz powiązane elementy</h2><p>Lista blokuje powtórne wskazanie tego samego rekordu.</p></div><button type="button" class="x" id="link-picker-close">×</button></header>
     <div class="picker-tools"><input id="link-picker-search" type="search" placeholder="Szukaj po ID, nazwie, sterowniku lub statusie…"><select id="link-picker-type"><option value="all">Wszystkie typy</option><option value="status">Status</option><option value="task">Zadania</option><option value="point">Otwarte punkty</option><option value="note">Dziennik</option></select><select id="link-picker-sort"><option value="label">Nazwa / ID</option><option value="controller">Sterownik</option><option value="status">Status</option></select></div>
+    <div class="picker-legend"><span><i class="type-dot status"></i>Status</span><span><i class="type-dot task"></i>Zadanie</span><span><i class="type-dot point"></i>Otwarty punkt</span><span><i class="type-dot note"></i>Dziennik</span></div>
     <div id="link-picker-content" class="picker-content link-picker-content"></div>
     <footer class="dialog-actions"><span id="link-picker-count"></span><span></span><button type="button" class="secondary" id="link-picker-cancel">Anuluj</button><button type="button" class="primary" id="link-picker-apply">Zastosuj wybór</button></footer>
   </dialog>
@@ -129,6 +130,14 @@
   <dialog id="config-full-dialog" class="wide-dialog">
     <header class="dialog-head"><div><h2 id="config-full-title">Pełna lista konfiguracji</h2><p>Edycja i kolejność w jednym, większym oknie.</p></div><button type="button" class="x" id="config-full-close">×</button></header>
     <div id="config-full-content" class="config-full-content"></div>
+  </dialog>
+
+  <dialog id="entity-selection-dialog" class="wide-dialog">
+    <header class="dialog-head"><div><h2 id="entity-selection-title">Wybierz elementy</h2><p id="entity-selection-description"></p></div><button type="button" class="x" id="entity-selection-close">×</button></header>
+    <div class="picker-tools"><input id="entity-selection-search" type="search" placeholder="Szukaj po ID, nazwie, obszarze lub osobie…"><select id="entity-selection-type"></select></div>
+    <div class="picker-legend"><span><i class="type-dot status"></i>Status</span><span><i class="type-dot task"></i>Zadanie</span><span><i class="type-dot point"></i>Otwarty punkt</span><span><i class="type-dot goal"></i>Cel</span><span><i class="type-dot note"></i>Dziennik</span></div>
+    <div id="entity-selection-content" class="picker-content link-picker-content"></div>
+    <footer class="dialog-actions"><span id="entity-selection-count"></span><span></span><button type="button" class="secondary" id="entity-selection-cancel">Anuluj</button><button type="button" class="primary" id="entity-selection-apply">Zastosuj wybór</button></footer>
   </dialog>
 
   <dialog id="daily-summary-dialog" class="wide-dialog daily-summary-dialog">

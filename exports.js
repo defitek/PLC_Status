@@ -46,7 +46,7 @@ const pointColumns = [
 ];
 
 const cols = definitions => definitions.map(([key, label, width]) => ({ key, label, width }));
-const enrich = rows => rows.map(row => ({ ...row, links_text: linkText(row.links), created_at: dateTime(row.created_at), updated_at: dateTime(row.updated_at) }));
+const enrich = rows => rows.map(row => ({ ...row, controller: row.controller_label || row.controller, links_text: linkText(row.links), created_at: dateTime(row.created_at), updated_at: dateTime(row.updated_at) }));
 
 function taskRows(rows) {
   return enrich(rows).map(row => {
@@ -58,7 +58,7 @@ function taskRows(rows) {
 }
 
 function statusSummary(rows, level) {
-  const keyFor = row => level === 'controller' ? [row.controller] : level === 'category' ? [row.controller, row.category] : [row.controller, row.function_group_name || 'Bez grupy'];
+  const keyFor = row => level === 'controller' ? [row.controller_label || row.controller] : level === 'category' ? [row.controller_label || row.controller, row.category] : [row.controller_label || row.controller, row.function_group_name || 'Bez grupy'];
   const groups = new Map();
   for (const row of rows) {
     const parts = keyFor(row);
@@ -118,7 +118,7 @@ export function projectWorkbook(data, project) {
     { name: 'Podsumowanie', title: 'Podsumowanie zarządcze projektu', subtitle, columns: cols([['module', 'Moduł', 24], ['total', 'Wszystkie', 14], ['completed', 'Ukończone', 14], ['progress', 'Realizacja [%]', 16], ['alerts', 'Alarmy / blokady', 18]]), rows: overviewRows },
     { name: 'Status', title: 'Status uruchomienia', subtitle, columns: cols(statusColumns), rows: enrich(data.status) },
     { name: 'Zadania', title: 'Zadania projektu', subtitle, columns: cols(taskColumns), rows: taskRows(data.tasks) },
-    { name: 'Cele', title: 'Cele projektu', subtitle, columns: cols([['title', 'Cel', 38], ['controller', 'Sterownik', 14], ['status', 'Status', 16], ['due_date', 'Deadline', 16], ['description', 'Opis', 50], ['links_text', 'Powiązane elementy', 42], ['created_by_name', 'Utworzone przez', 22], ['created_at', 'Data utworzenia', 20]]), rows: goalRows },
+    { name: 'Cele', title: 'Cele projektu', subtitle, columns: cols([['title', 'Cel', 38], ['controller', 'Sterownik', 18], ['status', 'Status', 16], ['priority', 'Priorytet', 14], ['due_date', 'Deadline', 16], ['description', 'Opis', 50], ['links_text', 'Powiązane elementy', 42], ['created_by_name', 'Utworzone przez', 22], ['created_at', 'Data utworzenia', 20]]), rows: goalRows },
     { name: 'Otwarte punkty', title: 'Otwarte punkty projektu', subtitle, columns: cols(pointColumns), rows: enrich(data.points) },
     { name: 'Dziennik', title: 'Dziennik projektu', subtitle, columns: cols([['note_date', 'Data wpisu', 16], ['controller', 'Sterownik', 14], ['shift', 'Zmiana', 14], ['type', 'Typ', 18], ['author', 'Autor', 22], ['content', 'Treść', 60], ['links_text', 'Powiązania', 42], ['created_at', 'Data utworzenia', 20], ['updated_at', 'Aktualizacja', 20]]), rows: noteRows }
   ], { title: `Eksport projektu ${project.code}` });

@@ -65,10 +65,12 @@ async function handleProjectApi(request, response, url, user) {
   if (method === 'GET' && path === '/api/daily-summary') return json(response, 200, repository.dailySummary(url.searchParams.get('from'), url.searchParams.get('to')));
   if (method === 'GET' && path === '/api/planner') return json(response, 200, repository.planner(url.searchParams.get('from'), url.searchParams.get('to')));
   if (method === 'PUT' && path === '/api/planner/day') { requireRole(user, 'moderator'); return json(response, 200, repository.savePlannerDay(await readJson(request), user)); }
+  if (method === 'POST' && path === '/api/planner/assign-work') { requireRole(user, 'moderator'); return json(response, 200, repository.assignPlannerWork(await readJson(request), user)); }
   if (method === 'GET' && path === '/api/calendar') return json(response, 200, repository.calendar({
     from: url.searchParams.get('from'), to: url.searchParams.get('to'), scope,
-    types: url.searchParams.getAll('type'), category: url.searchParams.get('category'), only_mine: url.searchParams.get('only_mine') === '1'
+    types: url.searchParams.getAll('type'), priorities: url.searchParams.getAll('priority'), category: url.searchParams.get('category'), only_mine: url.searchParams.get('only_mine') === '1'
   }, user));
+  if (method === 'POST' && path === '/api/calendar/items') return json(response, 201, repository.saveCalendarItems(await readJson(request), user));
   if (method === 'POST' && path === '/api/calendar/annotations') { requireRole(user, 'moderator'); return json(response, 201, repository.saveCalendarAnnotation(null, await readJson(request), user)); }
   let annotationMatch = path.match(/^\/api\/calendar\/annotations\/(\d+)$/);
   if (annotationMatch) {
@@ -199,7 +201,7 @@ async function handleProjectApi(request, response, url, user) {
 
 async function handleApi(request, response, url) {
   const method = request.method || 'GET'; const path = url.pathname;
-  if (method === 'GET' && path === '/api/health') return json(response, 200, { status: 'ok', version: 5, release: '5.0.0' });
+  if (method === 'GET' && path === '/api/health') return json(response, 200, { status: 'ok', version: 6, release: '6.0.0' });
   if (method === 'POST' && path === '/api/login') {
     const input = await readJson(request); const account = repository.authenticate(input.username);
     if (!account || !verifyPassword(input.password || '', account.password_hash)) return json(response, 401, { error: 'Nieprawidłowy login lub hasło' });
@@ -221,7 +223,15 @@ async function handleApi(request, response, url) {
   }
   if (path === '/api/projects') { requireRole(user, 'system_admin'); if (method === 'GET') return json(response, 200, repository.projects()); if (method === 'POST') return json(response, 201, repository.saveProject(null, await readJson(request))); }
   const projectId = numericId(path, '/api/projects');
-  if (projectId !== null) { requireRole(user, 'system_admin'); if (method === 'PATCH') return json(response, 200, repository.saveProject(projectId, await readJson(request))); }
+  if (projectId !== null) {
+    requireRole(user, 'system_admin');
+    if (method === 'PATCH') return json(response, 200, repository.saveProject(projectId, await readJson(request)));
+    if (method === 'DELETE') {
+      const result = repository.deleteProject(projectId, await readJson(request));
+      if (active.session.projectId === projectId) active.session.projectId = null;
+      return json(response, 200, result);
+    }
+  }
   if (!user.current_project || !active.session.projectId) return json(response, 409, { error: 'Najpierw wybierz projekt', code: 'PROJECT_REQUIRED' });
   return repository.withProject(active.session.projectId, () => handleProjectApi(request, response, url, user));
 }
@@ -246,6 +256,6 @@ export const server = createServer(async (request, response) => {
     return json(response, statusCode, { error: statusCode === 500 ? `Nieoczekiwany błąd serwera: ${error.message}` : error.message });
   }
 });
-if (process.argv[1] === fileURLToPath(import.meta.url)) server.listen(port, '0.0.0.0', () => console.log(`PLC Commissioning Hub V5.0.0 running on port ${port}`));
+if (process.argv[1] === fileURLToPath(import.meta.url)) server.listen(port, '0.0.0.0', () => console.log(`PLC Commissioning Hub V6.0.0 running on port ${port}`));
 function shutdown() { server.close(() => { repository.close(); process.exit(0); }); }
 process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);

@@ -242,6 +242,14 @@ CREATE TABLE IF NOT EXISTS task_assignees (
   PRIMARY KEY(task_id,user_id)
 ) STRICT, WITHOUT ROWID;
 
+CREATE TABLE IF NOT EXISTS status_assignees (
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  status_id INTEGER NOT NULL REFERENCES status_items(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(status_id,user_id)
+) STRICT, WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS open_points (
   id INTEGER PRIMARY KEY,
   project_id INTEGER NOT NULL DEFAULT 1 REFERENCES projects(id) ON DELETE CASCADE,
@@ -294,6 +302,7 @@ CREATE TABLE IF NOT EXISTS goals (
   title TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'Open',
+  priority TEXT NOT NULL DEFAULT 'Medium',
   due_date TEXT,
   created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -381,11 +390,23 @@ CREATE TABLE IF NOT EXISTS planner_entries (
   plan_date TEXT NOT NULL,
   shift TEXT NOT NULL DEFAULT 'Dzień',
   controller_group_id INTEGER REFERENCES controller_groups(id) ON DELETE CASCADE,
+  work_mode TEXT NOT NULL DEFAULT 'online' CHECK(work_mode IN ('online','offline')),
   transport_mode TEXT NOT NULL DEFAULT 'none' CHECK(transport_mode IN ('none','transport_work','transport_only')),
   note TEXT NOT NULL DEFAULT '',
   created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS calendar_item_dates (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point','note','goal')),
+  entity_id INTEGER NOT NULL,
+  calendar_date TEXT NOT NULL,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(project_id,entity_type,entity_id,calendar_date)
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS calendar_annotations (
@@ -417,6 +438,8 @@ CREATE INDEX IF NOT EXISTS idx_mentions_user ON entity_mentions(user_id,entity_t
 CREATE INDEX IF NOT EXISTS idx_entity_links_source ON entity_links(project_id,source_type,source_id);
 CREATE INDEX IF NOT EXISTS idx_entity_links_target ON entity_links(project_id,target_type,target_id);
 CREATE INDEX IF NOT EXISTS idx_task_assignees_user ON task_assignees(project_id,user_id,task_id);
+CREATE INDEX IF NOT EXISTS idx_status_assignees_user ON status_assignees(project_id,user_id,status_id);
 CREATE INDEX IF NOT EXISTS idx_project_user_areas_user ON project_user_areas(project_id,user_id);
 CREATE INDEX IF NOT EXISTS idx_planner_project_date ON planner_entries(project_id,plan_date,user_id);
 CREATE INDEX IF NOT EXISTS idx_calendar_annotations_date ON calendar_annotations(project_id,start_date,end_date);
+CREATE INDEX IF NOT EXISTS idx_calendar_item_dates ON calendar_item_dates(project_id,calendar_date,entity_type);

@@ -254,7 +254,7 @@ test('V4 isolates projects, supports hierarchy, immutable IDs, elements, links a
   }
 });
 
-test('V5 supports planner, calendar, weighted teamwork, canonical links and daily summaries', () => {
+test('V5 data remains compatible with planner, calendar, weighted teamwork, canonical links and daily summaries', () => {
   const temporary = temporaryDatabase();
   const repository = openDatabase(temporary.path);
   try {
@@ -266,8 +266,9 @@ test('V5 supports planner, calendar, weighted teamwork, canonical links and dail
       const root = repository.saveControllerGroup(null, { name: 'V5 Area' });
       const subarea = repository.saveControllerGroup(null, { name: 'V5 Subarea', parent_id: root.id });
       assert.throws(() => repository.saveControllerGroup(null, { name: 'Too deep', parent_id: subarea.id }), /maksymalnie/);
-      repository.saveUserAreas(worker.id, { area_ids: [root.id, subarea.id, root.id] });
-      assert.deepEqual(repository.users().find(item => item.id === worker.id).area_ids, [root.id, subarea.id]);
+      assert.throws(() => repository.saveUserAreas(worker.id, { area_ids: [root.id, subarea.id] }), /nadrzędnego/);
+      repository.saveUserAreas(worker.id, { area_ids: [subarea.id, subarea.id] });
+      assert.deepEqual(repository.users().find(item => item.id === worker.id).area_ids, [subarea.id]);
 
       const task = repository.saveTask(null, {
         controller: 'HB522', title: 'Weighted teamwork V5', direct_assignee_user_ids: [admin.id, worker.id, worker.id],
@@ -286,12 +287,15 @@ test('V5 supports planner, calendar, weighted teamwork, canonical links and dail
       repository.saveTask(task.id, { ...savedTask, controller: 'HB522', status: 'Done', links: savedTask.links }, admin);
 
       const planDate = new Date().toISOString().slice(0, 10);
-      repository.savePlannerDay({ user_id: worker.id, plan_date: planDate, entries: [
+      assert.throws(() => repository.savePlannerDay({ user_id: worker.id, plan_date: planDate, entries: [
         { controller_group_id: root.id, shift: 'Dzień', transport_mode: 'transport_work' },
         { controller_group_id: subarea.id, shift: 'Noc', transport_mode: 'none' }
+      ] }, admin), /nadrzędnego/);
+      repository.savePlannerDay({ user_id: worker.id, plan_date: planDate, entries: [
+        { controller_group_id: subarea.id, shift: 'Noc', work_mode: 'online', transport_mode: 'none' }
       ] }, admin);
       const planner = repository.planner(planDate, planDate);
-      assert.equal(planner.entries.filter(item => item.user_id === worker.id).length, 2);
+      assert.equal(planner.entries.filter(item => item.user_id === worker.id).length, 1);
 
       const annotation = repository.saveCalendarAnnotation(null, { title: 'V5 milestone', start_date: planDate, end_date: planDate, assigned_user_id: worker.id }, admin);
       assert.ok(repository.calendar({ from: planDate, to: planDate, types: ['annotation'], only_mine: true }, worker).events.some(item => item.entity_id === annotation.id));
@@ -303,11 +307,102 @@ test('V5 supports planner, calendar, weighted teamwork, canonical links and dail
       assert.throws(() => repository.dailySummary('2026-01-01', '2026-01-15'), /14 dni/);
 
       const backup = repository.projectBackup();
-      assert.equal(backup.version, 5);
+      assert.equal(backup.version, 6);
       assert.ok(Array.isArray(backup.tables.planner_entries));
       assert.ok(Array.isArray(backup.tables.task_assignees));
       assert.ok(Array.isArray(backup.tables.calendar_annotations));
+      assert.ok(Array.isArray(backup.tables.status_assignees));
+      assert.ok(Array.isArray(backup.tables.calendar_item_dates));
     });
+  } finally {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
+test('V6 supports four-level display paths, safe manpower modes, calendar placement, multi-owner status and protected project deletion', () => {
+  const temporary = temporaryDatabase();
+  const repository = openDatabase(temporary.path);
+  try {
+    const account = repository.authenticate('admin');
+    repository.withProject(1, () => {
+      const admin = repository.me(account.id, 1);
+      const firstController = repository.controllers().find(item => item.group_id);
+      assert.ok(firstController.display_name.includes(firstController.code));
+      assert.ok(firstController.hierarchy_label.endsWith(firstController.code));
+      assert.equal(firstController.hierarchy_path.length <= 3, true);
+
+      const workerARecord = repository.saveUser(null, { username: 'v6worker.a', display_name: 'V6 Worker A', password: 'secret123', project_role: 'user' });
+      const workerBRecord = repository.saveUser(null, { username: 'v6worker.b', display_name: 'V6 Worker B', password: 'secret123', project_role: 'user' });
+      const workerA = repository.me(workerARecord.id, 1);
+      const today = new Date().toISOString().slice(0, 10);
+      const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+      const roots = repository.controllerGroups().filter(item => !item.parent_id);
+      assert.ok(roots.length >= 2);
+
+      const status = repository.saveStatus(null, {
+        controller: firstController.code, category: 'Hardware', subcategory: '+24V Connection', status: 'In progress',
+        criticality: 'Critical', function_detail: 'V6 multi-owner status', responsible_user_ids: [workerA.id, workerBRecord.id, workerA.id]
+      }, admin);
+      assert.deepEqual(status.responsible_user_ids.sort((a, b) => a - b), [workerA.id, workerBRecord.id].sort((a, b) => a - b));
+      assert.match(status.responsible_name, /V6 Worker/);
+
+      assert.throws(() => repository.savePlannerDay({ user_id: workerA.id, plan_date: today, entries: [
+        { controller_group_id: roots[0].id, work_mode: 'online', shift: 'Dzień' },
+        { controller_group_id: roots[0].id, work_mode: 'offline', shift: 'Noc' }
+      ] }, admin), /dwukrotnie/);
+      const child = repository.controllerGroups().find(item => item.parent_id === roots[0].id);
+      if (child) assert.throws(() => repository.savePlannerDay({ user_id: workerA.id, plan_date: today, entries: [
+        { controller_group_id: roots[0].id, work_mode: 'online', shift: 'Dzień' },
+        { controller_group_id: child.id, work_mode: 'online', shift: 'Dzień' }
+      ] }, admin), /nadrzędnego/);
+      repository.savePlannerDay({ user_id: workerA.id, plan_date: today, entries: [
+        { controller_group_id: roots[0].id, work_mode: 'online', shift: 'Dzień', transport_mode: 'transport_work' },
+        { controller_group_id: roots[1].id, work_mode: 'offline', shift: 'Noc', transport_mode: 'none' }
+      ] }, admin);
+      const planner = repository.planner(today, today);
+      assert.equal(planner.users.some(item => item.id === admin.id), false);
+      assert.equal(planner.entries.filter(item => item.user_id === workerA.id && item.work_mode === 'online').length, 1);
+      assert.equal(planner.entries.filter(item => item.user_id === workerA.id && item.work_mode === 'offline').length, 1);
+      assert.ok(planner.mode_summary.today_online >= 1);
+      assert.ok(planner.mode_summary.today_offline >= 1);
+      assert.ok(planner.area_summary.some(item => item.today_people >= 1));
+
+      const task = repository.saveTask(null, { controller: firstController.code, title: 'V6 planned task', priority: 'High', due_date: tomorrow }, admin);
+      const point = repository.savePoint(null, { controller: firstController.code, title: 'V6 planned point', priority: 'Medium', reminder_date: tomorrow }, admin);
+      const note = repository.saveNote(null, { controller: firstController.code, note_date: today, shift: 'Dzień', type: 'General', content: 'V6 calendar note' }, admin);
+      const goal = repository.saveGoal(null, { controller: firstController.code, title: 'V6 calendar goal', priority: 'Low', due_date: tomorrow }, admin);
+      const assigned = repository.assignPlannerWork({ user_id: workerA.id, plan_date: today, items: [
+        { entity_type: 'task', entity_id: task.id }, { entity_type: 'status', entity_id: status.id }, { entity_type: 'point', entity_id: point.id }, { entity_type: 'task', entity_id: task.id }
+      ] }, admin);
+      assert.equal(assigned.assigned, 3);
+      assert.ok(repository.tasks('all', workerA).find(item => item.id === task.id).assignee_user_ids.includes(workerA.id));
+      assert.ok(repository.status('all', workerA).find(item => item.id === status.id).responsible_user_ids.includes(workerA.id));
+      assert.equal(repository.points('all', workerA).find(item => item.id === point.id).owner_user_id, workerA.id);
+
+      const placement = repository.saveCalendarItems({ calendar_date: today, items: [
+        { entity_type: 'task', entity_id: task.id }, { entity_type: 'status', entity_id: status.id }, { entity_type: 'point', entity_id: point.id },
+        { entity_type: 'goal', entity_id: goal.id }, { entity_type: 'note', entity_id: note.id }, { entity_type: 'task', entity_id: task.id }
+      ] }, admin);
+      assert.equal(placement.added, 5);
+      assert.equal(repository.saveCalendarItems({ calendar_date: today, items: [{ entity_type: 'task', entity_id: task.id }] }, admin).added, 0);
+      const calendar = repository.calendar({ from: today, to: tomorrow, types: ['task', 'status', 'point', 'goal', 'note'], only_mine: false }, admin);
+      assert.ok(['task', 'status', 'point', 'goal', 'note'].every(type => calendar.events.some(item => item.entity_type === type)));
+      const critical = repository.calendar({ from: today, to: today, types: ['status'], priorities: ['Critical'], only_mine: true }, workerA);
+      assert.ok(critical.events.some(item => item.entity_id === status.id));
+
+      repository.saveSetting('my_summary_area_source', 'planner');
+      const mine = repository.mySummary(workerA);
+      assert.equal(mine.area_source, 'planner');
+      assert.ok(mine.assigned_areas.some(item => [roots[0].id, roots[1].id].includes(item.id)));
+    });
+
+    const removable = repository.projects().find(item => item.id !== 1);
+    assert.throws(() => repository.deleteProject(removable.id, { project_code: removable.code, confirmation: 'wrong' }), /nieprawidłowe/);
+    assert.equal(repository.deleteProject(removable.id, { project_code: removable.code, confirmation: `USUŃ ${removable.code}` }).deleted, true);
+    assert.equal(repository.projects().length, 1);
+    const remaining = repository.projects()[0];
+    assert.throws(() => repository.deleteProject(remaining.id, { project_code: remaining.code, confirmation: `USUŃ ${remaining.code}` }), /ostatniego/);
   } finally {
     repository.close();
     rmSync(temporary.directory, { recursive: true, force: true });

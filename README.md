@@ -1,10 +1,24 @@
-# PLC Commissioning Hub V5.0.0
+# PLC Commissioning Hub V6.0.0
 
 Samodzielna aplikacja WWW do zarządzania uruchomieniem PLC, zespołem i kilkoma projektami. Działa na Node.js 24 oraz SQLite, bez zewnętrznych usług i bez zależności npm.
 
-## Najważniejsze zmiany V5
+## Najważniejsze zmiany V6
 
-Wydanie V5 rozwija poprzednią wersję bez zmiany konfiguracji Railway. Najważniejsze nowe moduły to Planner manpoweru, zintegrowany Kalendarz, globalna Historia oraz codzienne podsumowanie zmian. Interfejs podsumowań został zagęszczony, a powiązania pomiędzy rekordami są kanoniczne i nie mogą się duplikować.
+Wydanie V6 rozwija poprzednią wersję bez zmiany konfiguracji Railway. Porządkuje czteropoziomową hierarchię projektu, rozbudowuje Planner o tryb online/offline i operacje kopiowania, dodaje cele i priorytety do Kalendarza oraz umożliwia bezpieczne usuwanie projektów. Interfejs Plannera, zadań, Statusu, Historii i podsumowań został dodatkowo zagęszczony.
+
+### Skrót zmian V6
+
+- pełna ścieżka `projekt → obszar → podobszar → sterownik`; nazwa liścia jest prezentowana jako np. `UB51 PLC1`;
+- dwustopniowo zabezpieczone usuwanie projektu, dostępne wyłącznie administratorowi systemu;
+- przełączane źródło obszarów w „Moim podsumowaniu”: konfiguracja użytkownika albo Planner z najbliższych 14 dni;
+- Planner bez administratorów systemu, z osobnymi sekcjami i statystykami `online · fabryka` oraz `offline · biuro`;
+- kopiowanie pojedynczego przypisania lub całego dnia i wklejanie do innej osoby/daty z menu prawego przycisku;
+- blokowanie duplikatów oraz jednoczesnego przypisania obszaru nadrzędnego i jego podobszaru;
+- przypisywanie z Plannera zadań, Statusu i otwartych punktów do osoby;
+- Kalendarz zawiera cele, filtry priorytetów, czytelny przełącznik „tylko moje” i menu prawego przycisku do dodawania lub wyboru elementów;
+- Status pozwala przypisać wiele osób odpowiedzialnych, bez dawnego pola „Wspomniane osoby”;
+- Overview pokazuje bezpośrednio trend KPI według hierarchii obszarów i sterowników;
+- kompaktowe karty zadań z procentem i paskiem postępu oraz klikalne, zagęszczone wiersze Historii.
 
 ### Projekty, użytkownicy i uprawnienia
 
@@ -27,7 +41,7 @@ Wydanie V5 rozwija poprzednią wersję bez zmiany konfiguracji Railway. Najważn
 
 ### Sterowniki i konfiguracja
 
-- hierarchia ograniczona do trzech poziomów: projekt → obszar → podobszar;
+- hierarchia ograniczona do czterech poziomów: projekt → obszar → podobszar → sterownik;
 - wszystkie listy konfiguracji mają definiowaną kolejność;
 - listy konfiguracyjne są prezentowane w kompaktowych, przewijanych panelach z możliwością otwarcia pełnego okna;
 - grupy funkcyjne konfigurowane osobno dla każdego sterownika;
@@ -52,7 +66,9 @@ Wydanie V5 rozwija poprzednią wersję bez zmiany konfiguracji Railway. Najważn
 ### Planner, Kalendarz, Historia i podsumowanie dnia
 
 - Planner manpoweru pokazuje aktywnych pracowników w wierszach i kolejne dni pogrupowane na tygodnie oraz miesiące;
-- moderator, administrator projektu i administrator systemu mogą przypisać na jeden dzień wiele obszarów, zmianę oraz `T` (transport) albo `T+P` (transport i praca);
+- moderator, administrator projektu i administrator systemu mogą przypisać na jeden dzień wiele obszarów, zmianę oraz `T` (transport) albo `T+P` (transport i praca); administrator systemu nie jest pokazywany jako pracownik planowany;
+- praca online na fabryce i offline w biurze jest grupowana i liczona osobno;
+- menu prawego przycisku umożliwia kopiowanie wpisu/dnia oraz przypisanie pracy z istniejących zadań, Statusu i otwartych punktów;
 - Planner pokazuje obciążenie zadaniami, otwartymi punktami, Statusem i notatkami oraz podsumowania liczby osób per obszar i zmiana;
 - Kalendarz scala terminy ze Statusu, zadań i otwartych punktów z notatkami oraz adnotacjami koordynacyjnymi;
 - dostępne są widoki dzień, tydzień, miesiąc i zakres własny do 31 dni oraz filtry typu danych, kategorii i „tylko moje”;
@@ -156,9 +172,9 @@ Po redeployu trzeba zalogować się ponownie, ponieważ sesje są przechowywane 
 
 ## Aktualizacja istniejącej bazy
 
-V5 automatycznie migruje bazę V2, V3 lub V4, nie kasując rekordów. Dotychczasowe dane zostają przypisane do projektu W371, a istniejący administrator staje się administratorem systemu i projektu. Migracja tworzy między innymi struktury Plannera, Kalendarza, przypisań obszarów, podkategorii grup funkcyjnych, wieloosobowych zadań i ważonych podzadań. Starsze powiązania są scalane do jednej kanonicznej relacji.
+V6 automatycznie migruje bazy ze starszych wydań, nie kasując rekordów. Dotychczasowe dane zostają przypisane do projektu W371, a istniejący administrator staje się administratorem systemu i projektu. Migracja dodaje między innymi tryb pracy Plannera, wieloosobowy Status, priorytety celów i ręczne umieszczanie istniejących elementów w Kalendarzu. Starsze powiązania są scalane do jednej kanonicznej relacji.
 
-Przed wdrożeniem produkcyjnym zalecany jest snapshot Railway Volume lub kopia pliku `/app/data/plc-status.db`. Po uruchomieniu V5 można też używać kopii projektowych w **Konfiguracja → Backup projektu**.
+Przed wdrożeniem produkcyjnym zalecany jest snapshot Railway Volume lub kopia pliku `/app/data/plc-status.db`. Po uruchomieniu V6 można też używać kopii projektowych w **Konfiguracja → Backup projektu**.
 
 Jeśli w fazie koncepcyjnej potrzebny jest czysty start, usuń wyłącznie pliki:
 
@@ -170,7 +186,7 @@ Jeśli w fazie koncepcyjnej potrzebny jest czysty start, usuń wyłącznie pliki
 
 Następnie wykonaj redeploy. Nie usuwaj całego Volume, jeśli znajdują się na nim inne pliki.
 
-## Uprawnienia prototypowe V5
+## Uprawnienia prototypowe V6
 
 | Czynność | Administrator systemu | Administrator projektu | Moderator | Użytkownik |
 |---|:---:|:---:|:---:|:---:|
@@ -203,7 +219,7 @@ Kontrola zdrowia i wersji:
 curl http://localhost:8080/api/health
 ```
 
-Oczekiwany release: `5.0.0`.
+Oczekiwany release: `6.0.0`.
 
 ## Testy automatyczne
 
@@ -213,4 +229,4 @@ W Node.js 24 lub nowszym:
 npm test
 ```
 
-Testy obejmują tworzenie nowej bazy, migracje V2/V3/V4, kolejność konfiguracji, grupy funkcyjne, izolację projektów, hierarchię, niezmienność ID, elementy grup, backup/restore, Planner, Kalendarz, ważone zadania, wieloosobowe przypisania, kanoniczne powiązania i podsumowanie dnia.
+Testy obejmują tworzenie nowej bazy, migracje, kolejność konfiguracji, grupy funkcyjne, izolację i zabezpieczone usuwanie projektów, hierarchię, niezmienność ID, backup/restore, tryby Plannera, Kalendarz z celami, ważone zadania, wieloosobowy Status, kanoniczne powiązania i podsumowanie dnia.
