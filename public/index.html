@@ -5,13 +5,14 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#172554">
   <title>PLC Commissioning Hub</title>
-  <link rel="stylesheet" href="/styles.css?v=7.0.0">
-  <script type="module" src="/app.js?v=7.0.0"></script>
+  <link rel="stylesheet" href="/styles.css?v=8.0.0">
+  <script type="module" src="/app.js?v=8.0.0"></script>
 </head>
 <body>
   <header class="topbar">
     <div class="logo">PLC</div>
-    <div class="brand"><strong>Commissioning Hub</strong><span>Multi-project status & team workspace · V7.0</span></div>
+    <div class="brand"><strong>Commissioning Hub</strong><span>Multi-project status & team workspace · V8.0</span></div>
+    <div id="top-news" class="top-news" aria-label="Najnowsze wiadomości projektu"></div>
     <div class="top-actions"><button id="daily-summary-open" class="ghost" title="Podsumowanie zmian">☀ Podsumowanie</button><button id="project-switch" class="ghost project-chip">Wybierz projekt</button><button id="theme-switch" class="ghost" title="Zmień wygląd">◐ Motyw</button><div class="userbox"><span id="me"></span><button id="logout" class="ghost">Wyloguj</button></div></div>
   </header>
   <div class="layout">
@@ -21,6 +22,7 @@
       </label>
       <nav id="nav">
         <button data-view="overview" class="active"><span>◫</span><span>Overview</span></button>
+        <button data-view="announcements"><span>◆</span><span>Informator</span><b id="n-announcements">0</b></button>
         <button data-view="mine"><span>◉</span><span>Moje podsumowanie</span></button>
         <button data-view="planner"><span>▥</span><span>Planner</span></button>
         <button data-view="calendar"><span>▣</span><span>Kalendarz</span></button>
@@ -102,7 +104,7 @@
     <form id="action-form">
       <header class="dialog-head"><div><h2 id="action-title">Potwierdzenie</h2><p id="action-description"></p></div><button type="button" class="x" id="action-close">×</button></header>
       <div id="action-fields" class="formgrid"></div>
-      <footer class="dialog-actions"><span></span><button type="button" class="secondary" id="action-cancel">Anuluj</button><button id="action-submit" class="primary">Zastosuj</button></footer>
+      <footer class="dialog-actions"><button type="button" id="action-secondary" class="danger" hidden></button><span></span><button type="button" class="secondary" id="action-cancel">Anuluj</button><button id="action-submit" class="primary">Zastosuj</button></footer>
     </form>
   </dialog>
 
@@ -121,6 +123,19 @@
 
   <dialog id="planner-dialog" class="record-dialog">
     <form id="planner-form"><header class="dialog-head"><div><h2 id="planner-dialog-title">Plan dnia</h2><p id="planner-dialog-description"></p></div><button type="button" class="x" id="planner-dialog-close">×</button></header><div id="planner-entry-list" class="planner-entry-list"></div><button type="button" class="secondary" id="planner-entry-add">+ Dodaj obszar / transport</button><footer class="dialog-actions"><span></span><button type="button" class="secondary" id="planner-dialog-cancel">Anuluj</button><button class="primary">Zapisz plan dnia</button></footer></form>
+  </dialog>
+
+  <dialog id="planner-requirements-dialog" class="wide-dialog planner-requirements-dialog">
+    <header class="dialog-head"><div><h2>Zapotrzebowanie kadrowe</h2><p>Określ wymaganą obsadę ON i OFF dla obszaru oraz dnia.</p></div><button type="button" class="x" id="planner-requirements-close">×</button></header>
+    <form id="planner-requirements-form" class="requirements-form">
+      <label class="field"><span>Dzień</span><input type="date" name="plan_date" required></label>
+      <label class="field"><span>Obszar</span><select name="controller_group_id" required></select></label>
+      <label class="field"><span>Wymagane ON</span><input type="number" name="online_required" min="0" max="999" value="0"></label>
+      <label class="field"><span>Wymagane OFF</span><input type="number" name="offline_required" min="0" max="999" value="0"></label>
+      <label class="field requirement-note"><span>Notatka</span><input name="note" placeholder="Opcjonalne uzasadnienie"></label>
+      <button class="primary">Zapisz wymaganie</button>
+    </form>
+    <div id="planner-requirements-list" class="requirements-list"></div>
   </dialog>
 
   <dialog id="calendar-filter-dialog" class="choice-dialog">

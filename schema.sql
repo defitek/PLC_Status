@@ -410,6 +410,50 @@ CREATE TABLE IF NOT EXISTS planner_entries (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS planner_requirements (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  controller_group_id INTEGER NOT NULL REFERENCES controller_groups(id) ON DELETE CASCADE,
+  plan_date TEXT NOT NULL,
+  work_mode TEXT NOT NULL CHECK(work_mode IN ('online','offline')),
+  required_count INTEGER NOT NULL DEFAULT 0 CHECK(required_count >= 0),
+  note TEXT NOT NULL DEFAULT '',
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(project_id,controller_group_id,plan_date,work_mode)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS announcements (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  info_link TEXT NOT NULL DEFAULT '',
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS announcement_scopes (
+  announcement_id INTEGER NOT NULL REFERENCES announcements(id) ON DELETE CASCADE,
+  controller_group_id INTEGER NOT NULL REFERENCES controller_groups(id) ON DELETE CASCADE,
+  PRIMARY KEY(announcement_id,controller_group_id)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS announcement_users (
+  announcement_id INTEGER NOT NULL REFERENCES announcements(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY(announcement_id,user_id)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS announcement_links (
+  announcement_id INTEGER NOT NULL REFERENCES announcements(id) ON DELETE CASCADE,
+  entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point','note','goal')),
+  entity_id INTEGER NOT NULL,
+  PRIMARY KEY(announcement_id,entity_type,entity_id)
+) STRICT, WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS calendar_item_dates (
   id INTEGER PRIMARY KEY,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -453,5 +497,7 @@ CREATE INDEX IF NOT EXISTS idx_task_assignees_user ON task_assignees(project_id,
 CREATE INDEX IF NOT EXISTS idx_status_assignees_user ON status_assignees(project_id,user_id,status_id);
 CREATE INDEX IF NOT EXISTS idx_project_user_areas_user ON project_user_areas(project_id,user_id);
 CREATE INDEX IF NOT EXISTS idx_planner_project_date ON planner_entries(project_id,plan_date,user_id);
+CREATE INDEX IF NOT EXISTS idx_planner_requirements_date ON planner_requirements(project_id,plan_date,controller_group_id);
+CREATE INDEX IF NOT EXISTS idx_announcements_project ON announcements(project_id,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_calendar_annotations_date ON calendar_annotations(project_id,start_date,end_date);
 CREATE INDEX IF NOT EXISTS idx_calendar_item_dates ON calendar_item_dates(project_id,calendar_date,entity_type);

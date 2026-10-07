@@ -1,12 +1,12 @@
 const state = {
   view: 'overview', controller: 'all', me: null, projects: [], controllerGroups: [], controllers: [], users: [],
   config: { categories: [], task_categories: [], function_groups: [], options: [], settings: {} },
-  overview: null, mine: null, dashboard: {}, status: [], tasks: [], points: [], notes: [], goals: [], planner: null, calendar: null, history: [],
+  overview: null, announcements: [], mine: null, dashboard: {}, status: [], tasks: [], points: [], notes: [], goals: [], planner: null, calendar: null, history: [],
   dialog: null, dialogInitial: '', dirtyCloseAttempt: new WeakSet(), goalDraftLinks: [], goalPickerCollections: null, linkDraft: [], taskMode: 'board', taskShowCompleted: false, pointMode: 'list', trendPeriod: 'week',
   functionGroupController: '', functionPointGroup: null, functionPointDraft: [], quickStatusDraft: [],
   notesFrom: '', notesTo: '', notesWeek: '', draggingTask: false, plannerFrom: '', plannerDays: 14,
-  plannerCell: null, plannerClipboard: null, calendarFrom: '', calendarTo: '', calendarMode: 'week', calendarTypes: ['task', 'point', 'status', 'goal', 'note', 'annotation'], calendarPriorities: ['Low', 'Medium', 'High', 'Critical'], calendarOnlyMine: false, calendarCategory: '',
-  kpiModules: ['status', 'tasks', 'points', 'goals'], areaTrendScope: 'all', areaTrendMetric: 'combined', hierarchyTrendMode: 'combined', globalTrendMode: 'combined', overviewDetailed: false, linkPickerAllowed: [], linkPickerDraft: [], linkPickerCollections: null, actionResolve: null, actionDialogGeneration: 0, actionClosingGeneration: 0, configExpanded: null, dailySummaryOpening: false,
+  plannerCell: null, plannerClipboard: null, plannerDragEntry: null, calendarFrom: '', calendarTo: '', calendarMode: 'week', calendarTypes: ['task', 'point', 'status', 'goal', 'note', 'annotation'], calendarPriorities: ['Low', 'Medium', 'High', 'Critical'], calendarOnlyMine: false, calendarCategory: '',
+  kpiModules: ['status', 'tasks', 'points', 'goals'], globalTrendMode: 'combined', overviewDetailed: false, detailedKpiMode: 'combined', detailedKpiPeriod: 'week', linkPickerAllowed: [], linkPickerDraft: [], linkPickerCollections: null, actionResolve: null, actionDialogGeneration: 0, actionClosingGeneration: 0, configPanel: null, configScroll: 0, hierarchySelection: null, dailySummaryOpening: false,
   selectionContext: null, selectionDraft: [], selectionCollections: null,
   grouping: { status: 'category', tasks: '', notes: 'controller', history: 'hierarchy' },
   sort: { status: { key: '', direction: 1 }, tasks: { key: '', direction: 1 }, points: { key: '', direction: 1 } }
@@ -25,12 +25,13 @@ const displayDateTime = value => value ? new Intl.DateTimeFormat('pl-PL', { date
 
 const pageCopy = {
   overview: ['Overview', 'Liczbowy obraz gotowości całego projektu', ''],
+  announcements: ['Informator', 'Wiadomości operacyjne, decyzje i komunikaty projektu', '+ Nowa wiadomość'],
   mine: ['Moje podsumowanie', 'Twoje zadania, odpowiedzialności, wzmianki i aktywność', ''],
   planner: ['Planner', 'Planowanie manpoweru, obszarów, zmian i transportu', ''],
   calendar: ['Kalendarz', 'Zintegrowany harmonogram projektu do 31 dni', '+ Adnotacja'],
   status: ['Status', 'Testy uruchomieniowe według kolejności projektu', '+ Dodaj test'],
   tasks: ['Zadania', 'Plan pracy zespołu, checklisty i odpowiedzialności', '+ Nowe zadanie'],
-  goals: ['Cele', 'Kamienie milowe łączące status, zadania i otwarte punkty', '+ Nowy cel'],
+  goals: ['Cele', 'Cele projektu łączące status, zadania i otwarte punkty', '+ Nowy cel'],
   points: ['Otwarte punkty', 'Problemy, oczekiwania i przypomnienia', '+ Nowy punkt'],
   notes: ['Dzienne notatki', 'Historia zmianowa i powiązania z pracą zespołu', '+ Dodaj notatkę'],
   history: ['Historia', 'Wszystkie zmiany w danych projektu z bezpośrednim przejściem', ''],
@@ -216,6 +217,7 @@ function bindShell() {
   $('#quick-status-save').addEventListener('click', saveQuickStatus);
   $('#action-close').addEventListener('click', () => finishAction(null));
   $('#action-cancel').addEventListener('click', () => finishAction(null));
+  $('#action-secondary').addEventListener('click', () => finishAction({ __action: 'secondary' }));
   $('#action-dialog').addEventListener('close', () => {
     if ($('#action-dialog').dataset.actionCompleted === '1') { $('#action-dialog').dataset.actionCompleted = ''; return; }
     if (!state.actionResolve) return;
@@ -235,11 +237,13 @@ function bindShell() {
   $('#planner-dialog-cancel').addEventListener('click', () => $('#planner-dialog').close());
   $('#planner-entry-add').addEventListener('click', () => { $('#planner-entry-list').insertAdjacentHTML('beforeend', plannerEntryRow()); bindPlannerEntryRows(); });
   $('#planner-form').addEventListener('submit', savePlannerCell);
+  $('#planner-requirements-close').addEventListener('click', () => $('#planner-requirements-dialog').close());
+  $('#planner-requirements-form').addEventListener('submit', savePlannerRequirement);
   $('#calendar-filter-close').addEventListener('click', () => $('#calendar-filter-dialog').close());
   $('#calendar-filter-cancel').addEventListener('click', () => $('#calendar-filter-dialog').close());
   $('#calendar-filter-form').addEventListener('submit', applyCalendarFilters);
-  $('#config-full-close').addEventListener('click', () => $('#config-full-dialog').close());
-  $('#config-full-dialog').addEventListener('close', restoreConfigCard);
+  $('#config-full-close').addEventListener('click', () => { state.configPanel = null; $('#config-full-dialog').close(); });
+  $('#config-full-dialog').addEventListener('close', () => { if (!$('#config-full-dialog').dataset.refreshing) state.configPanel = null; });
   $('#entity-selection-close').addEventListener('click', closeEntitySelection);
   $('#entity-selection-cancel').addEventListener('click', closeEntitySelection);
   $('#entity-selection-search').addEventListener('input', renderEntitySelection);
@@ -360,12 +364,15 @@ function installDialogOutsideClose() {
   });
 }
 
-function uiForm({ title, description = '', fields = [], submitLabel = 'Zastosuj', danger = false }) {
+function uiForm({ title, description = '', fields = [], submitLabel = 'Zastosuj', danger = false, secondaryLabel = '', secondaryDanger = true }) {
   const dialog = $('#action-dialog');
   $('#action-title').textContent = title;
   $('#action-description').textContent = description;
   $('#action-submit').textContent = submitLabel;
   $('#action-submit').className = danger ? 'danger' : 'primary';
+  $('#action-secondary').hidden = !secondaryLabel;
+  $('#action-secondary').textContent = secondaryLabel;
+  $('#action-secondary').className = secondaryDanger ? 'danger' : 'secondary';
   $('#action-fields').innerHTML = fields.map(field => {
     const optionsHtml = (field.options || []).map(option => {
       const value = typeof option === 'object' ? option.value : option;
@@ -403,6 +410,7 @@ function finishAction(result) {
 }
 
 async function loadData() {
+  if ($('#config-full-dialog')?.open) state.configScroll = $('#config-full-content')?.scrollTop || 0;
   $('#content').innerHTML = '<div class="loading">Ładowanie danych…</div>';
   const query = `?controller=${encodeURIComponent(state.controller)}`;
   state.notesFrom ||= twoWeeksAgo();
@@ -415,8 +423,8 @@ async function loadData() {
   const calendarParams = new URLSearchParams({ controller: state.controller, from: state.calendarFrom, to: state.calendarTo, only_mine: state.calendarOnlyMine ? '1' : '0', category: state.calendarCategory });
   state.calendarTypes.forEach(type => calendarParams.append('type', type));
   state.calendarPriorities.forEach(priority => calendarParams.append('priority', priority));
-  [state.controllerGroups, state.controllers, state.users, state.config, state.overview, state.mine, state.dashboard, state.status, state.tasks, state.points, state.notes, state.goals, state.planner, state.calendar, state.history] = await Promise.all([
-    api('/api/controller-groups'), api('/api/controllers'), api('/api/users'), api('/api/config'), api('/api/overview' + query), api('/api/my-summary'),
+  [state.controllerGroups, state.controllers, state.users, state.config, state.overview, state.announcements, state.mine, state.dashboard, state.status, state.tasks, state.points, state.notes, state.goals, state.planner, state.calendar, state.history] = await Promise.all([
+    api('/api/controller-groups'), api('/api/controllers'), api('/api/users'), api('/api/config'), api('/api/overview' + query), api('/api/announcements'), api('/api/my-summary'),
     api('/api/dashboard' + query), api('/api/status' + query), api('/api/tasks' + query), api('/api/open-points' + query),
     api('/api/daily-notes' + notesQuery), api('/api/goals' + query), api('/api/planner' + plannerQuery), api('/api/calendar?' + calendarParams), api('/api/history?limit=200')
   ]);
@@ -427,6 +435,7 @@ async function loadData() {
   const current = state.controller;
   fillScopeSelect($('#controller'), current);
   updateCounts();
+  renderTopNews();
   render();
   const summaryKey = `daily-summary:${state.me.current_project?.id}:${today()}`;
   if (state.me.current_project && !sessionStorage.getItem(summaryKey) && !state.dailySummaryOpening) {
@@ -436,6 +445,7 @@ async function loadData() {
 }
 
 function updateCounts() {
+  $('#n-announcements').textContent = state.announcements.length;
   $('#n-status').textContent = state.status.length;
   $('#n-tasks').textContent = state.tasks.filter(item => item.status !== 'Done').length;
   $('#n-goals').textContent = state.goals.filter(item => item.status !== 'Done').length;
@@ -456,7 +466,51 @@ function render() {
   $('#desc').textContent = copy[1];
   $('#add').textContent = copy[2];
   $('#add').hidden = !copy[2];
-  ({ overview: renderOverview, mine: renderMine, planner: renderPlanner, calendar: renderCalendar, status: renderStatus, tasks: renderTasks, goals: renderGoals, points: renderPoints, notes: renderNotes, history: renderHistory, settings: renderSettings })[state.view]();
+  ({ overview: renderOverview, announcements: renderAnnouncements, mine: renderMine, planner: renderPlanner, calendar: renderCalendar, status: renderStatus, tasks: renderTasks, goals: renderGoals, points: renderPoints, notes: renderNotes, history: renderHistory, settings: renderSettings })[state.view]();
+}
+
+function canManageAnnouncements() { return ['system_admin', 'project_admin'].includes(state.me.role); }
+
+function safeExternalLink(value) {
+  const link = String(value || '').trim();
+  return /^(https?:\/\/|mailto:)/i.test(link) ? link : '';
+}
+
+function announcementAudience(item) {
+  const scopes = (item.scopes || []).map(scope => scope.path_label || scope.name);
+  return scopes.length ? scopes.join(', ') : 'Cały projekt';
+}
+
+function renderTopNews() {
+  const root = $('#top-news');
+  if (!root) return;
+  const latest = state.announcements.slice(0, 5);
+  root.innerHTML = latest.length ? `<span class="top-news-label">Informator</span><div>${latest.map(item => `<button type="button" data-news-id="${item.id}" title="${escapeHtml(item.title)}"><b>${escapeHtml(item.title)}</b><small>${displayDate(item.created_at.slice(0, 10))}</small></button>`).join('')}</div>` : '<span class="top-news-empty">Brak nowych komunikatów</span>';
+  root.querySelectorAll('[data-news-id]').forEach(button => button.addEventListener('click', () => openAnnouncementDetails(state.announcements.find(item => item.id === Number(button.dataset.newsId)))));
+}
+
+function openAnnouncementDetails(item) {
+  if (!item) return;
+  $('#insight-title').textContent = item.title;
+  $('#insight-description').textContent = `${announcementAudience(item)} · ${item.created_by_name || 'System'} · ${displayDateTime(item.created_at)}`;
+  const href = safeExternalLink(item.info_link);
+  $('#insight-content').innerHTML = `<article class="announcement-detail"><p>${escapeHtml(item.content).replace(/\n/g, '<br>')}</p>${href ? `<a class="announcement-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">Otwórz dołączony link ↗</a>` : ''}<div class="announcement-audience"><span><b>Zakres:</b> ${escapeHtml(announcementAudience(item))}</span><span><b>Dotyczy bezpośrednio:</b> ${escapeHtml((item.recipient_names || []).join(', ') || 'bez wskazania osób')}</span></div><div class="goal-links">${(item.links || []).map(link => linkChip(link.entity_type, link.entity_id, ({ status: 'Status', task: 'Zadanie', point: 'Otwarty punkt', note: 'Dziennik', goal: 'Cel' })[link.entity_type])).join('') || '<span class="sub">Brak przypiętych elementów</span>'}</div>${canManageAnnouncements() ? `<button class="primary" id="edit-announcement-detail">Edytuj wiadomość</button>` : ''}</article>`;
+  bindJumpItems();
+  $('#edit-announcement-detail')?.addEventListener('click', () => { $('#insight-dialog').close(); openRecord('announcements', item); });
+  $('#insight-dialog').showModal();
+}
+
+function renderAnnouncements() {
+  $('#add').hidden = !canManageAnnouncements();
+  $('#content').innerHTML = `<section class="announcements-feed">${state.announcements.map(item => {
+    const href = safeExternalLink(item.info_link);
+    return `<article class="announcement-card" data-announcement-id="${item.id}"><header><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.created_by_name || 'System')} · ${displayDateTime(item.created_at)}</small></span><span class="badge blue">${escapeHtml(announcementAudience(item))}</span></header><p>${escapeHtml(item.content)}</p><footer><span>${(item.recipient_names || []).length ? `Osoby: ${escapeHtml(item.recipient_names.join(', '))}` : 'Wiadomość ogólna'}</span><span>${(item.links || []).length} powiązanych elementów${href ? ' · link' : ''}</span></footer></article>`;
+  }).join('') || '<div class="empty">Informator nie zawiera jeszcze wiadomości.</div>'}</section>`;
+  $$('.announcement-card').forEach(card => card.addEventListener('click', event => {
+    if (event.target.closest('a,button')) return;
+    const item = state.announcements.find(value => value.id === Number(card.dataset.announcementId));
+    if (canManageAnnouncements()) openRecord('announcements', item); else openAnnouncementDetails(item);
+  }));
 }
 
 function metricCard(title, metric, completeKey, details) {
@@ -474,33 +528,24 @@ function renderOverview() {
     ['points', 'Otwarte punkty', data.overall.points || {}, 'closed', 'reminders_overdue'],
     ['goals', 'Cele projektu', data.overall.goals || {}, 'done', 'overdue']
   ];
-  const areaRows = [...data.controllers].sort((a, b) => {
-    const risk = item => (item.metrics.status.blocked || 0) * 4 + (item.metrics.tasks.overdue || 0) * 3 + (item.metrics.points.reminders_overdue || 0) * 2 + (item.metrics.goals?.overdue || 0) * 2 - item.metrics.status.progress / 20;
-    return risk(b) - risk(a) || controllerHierarchyOrder(a) - controllerHierarchyOrder(b);
-  });
   const hierarchyRows = data.hierarchy_trends || [];
-  if (state.areaTrendScope !== 'all' && !hierarchyRows.some(item => item.scope === state.areaTrendScope)) state.areaTrendScope = 'all';
-  const visibleHierarchy = [];
-  const collectHierarchy = scope => hierarchyRows.filter(item => item.parent_scope === scope).forEach(item => { visibleHierarchy.push(item); if (item.type === 'group') collectHierarchy(item.scope); });
-  collectHierarchy(state.areaTrendScope);
-  if (state.areaTrendScope !== 'all') { const selected = hierarchyRows.find(item => item.scope === state.areaTrendScope); if (selected) visibleHierarchy.unshift(selected); }
+  const currentScope = data.scope || state.controller || 'all';
+  const areaRows = state.overviewDetailed
+    ? data.controllers.map(item => ({ ...item, scope: item.code, label: item.display_name || item.leaf_code, path_label: item.hierarchy_label || item.group_path_label, type: 'controller' }))
+    : hierarchyRows.filter(item => item.parent_scope === currentScope || (currentScope !== 'all' && item.scope === currentScope && !hierarchyRows.some(child => child.parent_scope === currentScope)));
   const attention = (data.overall.status.blocked || 0) + (data.overall.tasks.overdue || 0) + (data.overall.points.reminders_overdue || 0) + (data.overall.goals?.overdue || 0);
   $('#content').innerHTML = `<section class="overview-command"><div><span class="eyebrow">${escapeHtml(scopeLabel)}</span><h2>${escapeHtml(state.me.current_project.name)}</h2><p>Aktualny obraz wykonania · ${data.controllers.length} sterowników</p></div><div class="score-ring" style="--score:${score}"><strong>${score}%</strong><small>realizacji</small></div><div class="attention-strip" data-insight="attention"><strong>${attention}</strong><span>elementów wymaga uwagi</span><b>Otwórz listę →</b></div></section>
   <section class="compact-kpis">${modules.map(([key, title, metric, doneKey, riskKey]) => `<button class="compact-kpi" data-insight="${key}"><span><b>${escapeHtml(title)}</b><small>${metric[doneKey] || 0}/${metric.total || 0} zakończonych</small></span><strong>${metric.progress || 0}%</strong><i class="progress"><u style="width:${metric.progress || 0}%"></u></i><em class="${metric[riskKey] ? 'risk' : ''}">${metric[riskKey] || 0} ${key === 'status' ? 'blokad' : key === 'points' ? 'alarmów' : 'po terminie'}</em></button>`).join('')}</section>
-  <section class="area-radar panel"><div class="section-title"><div><strong>Realizacja według sterowników</strong><small>Oddzielny wynik dla statusu, zadań, otwartych punktów i celów.</small></div><button class="mini" id="overview-detail-toggle">${state.overviewDetailed ? 'Widok skrócony' : 'Widok szczegółowy'}</button></div><div class="area-compact-head four"><span>Sterownik</span><span>Status</span><span>Zadania</span><span>Punkty</span><span>Cele</span></div>${areaRows.map(item => `<button class="area-compact-row four" data-controller-scope="${escapeHtml(item.code)}"><span><b>${escapeHtml(item.display_name || item.leaf_code)}</b><small>${escapeHtml(item.group_path_label || item.area || '')}</small></span>${['status', 'tasks', 'points', 'goals'].map(key => `<span><b>${item.metrics[key]?.progress || 0}%</b><i><u style="width:${item.metrics[key]?.progress || 0}%"></u></i><small>${item.metrics[key]?.total || 0} pozycji</small></span>`).join('')}</button>`).join('')}</section>
-  ${state.overviewDetailed ? renderStatusBreakdown(data.status_breakdown || []) : ''}
-  <section class="hierarchy-trends panel"><div class="trend-head"><div><strong>Trend według hierarchii projektu</strong><small>Łączny KPI lub rozbicie na wszystkie cztery moduły.</small></div><div><select id="area-trend-scope"><option value="all">Cały projekt</option>${hierarchyRows.filter(item => item.type === 'group').map(item => `<option value="${item.scope}">${'  '.repeat(Math.max(0, item.depth - 1))}${escapeHtml(item.path_label)}</option>`).join('')}</select><select id="hierarchy-trend-mode"><option value="combined">Łączne KPI</option><option value="split">Z podziałem</option></select></div></div><div class="hierarchy-trend-list">${visibleHierarchy.map(hierarchyTrendRow).join('') || '<div class="empty compact-empty">Brak danych trendu dla wybranego zakresu.</div>'}</div></section>
-  <section class="trend-panel"><div class="trend-head"><div><strong>Trend KPI · procent realizacji i wielkość zakresu</strong><small>Globalny wynik całego zakresu lub porównanie modułów w tym samym okresie.</small></div><div><select id="global-trend-mode"><option value="combined">Łączne KPI</option><option value="split">Z podziałem</option></select><button class="mini" id="kpi-config">Parametry</button><button class="mini trend-period" data-period="day">Dni</button><button class="mini trend-period" data-period="week">Tygodnie</button><button class="mini trend-period" data-period="month">Miesiące</button></div></div><div class="horizontal-trends">${state.globalTrendMode === 'combined' ? trendRow('combined', 'Cały projekt', trends) : modules.filter(([key]) => state.kpiModules.includes(key)).map(([key, title]) => trendRow(key, title, trends)).join('')}</div></section>`;
+  <section class="area-radar panel"><div class="section-title"><div><strong>Realizacja według ${state.overviewDetailed ? 'sterowników' : 'obszarów'}</strong><small>${state.overviewDetailed ? 'Sterowniki końcowe w wybranym zakresie.' : 'Obszary nadrzędne sumują wszystkie podobszary i sterowniki.'}</small></div><button class="mini" id="overview-detail-toggle">${state.overviewDetailed ? 'Widok obszarów' : 'Widok sterowników'}</button></div><div class="area-performance-head"><span>Zakres</span><span>Łączne KPI</span><span>Wszystkie</span><span>Otwarte</span><span>Zamknięte</span><span>Status</span><span>Zadania</span><span>Punkty</span><span>Cele</span></div>${areaRows.map(overviewAreaRow).join('') || '<div class="empty compact-empty">Brak danych dla tego zakresu.</div>'}</section>
+  <section class="trend-panel"><div class="trend-head"><div><strong>Trend KPI · procent realizacji i wielkość zakresu</strong><small>Globalny wynik całego zakresu lub porównanie modułów w tym samym okresie.</small></div><div><select id="global-trend-mode"><option value="combined">Łączne KPI</option><option value="split">Z podziałem</option></select><button class="mini" id="detailed-kpi-open">Szczegółowe KPI</button><button class="mini" id="kpi-config">Parametry</button><button class="mini trend-period" data-period="day">Dni</button><button class="mini trend-period" data-period="week">Tygodnie</button><button class="mini trend-period" data-period="month">Miesiące</button></div></div><div class="horizontal-trends">${state.globalTrendMode === 'combined' ? trendRow('combined', scopeLabel, trends) : modules.filter(([key]) => state.kpiModules.includes(key)).map(([key, title]) => trendRow(key, title, trends)).join('')}</div></section>
+  ${state.overviewDetailed ? renderStatusBreakdown(data.status_breakdown || []) : ''}`;
   $$('.trend-period').forEach(button => { button.classList.toggle('active-toggle', button.dataset.period === state.trendPeriod); button.addEventListener('click', () => { state.trendPeriod = button.dataset.period; renderOverview(); }); });
   $$('[data-insight]').forEach(button => button.addEventListener('click', () => openOverviewInsight(button.dataset.insight)));
   $$('[data-controller-scope]').forEach(button => button.addEventListener('click', async () => { state.controller = button.dataset.controllerScope; $('#controller').value = state.controller; await loadData(); }));
   $('#kpi-config').addEventListener('click', openKpiConfig);
+  $('#detailed-kpi-open').addEventListener('click', openDetailedKpi);
   $('#overview-detail-toggle').addEventListener('click', () => { state.overviewDetailed = !state.overviewDetailed; renderOverview(); });
-  $('#area-trend-scope').value = state.areaTrendScope;
-  $('#hierarchy-trend-mode').value = state.hierarchyTrendMode;
   $('#global-trend-mode').value = state.globalTrendMode;
-  $('#area-trend-scope').addEventListener('change', event => { state.areaTrendScope = event.target.value; renderOverview(); });
-  $('#hierarchy-trend-mode').addEventListener('change', event => { state.hierarchyTrendMode = event.target.value; renderOverview(); });
   $('#global-trend-mode').addEventListener('change', event => { state.globalTrendMode = event.target.value; renderOverview(); });
 }
 
@@ -508,10 +553,40 @@ function trendMetric(item, key) { const value = item?.[key]; return typeof value
 function combinedTrendMetric(point) { const values = ['status', 'tasks', 'points', 'goals'].map(key => trendMetric(point, key)); const total = values.reduce((sum, item) => sum + item.total, 0); const done = values.reduce((sum, item) => sum + item.done, 0); return { progress: total ? Math.round(done * 100 / total) : 0, total, done }; }
 function combinedMetric(metrics) { const total = ['status', 'tasks', 'points', 'goals'].reduce((sum, key) => sum + Number(metrics?.[key]?.total || 0), 0); const done = Number(metrics?.status?.done || 0) + Number(metrics?.tasks?.done || 0) + Number(metrics?.points?.closed || 0) + Number(metrics?.goals?.done || 0); return total ? Math.round(done * 100 / total) : 0; }
 
-function hierarchyTrendRow(item) {
-  const points = item.trends || []; const first = combinedTrendMetric(points[0]); const last = combinedTrendMetric(points.at(-1)); const delta = last.progress - first.progress;
+function metricCounts(metrics) {
+  const total = ['status', 'tasks', 'points', 'goals'].reduce((sum, key) => sum + Number(metrics?.[key]?.total || 0), 0);
+  const closed = Number(metrics?.status?.done || 0) + Number(metrics?.tasks?.done || 0) + Number(metrics?.points?.closed || 0) + Number(metrics?.goals?.done || 0);
+  return { total, closed, open: Math.max(0, total - closed) };
+}
+
+function overviewAreaRow(item) {
+  const counts = metricCounts(item.metrics); const scope = item.scope || item.code;
+  return `<button class="area-performance-row" data-controller-scope="${escapeHtml(scope)}"><span><b>${item.type === 'group' ? '▰ ' : '◇ '}${escapeHtml(item.label || item.display_name || item.leaf_code)}</b><small>${escapeHtml(item.path_label || item.hierarchy_label || item.group_path_label || '')}</small></span><strong>${combinedMetric(item.metrics)}%</strong><b>${counts.total}</b><b class="open-count">${counts.open}</b><b class="closed-count">${counts.closed}</b>${['status', 'tasks', 'points', 'goals'].map(key => `<span><b>${item.metrics[key]?.progress || 0}%</b><i><u style="width:${item.metrics[key]?.progress || 0}%"></u></i></span>`).join('')}</button>`;
+}
+
+function hierarchyTrendRow(item, period = state.detailedKpiPeriod, mode = state.detailedKpiMode) {
+  const points = item.trends?.[period] || []; const first = combinedTrendMetric(points[0]); const last = combinedTrendMetric(points.at(-1)); const delta = last.progress - first.progress;
   const split = ['status', 'tasks', 'points', 'goals'].map(key => `<span><small>${({ status: 'Status', tasks: 'Zadania', points: 'Punkty', goals: 'Cele' })[key]}</small><b>${item.metrics[key]?.progress || 0}%</b><i><u style="width:${item.metrics[key]?.progress || 0}%"></u></i></span>`).join('');
-  return `<button class="hierarchy-trend-row ${item.type} ${state.hierarchyTrendMode}" data-controller-scope="${escapeHtml(item.scope)}" style="--depth:${Math.max(0, item.depth - 1)}"><span><b>${item.type === 'group' ? '▰' : '◇'} ${escapeHtml(item.label)}</b><small>${escapeHtml(item.path_label)}</small></span>${state.hierarchyTrendMode === 'split' ? `<span class="hierarchy-module-split">${split}</span>` : `<strong>${combinedMetric(item.metrics)}% <em>${delta >= 0 ? '+' : ''}${delta} pp</em></strong><span class="mini-trend">${points.map(point => { const metric = combinedTrendMetric(point); return `<i style="height:${Math.max(4, metric.progress)}%" title="${escapeHtml(point.label)} · ${metric.progress}% · ${metric.done}/${metric.total}"></i>`; }).join('')}</span>`}</button>`;
+  const counts = metricCounts(item.metrics);
+  return `<div class="hierarchy-trend-row ${item.type} ${mode}" style="--depth:${Math.max(0, item.depth - 1)}"><button data-detailed-scope="${escapeHtml(item.scope)}"><span><b>${item.type === 'group' ? '▰' : '◇'} ${escapeHtml(item.label)}</b><small>${escapeHtml(item.path_label)} · ${counts.closed}/${counts.total} zamkniętych</small></span></button>${mode === 'split' ? `<span class="hierarchy-module-split">${split}</span>` : `<strong>${combinedMetric(item.metrics)}% <em>${delta >= 0 ? '+' : ''}${delta} pp</em></strong><span class="mini-trend">${points.map(point => { const metric = combinedTrendMetric(point); return `<i style="height:${Math.max(4, metric.progress)}%" title="${escapeHtml(point.label)} · ${metric.progress}% · ${metric.done}/${metric.total}"></i>`; }).join('')}</span>`}</div>`;
+}
+
+function openDetailedKpi() {
+  const rows = state.overview?.hierarchy_trends || [];
+  const children = scope => rows.filter(item => item.parent_scope === scope);
+  const branch = (item, depth = 0) => {
+    const nested = item.type === 'group' ? children(item.scope) : [];
+    return `<details class="detailed-kpi-branch" ${depth === 0 ? 'open' : ''}><summary>${hierarchyTrendRow(item)}</summary>${nested.length ? `<div>${nested.map(child => branch(child, depth + 1)).join('')}</div>` : ''}</details>`;
+  };
+  $('#insight-title').textContent = 'Szczegółowe KPI według hierarchii';
+  $('#insight-description').textContent = 'Rozwiń obszar, aby przejść od linii przez podobszary do pojedynczych sterowników.';
+  $('#insight-content').innerHTML = `<div class="detailed-kpi-toolbar"><select id="detailed-kpi-mode"><option value="combined">Łączne KPI</option><option value="split">Z podziałem na moduły</option></select><select id="detailed-kpi-period"><option value="day">Dni</option><option value="week">Tygodnie</option><option value="month">Miesiące</option></select></div><div class="detailed-kpi-tree">${children('all').map(item => branch(item)).join('') || '<div class="empty">Brak danych KPI.</div>'}</div>`;
+  $('#detailed-kpi-mode').value = state.detailedKpiMode;
+  $('#detailed-kpi-period').value = state.detailedKpiPeriod;
+  $('#detailed-kpi-mode').addEventListener('change', event => { state.detailedKpiMode = event.target.value; openDetailedKpi(); });
+  $('#detailed-kpi-period').addEventListener('change', event => { state.detailedKpiPeriod = event.target.value; openDetailedKpi(); });
+  $$('[data-detailed-scope]').forEach(button => button.addEventListener('click', async event => { event.preventDefault(); event.stopPropagation(); $('#insight-dialog').close(); state.controller = button.dataset.detailedScope; $('#controller').value = state.controller; await loadData(); }));
+  if (!$('#insight-dialog').open) $('#insight-dialog').showModal();
 }
 
 function renderStatusBreakdown(rows) {
@@ -618,44 +693,65 @@ function renderPlanner() {
   for (const entry of data.entries || []) { const key = `${entry.user_id}:${entry.plan_date}`; if (!entryMap.has(key)) entryMap.set(key, []); entryMap.get(key).push(entry); }
   const workMap = new Map((data.work || []).map(item => [`${item.user_id}:${item.work_date}`, item]));
   const summaryMap = new Map((data.summary || []).map(item => [item.plan_date, item]));
-  const userHasMode = (user, mode) => (data.entries || []).some(entry => entry.user_id === user.id && entry.work_mode === mode);
-  const onlineUsers = data.users.filter(user => userHasMode(user, 'online'));
-  const offlineUsers = data.users.filter(user => userHasMode(user, 'offline'));
-  const unassignedUsers = data.users.filter(user => !(data.entries || []).some(entry => entry.user_id === user.id));
   const mode = data.mode_summary || {};
-  $('#content').innerHTML = `<section class="planner-command compact"><div class="planner-controls"><button class="mini planner-shift" data-days="-${state.plannerDays}">←</button><button class="mini" id="planner-today">Dzisiaj</button><button class="mini planner-shift" data-days="${state.plannerDays}">→</button><label>Zakres <select id="planner-days"><option value="7">7 dni</option><option value="14">14 dni</option><option value="28">28 dni</option><option value="31">31 dni</option><option value="90">Kwartał</option><option value="365">Rok</option></select></label>${['project_admin', 'system_admin'].includes(state.me.role) ? '<button class="mini" id="planner-participants">Uczestnicy Plannera</button>' : ''}<span>${displayDate(days[0])} – ${displayDate(days.at(-1))}</span></div><div class="planner-summary mode-summary"><span class="online"><b>${mode.today_online || 0}</b> dziś online<small>${mode.online_planned_days || 0} zaplanowanych dni pracy</small></span><span class="offline"><b>${mode.today_offline || 0}</b> dziś offline<small>${mode.offline_planned_days || 0} zaplanowanych dni pracy</small></span><span><b>${data.users.length}</b> uczestników Plannera</span>${(data.shift_summary || []).map(item => `<span><b>${item.assignments}</b> ${escapeHtml(item.shift)}</span>`).join('')}</div></section>
-  ${plannerModeSection('online', 'ONLINE · fabryka', onlineUsers, days, entryMap, workMap, summaryMap, data.area_day_summary || [])}
-  ${plannerModeSection('offline', 'OFFLINE · biuro', offlineUsers, days, entryMap, workMap, summaryMap, data.area_day_summary || [])}
-  ${unassignedUsers.length ? `<section class="planner-unassigned"><strong>Bez planu w tym zakresie (${unassignedUsers.length})</strong><div>${unassignedUsers.map(user => `<button class="mini planner-unassigned-user" data-user-id="${user.id}">${escapeHtml(user.display_name)}</button>`).join('')}</div></section>` : ''}
-  <section class="planner-area-summary panel"><div class="section-title"><div><strong>Dzisiejsza obsada według głównych obszarów</strong><small>Liczby obejmują również wszystkie podobszary danego obszaru.</small></div></div><div class="area-headcount-grid">${(data.area_summary || []).map(item => `<article><b>${escapeHtml(item.name)}</b><span><strong>${item.today_people || 0}</strong> dziś</span><span class="online">ON ${item.today_online_people || 0} · ${item.online_assignments} zaplanowanych dni</span><span class="offline">OFF ${item.today_offline_people || 0} · ${item.offline_assignments} zaplanowanych dni</span></article>`).join('') || '<div class="empty">Brak przypisań do obszarów.</div>'}</div></section>
-  <p class="planner-legend"><span class="mode-dot online"></span> fabryka <span class="mode-dot offline"></span> biuro <span><b>T</b> transport</span><span><b>T+P</b> transport i praca</span><span class="workload-dot"></span> zadania / punkty / status / notatki</p>`;
+  $('#content').innerHTML = `<section class="planner-command compact"><div class="planner-controls"><button class="mini planner-shift" data-days="-${state.plannerDays}">←</button><button class="mini" id="planner-today">Dzisiaj</button><button class="mini planner-shift" data-days="${state.plannerDays}">→</button><label>Zakres <select id="planner-days"><option value="7">7 dni</option><option value="14">14 dni</option><option value="28">28 dni</option><option value="31">31 dni</option><option value="90">Kwartał</option><option value="365">Rok</option></select></label>${['project_admin', 'system_admin'].includes(state.me.role) ? '<button class="mini" id="planner-participants">Uczestnicy Plannera</button>' : ''}${data.can_manage_requirements ? '<button class="mini requirement-button" id="planner-requirements-open">Zapotrzebowanie</button>' : ''}<span>${displayDate(days[0])} – ${displayDate(days.at(-1))}</span></div><div class="planner-summary mode-summary"><span><b>${data.summary?.find(item => item.plan_date === today())?.headcount || 0}</b> osób dzisiaj</span><span class="online"><b>${mode.today_online || 0}</b> ON · fabryka<small>${mode.online_planned_days || 0} zaplanowanych dni</small></span><span class="offline"><b>${mode.today_offline || 0}</b> OFF · biuro<small>${mode.offline_planned_days || 0} zaplanowanych dni</small></span><span><b>${data.users.length}</b> uczestników</span>${(data.shift_summary || []).map(item => `<span><b>${item.assignments}</b> ${escapeHtml(item.shift)}</span>`).join('')}</div></section>
+  ${plannerUnifiedSection(data.users || [], days, entryMap, workMap, summaryMap, data.area_day_summary || [], data.can_manage_requirements)}
+  ${(data.available_today_users || []).length && days.includes(today()) && canCoordinate() ? `<section class="planner-unassigned"><strong>Dostępni tylko na dzisiaj</strong><small>Te osoby należą do projektu, ale nie są stałymi uczestnikami Plannera.</small><div>${data.available_today_users.map(user => `<button class="mini planner-today-user" data-user-id="${user.id}">+ ${escapeHtml(user.display_name)}</button>`).join('')}</div></section>` : ''}
+  <section class="planner-area-summary panel"><div class="section-title"><div><strong>Dzisiejsza obsada według głównych obszarów</strong><small>Liczby obejmują również wszystkie podobszary danego obszaru.</small></div></div><div class="area-headcount-grid">${(data.area_summary || []).map(item => `<article><b>${escapeHtml(item.name)}</b><span><strong>${item.today_people || 0}</strong> dziś</span><span class="online">ON ${item.today_online_people || 0}${data.can_manage_requirements ? ` / wymagane ${item.today_online_required || 0}` : ''}</span><span class="offline">OFF ${item.today_offline_people || 0}${data.can_manage_requirements ? ` / wymagane ${item.today_offline_required || 0}` : ''}</span></article>`).join('') || '<div class="empty">Brak przypisań do obszarów.</div>'}</div></section>
+  <p class="planner-legend"><span class="mode-dot online"></span> ON · fabryka <span class="mode-dot offline"></span> OFF · biuro <span><b>T</b> transport</span><span><b>T+P</b> transport i praca</span><span class="workload-dot"></span> zadania / punkty / status / notatki${data.can_manage_requirements ? '<span class="requirement-shortage-key"></span> obsada poniżej zapotrzebowania' : ''}</p>`;
   $('#planner-days').value = String(state.plannerDays);
   $('#planner-days').addEventListener('change', async event => { state.plannerDays = Number(event.target.value); await reloadPlanner(); });
   $$('.planner-shift').forEach(button => button.addEventListener('click', async () => { state.plannerFrom = addDays(state.plannerFrom, Number(button.dataset.days)); await reloadPlanner(); }));
   $('#planner-today').addEventListener('click', async () => { state.plannerFrom = mondayOf(today()); await reloadPlanner(); });
   $('#planner-participants')?.addEventListener('click', openPlannerParticipants);
+  $('#planner-requirements-open')?.addEventListener('click', () => openPlannerRequirements(today()));
   if (canCoordinate()) {
     $$('.planner-cell').forEach(cell => {
-      cell.addEventListener('click', event => { if (!event.target.closest('.plan-chip')) openPlannerCell(Number(cell.dataset.userId), cell.dataset.date); });
+      cell.addEventListener('click', event => { if (!event.target.closest('.plan-chip') && cell.dataset.editable === '1') openPlannerCell(Number(cell.dataset.userId), cell.dataset.date); });
       cell.addEventListener('contextmenu', event => showPlannerContext(event, Number(cell.dataset.userId), cell.dataset.date, Number(event.target.closest('.plan-chip')?.dataset.entryId) || null));
+      cell.addEventListener('dragover', event => { if (cell.dataset.editable !== '1') return; event.preventDefault(); cell.classList.add('drag-over'); });
+      cell.addEventListener('dragleave', () => cell.classList.remove('drag-over'));
+      cell.addEventListener('drop', event => dropPlannerEntry(event, cell));
     });
-    $$('.planner-unassigned-user').forEach(button => button.addEventListener('click', () => openPlannerCell(Number(button.dataset.userId), today())));
+    $$('.plan-chip[draggable="true"]').forEach(chip => {
+      chip.addEventListener('dragstart', event => { state.plannerDragEntry = Number(chip.dataset.entryId); event.dataTransfer.effectAllowed = 'copyMove'; event.dataTransfer.setData('text/planner-entry', chip.dataset.entryId); chip.classList.add('dragging'); });
+      chip.addEventListener('dragend', () => { state.plannerDragEntry = null; chip.classList.remove('dragging'); $$('.planner-cell').forEach(cell => cell.classList.remove('drag-over')); });
+    });
+    $$('.planner-today-user').forEach(button => button.addEventListener('click', () => openPlannerCell(Number(button.dataset.userId), today())));
   }
 }
 
-function plannerModeSection(mode, title, users, days, entryMap, workMap, summaryMap, areaDaySummary) {
+function plannerUnifiedSection(users, days, entryMap, workMap, summaryMap, areaDaySummary, showRequirements) {
   const segments = (source, label) => { const result = []; let current; source.forEach(date => { const value = label(date); if (!current || current.value !== value) { current = { value, count: 0 }; result.push(current); } current.count += 1; }); return result; };
   const months = segments(days, date => new Intl.DateTimeFormat('pl-PL', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`)));
   const weeks = segments(days, date => isoWeek(date).label);
-  const areaRows = mode === 'online' ? areaDaySummary.map(area => `<tr class="area-day-row"><th class="person-col">ON · ${escapeHtml(area.name)}</th>${days.map(date => `<td><b>${area.days.find(item => item.date === date)?.online || 0}</b></td>`).join('')}</tr>`).join('') : '';
-  return `<section class="planner-shell planner-mode ${mode}"><header><strong>${title}</strong><span>${users.length} osób w zakresie</span></header><div class="planner-scroll"><table class="planner-table compact" style="--planner-days:${days.length}"><thead><tr><th class="person-col" rowspan="4">Pracownik</th>${months.map(item => `<th colspan="${item.count}">${escapeHtml(item.value)}</th>`).join('')}</tr><tr>${weeks.map(item => `<th colspan="${item.count}">${escapeHtml(item.value)}</th>`).join('')}</tr><tr>${days.map(date => `<th class="${date === today() ? 'today' : ''}">${new Intl.DateTimeFormat('pl-PL', { weekday: 'short', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`))}</th>`).join('')}</tr><tr>${days.map(date => `<th class="${date === today() ? 'today' : ''}">${date.slice(8, 10)}</th>`).join('')}</tr></thead><tbody>${users.map(user => `<tr><th class="person-col"><b>${escapeHtml(user.display_name)}</b><small>${escapeHtml(user.configured_areas || 'bez obszaru')}</small></th>${days.map(date => plannerCell(user, date, (entryMap.get(`${user.id}:${date}`) || []).filter(entry => entry.work_mode === mode), workMap.get(`${user.id}:${date}`), summaryMap.get(date), mode)).join('')}</tr>`).join('') || `<tr><td colspan="${days.length + 1}" class="empty compact-empty">Brak planu ${mode} w tym zakresie.</td></tr>`}</tbody><tfoot><tr><th class="person-col">Obsada ${mode === 'online' ? 'ON' : 'OFF'}</th>${days.map(date => { const summary = summaryMap.get(date); return `<td><b>${summary?.[`${mode}_headcount`] || 0}</b></td>`; }).join('')}</tr>${areaRows}</tfoot></table></div></section>`;
+  const areaRows = areaDaySummary.map(area => `<tr class="area-day-row"><th class="person-col">${escapeHtml(area.name)}</th>${days.map(date => plannerHeadcountCell(area.days.find(item => item.date === date), showRequirements)).join('')}</tr>`).join('');
+  return `<section class="planner-shell planner-unified"><header><div><strong>Plan zespołu</strong><small>ON i OFF w jednym widoku · przeciągnij aktywność na inny dzień lub osobę</small></div><span>${users.length} uczestników</span></header><div class="planner-scroll"><table class="planner-table compact" style="--planner-days:${days.length}"><thead><tr><th class="person-col" rowspan="4">Pracownik</th>${months.map(item => `<th colspan="${item.count}">${escapeHtml(item.value)}</th>`).join('')}</tr><tr>${weeks.map(item => `<th colspan="${item.count}">${escapeHtml(item.value)}</th>`).join('')}</tr><tr>${days.map(date => `<th class="${date === today() ? 'today' : ''}">${new Intl.DateTimeFormat('pl-PL', { weekday: 'short', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`))}</th>`).join('')}</tr><tr>${days.map(date => `<th class="${date === today() ? 'today' : ''}">${date.slice(8, 10)}</th>`).join('')}</tr></thead><tbody>${users.map(user => `<tr class="${user.planner_enabled ? '' : 'temporary-planner-user'}"><th class="person-col"><b>${escapeHtml(user.display_name)}</b><small>${escapeHtml(user.configured_areas || 'bez obszaru')}${user.planner_enabled ? '' : ' · tylko dzisiaj'}</small></th>${days.map(date => plannerCell(user, date, entryMap.get(`${user.id}:${date}`) || [], workMap.get(`${user.id}:${date}`))).join('')}</tr>`).join('') || `<tr><td colspan="${days.length + 1}" class="empty compact-empty">Brak uczestników Plannera.</td></tr>`}</tbody><tfoot><tr class="total-headcount-row"><th class="person-col">Obsada razem</th>${days.map(date => { const summary = summaryMap.get(date); return `<td><b>${summary?.headcount || 0}</b><small><i class="on-tag">ON ${summary?.online_headcount || 0}</i><i class="off-tag">OFF ${summary?.offline_headcount || 0}</i></small></td>`; }).join('')}</tr>${areaRows}</tfoot></table></div></section>`;
 }
 
-function plannerCell(user, date, entries, work, summary, mode) {
+function plannerHeadcountCell(day = {}, showRequirements = false) {
+  const shortage = showRequirements && ((day.online || 0) < (day.online_required || 0) || (day.offline || 0) < (day.offline_required || 0));
+  return `<td class="area-headcount-cell ${shortage ? 'shortage' : ''}"><span><i class="on-tag">ON</i><b>${day.online || 0}${showRequirements ? `/${day.online_required || 0}` : ''}</b></span><span><i class="off-tag">OFF</i><b>${day.offline || 0}${showRequirements ? `/${day.offline_required || 0}` : ''}</b></span></td>`;
+}
+
+function plannerCell(user, date, entries, work) {
   const weekend = [0, 6].includes(new Date(`${date}T12:00:00Z`).getUTCDay());
-  const chips = entries.map(entry => `<span class="plan-chip ${entry.transport_mode} ${entry.work_mode}" data-entry-id="${entry.id}">${entry.transport_mode === 'transport_only' ? '<b>T</b>' : entry.transport_mode === 'transport_work' ? '<b>T+P</b>' : ''}${entry.area_path ? escapeHtml(entry.area_path) : entry.area_name ? escapeHtml(entry.area_name) : ''}<small>${escapeHtml(entry.shift)}</small></span>`).join('');
+  const editable = canCoordinate() && (Number(user.planner_enabled) || date === today());
+  const chips = entries.map(entry => `<span class="plan-chip ${entry.transport_mode} ${entry.work_mode}" data-entry-id="${entry.id}" draggable="${editable ? 'true' : 'false'}"><b class="mode-label">${entry.work_mode === 'offline' ? 'OFF' : 'ON'}</b>${entry.transport_mode === 'transport_only' ? '<b>T</b>' : entry.transport_mode === 'transport_work' ? '<b>T+P</b>' : ''}<span>${entry.area_path ? escapeHtml(entry.area_path) : entry.area_name ? escapeHtml(entry.area_name) : 'Transport / ogólne'}</span><small>${escapeHtml(entry.shift)}</small></span>`).join('');
   const workload = work && (work.tasks || work.points || work.statuses || work.notes) ? `<span class="workload" title="Zadania / otwarte punkty / status / notatki">${work.tasks}/${work.points}/${work.statuses}/${work.notes}</span>` : '';
-  return `<td class="planner-cell ${mode} ${weekend ? 'weekend' : ''} ${date === today() ? 'today' : ''} ${entries.length ? 'planned' : ''}" data-user-id="${user.id}" data-date="${date}" title="${canCoordinate() ? 'Kliknij: edycja · prawy klik: kopiowanie i przypisanie pracy' : 'Plan tylko do odczytu'}">${chips}${workload}${!chips && canCoordinate() ? '<i>+</i>' : ''}</td>`;
+  return `<td class="planner-cell ${weekend ? 'weekend' : ''} ${date === today() ? 'today' : ''} ${entries.length ? 'planned' : ''} ${editable ? '' : 'read-only'}" data-user-id="${user.id}" data-date="${date}" data-editable="${editable ? 1 : 0}" title="${editable ? 'Kliknij: edycja · prawy klik: kopiowanie · przeciągnij aktywność' : 'Plan tylko do odczytu'}">${chips}${workload}${!chips && editable ? '<i>+</i>' : ''}</td>`;
+}
+
+async function dropPlannerEntry(event, cell) {
+  if (!canCoordinate() || cell.dataset.editable !== '1') return;
+  event.preventDefault(); cell.classList.remove('drag-over');
+  const entryId = Number(event.dataTransfer.getData('text/planner-entry') || state.plannerDragEntry);
+  if (!entryId) return;
+  try {
+    const copy = event.ctrlKey || event.altKey;
+    await api('/api/planner/move', { method: 'POST', body: JSON.stringify({ entry_id: entryId, target_user_id: Number(cell.dataset.userId), target_date: cell.dataset.date, copy }) });
+    toast(copy ? 'Skopiowano aktywność' : 'Przeniesiono aktywność'); await reloadPlanner();
+  } catch (error) { toast(error.message, true); }
 }
 
 async function reloadPlanner() {
@@ -670,7 +766,10 @@ function bindPlannerEntryRows() { $$('.remove-plan-entry').forEach(button => but
 
 function openPlannerCell(userId, date) {
   if (!canCoordinate()) return;
-  const user = state.planner.users.find(item => item.id === userId); const entries = state.planner.entries.filter(item => item.user_id === userId && item.plan_date === date);
+  const user = [...(state.planner.users || []), ...(state.planner.available_today_users || [])].find(item => item.id === userId);
+  if (!user) return toast('Nie znaleziono użytkownika projektu', true);
+  if (!Number(user.planner_enabled) && date !== today()) return toast('Osobę nieuwzględnioną stale w Plannerze można dopisać wyłącznie do dzisiejszego dnia', true);
+  const entries = state.planner.entries.filter(item => item.user_id === userId && item.plan_date === date);
   state.plannerCell = { userId, date };
   $('#planner-dialog-title').textContent = `${user?.display_name || 'Pracownik'} · ${displayDate(date)}`;
   $('#planner-dialog-description').textContent = 'Obszar można wskazać tylko raz. Obszar nadrzędny wyklucza jego podobszary.';
@@ -712,12 +811,75 @@ async function openPlannerParticipants() {
   } catch (error) { toast(error.message, true); }
 }
 
+function openPlannerRequirements(date = today(), groupId = '') {
+  if (!state.planner?.can_manage_requirements) return;
+  const form = $('#planner-requirements-form');
+  form.elements.plan_date.value = date;
+  form.elements.controller_group_id.innerHTML = selectOptions(hierarchyGroupOptions(), groupId, 'Wybierz obszar');
+  form.elements.online_required.value = 0;
+  form.elements.offline_required.value = 0;
+  form.elements.note.value = '';
+  renderPlannerRequirementsList();
+  if (!$('#planner-requirements-dialog').open) $('#planner-requirements-dialog').showModal();
+}
+
+function renderPlannerRequirementsList() {
+  const rows = state.planner?.requirements || [];
+  const grouped = new Map();
+  for (const row of rows) {
+    const key = `${row.plan_date}:${row.controller_group_id}`;
+    if (!grouped.has(key)) grouped.set(key, { plan_date: row.plan_date, controller_group_id: row.controller_group_id, area_path: row.area_path || row.area_name, online_required: 0, offline_required: 0, note: row.note || '' });
+    grouped.get(key)[`${row.work_mode}_required`] += Number(row.required_count || 0);
+    if (row.note) grouped.get(key).note = row.note;
+  }
+  $('#planner-requirements-list').innerHTML = [...grouped.values()].map(item => `<article class="requirement-row" data-date="${item.plan_date}" data-group="${item.controller_group_id}"><span><b>${escapeHtml(item.area_path)}</b><small>${displayDate(item.plan_date)}${item.note ? ` · ${escapeHtml(item.note)}` : ''}</small></span><span class="on-tag">ON ${item.online_required}</span><span class="off-tag">OFF ${item.offline_required}</span><button type="button" class="mini edit-requirement">Edytuj</button><button type="button" class="mini delete-requirement">Usuń</button></article>`).join('') || '<div class="empty compact-empty">Nie zdefiniowano jeszcze zapotrzebowania w widocznym zakresie.</div>';
+  $$('.edit-requirement').forEach(button => button.addEventListener('click', () => {
+    const row = button.closest('.requirement-row'); const item = grouped.get(`${row.dataset.date}:${row.dataset.group}`); const form = $('#planner-requirements-form');
+    form.elements.plan_date.value = item.plan_date; form.elements.controller_group_id.value = item.controller_group_id; form.elements.online_required.value = item.online_required; form.elements.offline_required.value = item.offline_required; form.elements.note.value = item.note; form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }));
+  $$('.delete-requirement').forEach(button => button.addEventListener('click', async () => {
+    const row = button.closest('.requirement-row');
+    if (!await uiConfirm('Usuń zapotrzebowanie', 'Wymagana obsada ON i OFF dla tego obszaru oraz dnia zostanie wyzerowana.', 'Usuń', true)) return;
+    try { await api('/api/planner/requirements', { method: 'PUT', body: JSON.stringify({ plan_date: row.dataset.date, controller_group_id: Number(row.dataset.group), online_required: 0, offline_required: 0 }) }); await reloadPlanner(); renderPlannerRequirementsList(); toast('Zapotrzebowanie usunięto'); } catch (error) { toast(error.message, true); }
+  }));
+}
+
+async function savePlannerRequirement(event) {
+  event.preventDefault();
+  const values = Object.fromEntries(new FormData(event.currentTarget));
+  if (!values.controller_group_id) return toast('Wybierz obszar', true);
+  try {
+    await api('/api/planner/requirements', { method: 'PUT', body: JSON.stringify({ ...values, controller_group_id: Number(values.controller_group_id), online_required: Number(values.online_required), offline_required: Number(values.offline_required) }) });
+    toast('Zapotrzebowanie zapisano'); await reloadPlanner(); renderPlannerRequirementsList();
+  } catch (error) { toast(error.message, true); }
+}
+
+async function pastePlannerRange(userId, anchorDate, source, kind) {
+  if (!source.length) return toast('Skopiowany dzień nie zawiera aktywności', true);
+  const result = await uiForm({ title: 'Kopiuj aktywność na wiele dni', description: 'Wybierz zakres docelowy. Maksymalnie 31 dni w jednej operacji.', fields: [
+    { name: 'from', label: 'Od', type: 'date', value: anchorDate, required: true }, { name: 'to', label: 'Do', type: 'date', value: addDays(anchorDate, 6), required: true }
+  ], submitLabel: 'Kopiuj na zakres' });
+  if (!result) return;
+  const days = dateRange(result.from, result.to);
+  if (!days.length || result.to < result.from || days.length > 31) return toast('Zakres musi obejmować od 1 do 31 dni', true);
+  try {
+    for (const date of days) {
+      const existing = (state.planner.entries || []).filter(item => item.user_id === userId && item.plan_date === date);
+      const target = kind === 'day' ? source : [...existing, ...source.filter(candidate => !existing.some(item => Number(item.controller_group_id || 0) === Number(candidate.controller_group_id || 0) && candidate.controller_group_id))];
+      await api('/api/planner/day', { method: 'PUT', body: JSON.stringify({ user_id: userId, plan_date: date, entries: target.map(({ controller_group_id, work_mode, shift, transport_mode, note }) => ({ controller_group_id, work_mode, shift, transport_mode, note })) }) });
+    }
+    toast(`Skopiowano aktywność na ${days.length} dni`); await reloadPlanner();
+  } catch (error) { toast(error.message, true); }
+}
+
 function showPlannerContext(event, userId, date, entryId = null) {
   if (!canCoordinate()) return;
   event.preventDefault(); event.stopPropagation();
+  const user = [...(state.planner.users || []), ...(state.planner.available_today_users || [])].find(item => item.id === userId);
+  if (!Number(user?.planner_enabled) && date !== today()) return toast('Ta osoba może być planowana tylko na dzisiaj', true);
   const menu = $('#context-menu');
   const entry = entryId ? state.planner.entries.find(item => item.id === entryId) : null;
-  menu.innerHTML = `${entry ? '<button data-action="copy-entry">Kopiuj to przypisanie</button>' : ''}<button data-action="copy-day">Kopiuj cały dzień</button>${state.plannerClipboard ? `<button data-action="paste">Wklej ${state.plannerClipboard.kind === 'day' ? 'cały dzień' : 'przypisanie'}</button>` : ''}<button data-action="assign">Przypisz zadania / status / punkty</button><button data-action="edit">Edytuj dzień</button><button data-action="clear">Wyczyść dzień</button>`;
+  menu.innerHTML = `${entry ? '<button data-action="copy-entry">Kopiuj to przypisanie</button><button data-action="repeat-entry">Powiel aktywność na wiele dni…</button>' : ''}<button data-action="copy-day">Kopiuj cały dzień</button><button data-action="repeat-day">Powiel cały dzień na wiele dni…</button>${state.plannerClipboard ? `<button data-action="paste">Wklej ${state.plannerClipboard.kind === 'day' ? 'cały dzień' : 'przypisanie'}</button><button data-action="paste-range">Wklej na zakres dni…</button>` : ''}<button data-action="assign">Przypisz zadania / status / punkty</button><button data-action="edit">Edytuj dzień</button><button data-action="clear">Wyczyść dzień</button>`;
   menu.style.left = `${Math.min(event.clientX, innerWidth - 300)}px`; menu.style.top = `${Math.min(event.clientY, innerHeight - 260)}px`; menu.classList.remove('hidden');
   menu.querySelectorAll('button').forEach(button => button.addEventListener('click', async () => {
     menu.classList.add('hidden');
@@ -725,11 +887,14 @@ function showPlannerContext(event, userId, date, entryId = null) {
     try {
       if (button.dataset.action === 'copy-entry' && entry) { state.plannerClipboard = { kind: 'entry', entries: [entry] }; return toast('Skopiowano przypisanie'); }
       if (button.dataset.action === 'copy-day') { state.plannerClipboard = { kind: 'day', entries: dayEntries }; return toast('Skopiowano cały dzień'); }
+      if (button.dataset.action === 'repeat-entry' && entry) return pastePlannerRange(userId, date, [entry], 'entry');
+      if (button.dataset.action === 'repeat-day') return pastePlannerRange(userId, date, dayEntries, 'day');
       if (button.dataset.action === 'paste') {
         const source = state.plannerClipboard.entries || [];
         const target = state.plannerClipboard.kind === 'day' ? source : [...dayEntries, ...source];
         if (await savePlannerTarget(userId, date, target)) toast('Plan został wklejony'); return;
       }
+      if (button.dataset.action === 'paste-range') return pastePlannerRange(userId, date, state.plannerClipboard.entries || [], state.plannerClipboard.kind);
       if (button.dataset.action === 'assign') return openEntitySelection({ mode: 'planner', userId, date, allowed: ['task', 'status', 'point'] });
       if (button.dataset.action === 'edit') return openPlannerCell(userId, date);
       if (button.dataset.action === 'clear' && await uiConfirm('Wyczyść plan dnia', 'Wszystkie przypisania tej osoby w wybranym dniu zostaną usunięte.', 'Wyczyść', true)) { await savePlannerTarget(userId, date, []); toast('Plan dnia został wyczyszczony'); }
@@ -752,6 +917,11 @@ function renderCalendar() {
   $('#calendar-mine-toggle').addEventListener('click', async () => { state.calendarOnlyMine = !state.calendarOnlyMine; await reloadCalendar(); });
   $$('.calendar-day').forEach(day => day.addEventListener('contextmenu', event => showCalendarDayContext(event, day.dataset.date)));
   $$('.calendar-event').forEach(button => button.addEventListener('click', () => { const event = events.find(item => item.entity_type === button.dataset.type && item.entity_id === Number(button.dataset.id)); if (!event) return; if (event.entity_type === 'annotation') return canCoordinate() ? openCalendarAnnotation(event) : null; jumpTo(event.entity_type, event.entity_id); }));
+  $$('.calendar-event.annotation').forEach(button => button.addEventListener('contextmenu', event => {
+    event.preventDefault(); event.stopPropagation();
+    const item = events.find(value => value.entity_type === 'annotation' && value.entity_id === Number(button.dataset.id));
+    if (item && canCoordinate()) showCalendarAnnotationContext(event, item);
+  }));
 }
 
 function calendarEvent(event, continuation) {
@@ -808,9 +978,23 @@ async function openCalendarAnnotation(record = null, date = null) {
     { name: 'controller_id', label: 'Sterownik', type: 'select', value: record?.controller_id || '', options: [{ value: '', label: 'Cały projekt' }, ...state.controllers.map(item => ({ value: item.id, label: item.display_name || item.code }))] },
     { name: 'assigned_user_id', label: 'Osoba', type: 'select', value: record?.assigned_user_id || '', options: [{ value: '', label: 'Bez osoby' }, ...assignableUsers().map(item => ({ value: item.id, label: item.display_name }))] },
     { name: 'description', label: 'Opis', type: 'textarea', value: record?.description || '', full: true }
-  ], submitLabel: 'Zapisz adnotację' });
+  ], submitLabel: 'Zapisz adnotację', secondaryLabel: record ? 'Usuń adnotację' : '', secondaryDanger: true });
+  if (result?.__action === 'secondary') return deleteCalendarAnnotation(record);
   if (!result?.title) return;
   try { await api('/api/calendar/annotations' + (record ? `/${record.entity_id || record.id}` : ''), { method: record ? 'PATCH' : 'POST', body: JSON.stringify(result) }); toast('Adnotacja została zapisana'); await reloadCalendar(); } catch (error) { toast(error.message, true); }
+}
+
+async function deleteCalendarAnnotation(record) {
+  if (!record || !await uiConfirm('Usuń adnotację', `Adnotacja „${record.title}” zostanie trwale usunięta z Kalendarza.`, 'Usuń', true)) return;
+  try { await api(`/api/calendar/annotations/${record.entity_id || record.id}`, { method: 'DELETE' }); toast('Adnotacja została usunięta'); await reloadCalendar(); } catch (error) { toast(error.message, true); }
+}
+
+function showCalendarAnnotationContext(event, record) {
+  const menu = $('#context-menu');
+  menu.innerHTML = '<button data-action="edit">Edytuj adnotację</button><button data-action="delete" class="danger-text">Usuń adnotację</button>';
+  menu.style.left = `${Math.min(event.clientX, innerWidth - 260)}px`; menu.style.top = `${Math.min(event.clientY, innerHeight - 160)}px`; menu.classList.remove('hidden');
+  menu.querySelector('[data-action="edit"]').addEventListener('click', () => { menu.classList.add('hidden'); openCalendarAnnotation(record); });
+  menu.querySelector('[data-action="delete"]').addEventListener('click', () => { menu.classList.add('hidden'); deleteCalendarAnnotation(record); });
 }
 
 function renderHistory() {
@@ -830,7 +1014,7 @@ function drawHistory() {
     if (!groups.has(label)) groups.set(label, []); groups.get(label).push(item);
   }
   const ordered = [...groups.entries()].sort((a, b) => { const left = controllerHierarchyOrder(a[1][0]); const right = controllerHierarchyOrder(b[1][0]); return left - right || a[0].localeCompare(b[0], 'pl', { numeric: true }); });
-  const hiddenAuditFields = new Set(['updated_at', 'id', 'project_id', 'test_id', 'issue_id', 'linked_test_id', 'created_at']);
+  const hiddenAuditFields = new Set(['updated_at', 'id', 'project_id', 'test_id', 'issue_id', 'linked_test_id', 'created_at', 'milestone']);
   $('#history-feed').innerHTML = ordered.map(([group, items]) => `${group ? `<div class="history-group-head"><b>${escapeHtml(group)}</b><span>${items.length} zmian</span></div>` : ''}${items.map(item => { const changed = Object.keys(item.changes || {}).filter(key => !hiddenAuditFields.has(key)); return `<article class="history-entry ${item.action} ${item.exists ? 'clickable' : ''}" ${item.exists ? `data-jump="${item.entity_type}" data-id="${item.entity_id}" tabindex="0"` : ''}><span class="history-icon ${item.entity_type}">${({ status: '▦', task: '✓', point: '!', note: '▤' })[item.entity_type]}</span><div><header><b>${escapeHtml(item.label)}</b><span>${escapeHtml(item.user_name || 'System')} · ${displayDateTime(item.changed_at)}</span></header><p>${escapeHtml(auditAction(item.action))}${changed.length ? ` · ${changed.map(fieldLabel).join(', ')}` : ''}</p></div>${item.exists ? '<span class="history-go">→</span>' : '<span class="badge gray">usunięty</span>'}</article>`; }).join('')}`).join('') || '<div class="empty">Brak zmian odpowiadających filtrom.</div>';
   bindJumpItems();
 }
@@ -1122,9 +1306,14 @@ function renderGoals() {
     const links = goal.links || [];
     const done = links.filter(link => ['Done', 'Closed'].includes(entity(link.entity_type, link.entity_id)?.status)).length;
     const progress = links.length ? Math.round(done * 100 / links.length) : 0;
-    return `<article class="goal"><div class="cardmeta"><span>${escapeHtml(controllerLabel(goal) || 'Wszystkie PLC')}</span>${badge(goal.status)}</div><h3>${escapeHtml(goal.title)}</h3><p>${escapeHtml(goal.description)}</p><div class="progress"><i style="width:${progress}%"></i></div><p>${done}/${links.length} powiązanych elementów ukończonych · termin ${displayDate(goal.due_date)}</p><div class="goal-links">${links.map(link => { const item = entity(link.entity_type, link.entity_id); return item ? `<button class="jump" data-type="${link.entity_type}" data-id="${item.id}"><span>${escapeHtml(entityLabel(link.entity_type, item))}</span><span>→</span></button>` : '<div class="sub">Powiązany element jest niedostępny</div>'; }).join('') || '<span class="sub">Nie wybrano jeszcze elementów</span>'}</div><button class="secondary edit-goal" data-id="${goal.id}">Edytuj cel</button></article>`;
+    return `<article class="goal clickable-goal" data-goal-id="${goal.id}" tabindex="0"><div class="cardmeta"><span>${escapeHtml(controllerLabel(goal) || 'Wszystkie PLC')}</span>${badge(goal.status)}</div><h3>${escapeHtml(goal.title)}</h3><p>${escapeHtml(goal.description)}</p><div class="progress"><i style="width:${progress}%"></i></div><p>${done}/${links.length} powiązanych elementów ukończonych · termin ${displayDate(goal.due_date)}</p><div class="goal-links">${links.map(link => { const item = entity(link.entity_type, link.entity_id); return item ? `<button class="jump" data-type="${link.entity_type}" data-id="${item.id}"><span>${escapeHtml(entityLabel(link.entity_type, item))}</span><span>→</span></button>` : '<div class="sub">Powiązany element jest niedostępny</div>'; }).join('') || '<span class="sub">Nie wybrano jeszcze elementów</span>'}</div><button class="secondary edit-goal" data-id="${goal.id}">Edytuj cel</button></article>`;
   }).join('') || '<div class="empty">Nie zdefiniowano celów.</div>'}</div>`;
   $$('.edit-goal').forEach(button => button.addEventListener('click', () => openRecord('goals', state.goals.find(item => item.id === Number(button.dataset.id)))));
+  $$('.clickable-goal').forEach(card => {
+    const edit = event => { if (event.target.closest('button,a')) return; openRecord('goals', state.goals.find(item => item.id === Number(card.dataset.goalId))); };
+    card.addEventListener('click', edit);
+    card.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); edit(event); } });
+  });
   bindJumpItems();
 }
 
@@ -1225,18 +1414,24 @@ function functionGroupConfig(admin) {
 
 function controllerHierarchyConfig(admin) {
   const children = parentId => state.controllerGroups.filter(group => Number(group.parent_id || 0) === Number(parentId || 0));
+  if (!state.hierarchySelection || ![...state.controllerGroups.map(item => `group:${item.id}`), ...state.controllers.map(item => `controller:${item.id}`)].includes(state.hierarchySelection)) state.hierarchySelection = state.controllerGroups[0] ? `group:${state.controllerGroups[0].id}` : state.controllers[0] ? `controller:${state.controllers[0].id}` : null;
   const rows = [];
   const walk = (parentId, depth) => {
     const siblings = children(parentId);
     siblings.forEach((group, index) => {
-      rows.push(`<div class="tree-row" style="--depth:${depth}">${admin ? orderControls('controller_groups', siblings, index) : ''}<span><b>▰ ${escapeHtml(group.name)}</b><small class="sub">${group.parent_id ? 'Podobszar' : 'Obszar'} · ${escapeHtml(group.description || '')}</small></span>${admin ? `${!group.parent_id ? `<button class="mini add-child-group" data-id="${group.id}">+ podobszar</button>` : ''}<button class="mini edit-controller-group" data-id="${group.id}" data-parent="${group.parent_id || ''}" data-name="${escapeHtml(group.name)}">Edytuj</button><button class="mini delete-controller-group" data-id="${group.id}">Usuń</button>` : ''}</div>`);
-      state.controllers.filter(item => Number(item.group_id || 0) === group.id).forEach(controller => rows.push(`<div class="tree-row controller-leaf" style="--depth:${depth + 1}"><span>└ <b>${escapeHtml(controller.display_name || controller.code)}</b><small class="sub">${escapeHtml(controller.hierarchy_label || controller.area || '')} · ${escapeHtml(controller.description)}</small></span>${admin ? `<button class="mini edit-controller" data-id="${controller.id}">Edytuj</button>` : ''}</div>`));
+      rows.push(`<div class="hierarchy-tree-row ${state.hierarchySelection === `group:${group.id}` ? 'selected' : ''}" style="--depth:${depth}">${admin ? orderControls('controller_groups', siblings, index) : ''}<button type="button" class="select-hierarchy-node" data-node="group:${group.id}"><b>▰ ${escapeHtml(group.name)}</b><small>${escapeHtml(group.path_label || group.name)}</small></button><span class="node-count">${state.controllers.filter(item => Number(item.group_id) === group.id).length}</span></div>`);
+      state.controllers.filter(item => Number(item.group_id || 0) === group.id).forEach(controller => rows.push(`<div class="hierarchy-tree-row controller-leaf ${state.hierarchySelection === `controller:${controller.id}` ? 'selected' : ''}" style="--depth:${depth + 1}"><button type="button" class="select-hierarchy-node" data-node="controller:${controller.id}"><b>◇ ${escapeHtml(controller.leaf_code || controller.display_name)}</b><small>${escapeHtml(controller.display_name || controller.hierarchy_label || '')}</small></button></div>`));
       walk(group.id, depth + 1);
     });
   };
   walk(null, 0);
-  state.controllers.filter(item => !item.group_id).forEach(controller => rows.push(`<div class="tree-row" style="--depth:0"><span>◇ <b>${escapeHtml(controller.display_name || controller.leaf_code)}</b><small class="sub">Bez grupy · ${escapeHtml(controller.area)} · ${escapeHtml(controller.description)}</small></span>${admin ? `<button class="mini edit-controller" data-id="${controller.id}">Edytuj</button>` : ''}</div>`));
-  return `<div class="config-tree">${rows.join('') || '<div class="empty compact-empty">Brak hierarchii sterowników.</div>'}</div>${admin ? '<div class="dialog-actions"><button class="secondary" id="new-root-group">+ Grupa główna</button><button class="secondary" id="new-controller">+ Sterownik</button></div>' : ''}`;
+  state.controllers.filter(item => !item.group_id).forEach(controller => rows.push(`<div class="hierarchy-tree-row controller-leaf ${state.hierarchySelection === `controller:${controller.id}` ? 'selected' : ''}" style="--depth:0"><button type="button" class="select-hierarchy-node" data-node="controller:${controller.id}"><b>◇ ${escapeHtml(controller.leaf_code || controller.display_name)}</b><small>Bez przypisanego obszaru</small></button></div>`));
+  const [kind, rawId] = String(state.hierarchySelection || '').split(':');
+  const selected = kind === 'group' ? state.controllerGroups.find(item => item.id === Number(rawId)) : state.controllers.find(item => item.id === Number(rawId));
+  const details = !selected ? '<div class="empty">Wybierz element z drzewa lub utwórz pierwszy obszar.</div>' : kind === 'group'
+    ? `<div class="hierarchy-detail-head"><span class="hierarchy-symbol">▰</span><div><small>${selected.parent_id ? 'Podobszar' : 'Obszar główny'}</small><h3>${escapeHtml(selected.name)}</h3><p>${escapeHtml(selected.path_label || selected.name)}</p></div></div><p>${escapeHtml(selected.description || 'Brak dodatkowego opisu.')}</p><dl class="hierarchy-facts"><div><dt>Poziom</dt><dd>${selected.depth}</dd></div><div><dt>Podobszary</dt><dd>${children(selected.id).length}</dd></div><div><dt>Sterowniki bezpośrednie</dt><dd>${state.controllers.filter(item => Number(item.group_id) === selected.id).length}</dd></div></dl>${admin ? `<div class="hierarchy-actions">${Number(selected.depth) < 2 ? `<button class="secondary add-child-group" data-id="${selected.id}">+ Dodaj podobszar</button>` : ''}<button class="secondary" id="new-controller-selected" data-group="${selected.id}">+ Dodaj sterownik</button><button class="mini edit-controller-group" data-id="${selected.id}" data-parent="${selected.parent_id || ''}" data-name="${escapeHtml(selected.name)}">Edytuj obszar</button><button class="mini danger-outline delete-controller-group" data-id="${selected.id}">Usuń obszar</button></div>` : ''}`
+    : `<div class="hierarchy-detail-head"><span class="hierarchy-symbol controller">◇</span><div><small>Sterownik końcowy</small><h3>${escapeHtml(selected.display_name || selected.leaf_code)}</h3><p>${escapeHtml(selected.hierarchy_label || 'Bez obszaru')}</p></div></div><p>${escapeHtml(selected.description || 'Brak dodatkowego opisu.')}</p><dl class="hierarchy-facts"><div><dt>Kod lokalny</dt><dd>${escapeHtml(selected.leaf_code)}</dd></div><div><dt>Obszar</dt><dd>${escapeHtml(selected.area || '—')}</dd></div></dl>${admin ? `<div class="hierarchy-actions"><button class="primary edit-controller" data-id="${selected.id}">Edytuj sterownik</button></div>` : ''}`;
+  return `<div class="hierarchy-editor"><aside><div class="hierarchy-tree-toolbar"><strong>Struktura projektu</strong>${admin ? '<button class="mini" id="new-root-group">+ Obszar</button>' : ''}</div><div class="config-tree compact-tree">${rows.join('') || '<div class="empty compact-empty">Brak hierarchii sterowników.</div>'}</div>${admin ? '<button class="secondary full-width" id="new-controller">+ Sterownik bez obszaru</button>' : ''}</aside><section class="hierarchy-detail">${details}</section></div>`;
 }
 
 function canManageUser(item) {
@@ -1244,60 +1439,72 @@ function canManageUser(item) {
 }
 
 function renderSettings() {
-  if (state.configExpanded) { if ($('#config-full-dialog').open) $('#config-full-dialog').close(); restoreConfigCard(); }
+  const admin = ['system_admin', 'project_admin'].includes(state.me.role);
+  const systemAdmin = state.me.role === 'system_admin';
+  const launchers = [
+    ...(systemAdmin ? [['projects', 'Projekty systemu', 'Globalne projekty, dostęp i bezpieczne usuwanie', state.projects.length, '▦']] : []),
+    ['hierarchy', 'Hierarchia obszarów / sterowników', 'Projekt → obszar → podobszar → sterownik', state.controllerGroups.length + state.controllers.length, '⌘'],
+    ['function_groups', 'Grupy funkcyjne i punkty statusu', 'Stacje, roboty, elementy oraz szablony kontroli', state.config.function_groups.length, '⚙'],
+    ['status_categories', 'Kategorie statusu', 'Kategorie i podkategorie w ustalonej kolejności', state.config.categories.length, '▤'],
+    ['task_categories', 'Kategorie zadań', 'Niezależny słownik dla modułu Zadania', state.config.task_categories.length, '✓'],
+    ['users', 'Użytkownicy projektu', 'Role, dostęp, Planner i przypisane obszary', state.users.length, '♙'],
+    ['dictionaries', 'Słowniki projektu', 'Zmiany, typy notatek i „Oczekiwanie na”', state.config.options.length, '≡'],
+    ['reminders', 'Przypomnienia', 'Domyślne terminy i okno ostrzegawcze', 2, '◷'],
+    ...(admin ? [['backup', 'Backup projektu', 'Pobieranie i odtwarzanie kompletnego projektu', '', '⇄'], ['exports', 'Szablony eksportu', 'Predefiniowane raporty statusu do Excel', (state.config.export_templates || []).length, '↗']] : [])
+  ];
+  $('#content').innerHTML = `<section class="settings-home"><header><div><span class="eyebrow">Ustawienia projektu</span><h2>Wybierz obszar konfiguracji</h2><p>Każda grupa ustawień otwiera się w osobnym, trwałym oknie. Zapis nie zamyka edytowanego widoku.</p></div><span class="settings-role">${escapeHtml(roleName(state.me.role))}</span></header><div class="settings-launchers">${launchers.map(([key, title, description, count, icon]) => `<button type="button" class="settings-launcher" data-config-panel="${key}"><span class="settings-launcher-icon">${icon}</span><span><b>${escapeHtml(title)}</b><small>${escapeHtml(description)}</small></span>${count !== '' ? `<em>${count}</em>` : ''}<i>→</i></button>`).join('')}</div></section>`;
+  $$('[data-config-panel]').forEach(button => button.addEventListener('click', () => openConfigPanel(button.dataset.configPanel)));
+  if ($('#config-full-dialog').open && state.configPanel) refreshConfigPanel();
+}
+
+function configPanelDefinition(key) {
   const admin = ['system_admin', 'project_admin'].includes(state.me.role);
   const systemAdmin = state.me.role === 'system_admin';
   const dictionaries = [['waiting_for', 'Oczekiwanie na'], ['shift', 'Zmiany'], ['note_type', 'Typy notatek']].map(([kind, label]) => {
     const items = state.config.options.filter(item => item.kind === kind);
-    return `<h3>${label}</h3>${items.map((item, index) => `<div class="settings-row">${orderControls('options', items, index)}<span>${escapeHtml(item.value)}</span><button class="mini edit-option" data-id="${item.id}" data-kind="${kind}" data-value="${escapeHtml(item.value)}">Edytuj</button>${admin ? `<button class="mini delete-config" data-kind="option" data-id="${item.id}">Usuń</button>` : ''}</div>`).join('')}<form class="inline-form add-option" data-kind="${kind}"><input name="value" placeholder="Nowa wartość" required><button class="mini">Dodaj</button></form>`;
+    return `<section class="config-subsection"><h3>${label}</h3>${items.map((item, index) => `<div class="settings-row">${orderControls('options', items, index)}<span>${escapeHtml(item.value)}</span><button class="mini edit-option" data-id="${item.id}" data-kind="${kind}" data-value="${escapeHtml(item.value)}">Edytuj</button>${admin ? `<button class="mini delete-config" data-kind="option" data-id="${item.id}">Usuń</button>` : ''}</div>`).join('')}<form class="inline-form add-option" data-kind="${kind}"><input name="value" placeholder="Nowa wartość" required><button class="mini">Dodaj</button></form></section>`;
   }).join('');
-  $('#content').innerHTML = `<div class="settings-grid">
-    ${systemAdmin ? `<section class="settings-card settings-wide"><h2>Projekty systemu</h2><p class="sub">Konta są globalne, a role i dostęp są niezależne dla każdego projektu.</p>${state.projects.map(item => `<div class="settings-row"><span><b>${escapeHtml(item.code)} · ${escapeHtml(item.name)}</b><small class="sub">${escapeHtml(item.description || '')}</small></span><button class="mini edit-project" data-id="${item.id}">Edytuj</button><button class="mini danger-outline delete-project" data-id="${item.id}" ${state.projects.length <= 1 ? 'disabled title="Nie można usunąć ostatniego projektu"' : ''}>Usuń</button></div>`).join('')}<button class="secondary" id="new-project">+ Dodaj projekt</button></section>` : ''}
-    <section class="settings-card settings-wide hierarchy-card"><h2>Hierarchia obszarów / sterowników</h2><p class="sub">Projekt → obszar → podobszar → sterownik. Maksymalnie cztery poziomy razem z projektem i sterownikiem.</p>${controllerHierarchyConfig(admin)}</section>
-    ${functionGroupConfig(admin)}
-    <section class="settings-card"><h2>Kategorie statusu i otwartych punktów</h2>${categoryConfig('status', state.config.categories, admin)}<form class="inline-form add-category" data-scope="status"><input name="name" placeholder="Nowa kategoria" required><button class="mini">Dodaj</button></form></section>
-    <section class="settings-card"><h2>Kategorie zadań</h2>${categoryConfig('task', state.config.task_categories, admin)}<form class="inline-form add-category" data-scope="task"><input name="name" placeholder="Nowa kategoria zadań" required><button class="mini">Dodaj</button></form></section>
-    <section class="settings-card"><h2>Użytkownicy projektu</h2>${state.users.map((item, index) => `<div class="settings-row">${systemAdmin ? orderControls('users', state.users, index) : ''}<span><b>${escapeHtml(item.display_name)}</b><small class="sub">${escapeHtml(item.username)} · ${item.system_role === 'system_admin' ? 'Administrator systemu' : roleName(item.project_role)} · ${item.project_active ? 'w projekcie' : 'wyłączony z projektu'} · Planner: ${item.planner_enabled ? 'tak' : 'nie'}</small><small class="sub">Obszary: ${(item.area_ids || []).map(id => state.controllerGroups.find(group => group.id === id)?.path_label).filter(Boolean).map(escapeHtml).join(', ') || 'nie przypisano'}</small></span>${admin && item.project_active ? `<button class="mini toggle-user-planner ${item.planner_enabled ? 'active-toggle' : ''}" data-id="${item.id}" data-enabled="${item.planner_enabled ? 1 : 0}">${item.planner_enabled ? 'Planner ✓' : 'Planner —'}</button>` : ''}${admin && item.project_active && item.system_role !== 'system_admin' ? `<button class="mini edit-user-areas" data-id="${item.id}">Obszary</button>` : ''}${canManageUser(item) ? `<button class="mini edit-user" data-id="${item.id}">Edytuj dostęp</button>` : ''}</div>`).join('')}${systemAdmin ? '<button class="secondary" id="new-user">+ Dodaj globalne konto</button>' : ''}</section>
-    <section class="settings-card"><h2>Słowniki</h2>${dictionaries}</section>
-    <section class="settings-card"><h2>Ustawienia przypomnień</h2>${admin ? `<p class="sub">Źródło obszarów dla „Mojego podsumowania” każdy użytkownik wybiera indywidualnie bezpośrednio w tym module.</p><label class="field"><span>Domyślne przypomnienie po utworzeniu (dni)</span><input id="default-reminder" type="number" min="1" value="${escapeHtml(state.config.settings.default_reminder_days || 14)}"></label><label class="field"><span>Okno „zbliżających się” przypomnień (dni)</span><input id="warning-days" type="number" min="1" value="${escapeHtml(state.config.settings.reminder_warning_days || 7)}"></label>` : '<p class="sub">Tylko administrator może zmieniać ustawienia projektu.</p>'}</section>
-    ${admin ? `<section class="settings-card"><h2>Backup projektu</h2><p class="sub">Plik JSON zawiera konfigurację, status, zadania, cele, otwarte punkty, dziennik, powiązania i historię zmian.</p><div class="backup-actions"><button class="secondary" id="download-backup">Pobierz backup</button><label class="secondary file-button">Wczytaj backup<input id="restore-backup" type="file" accept="application/json,.json"></label></div></section>
-    <section class="settings-card"><h2>Szablony eksportu statusu</h2>${(state.config.export_templates || []).map((item, index) => `<div class="settings-row">${orderControls('export_templates', state.config.export_templates, index)}<span><b>${escapeHtml(item.name)}</b><small class="sub">${escapeHtml(item.detail_level)}</small></span><button class="mini edit-export-template" data-id="${item.id}">Edytuj</button><button class="mini delete-export-template" data-id="${item.id}">Usuń</button></div>`).join('') || '<p class="sub">Brak własnych szablonów.</p>'}<button class="secondary" id="new-export-template">+ Nowy szablon</button></section>` : ''}
-  </div>`;
-  $$('.settings-card').forEach((card, index) => {
-    card.classList.add('config-window');
-    const title = card.querySelector('h2')?.textContent || `Konfiguracja ${index + 1}`;
-    const button = document.createElement('button'); button.type = 'button'; button.className = 'mini expand-config'; button.dataset.index = String(index); button.textContent = 'Pełny widok ↗'; button.setAttribute('aria-label', `Otwórz pełny widok: ${title}`); card.prepend(button);
-  });
+  const users = state.users.map((item, index) => `<div class="settings-row user-config-row">${systemAdmin ? orderControls('users', state.users, index) : ''}<span><b>${escapeHtml(item.display_name)}</b><small class="sub">${escapeHtml(item.username)} · ${item.system_role === 'system_admin' ? 'Administrator systemu' : roleName(item.project_role)} · ${item.project_active ? 'w projekcie' : 'wyłączony z projektu'} · Planner: ${item.planner_enabled ? 'tak' : 'nie'}</small><small class="sub">Obszary: ${(item.area_ids || []).map(id => state.controllerGroups.find(group => group.id === id)?.path_label).filter(Boolean).map(escapeHtml).join(', ') || 'nie przypisano'}</small></span>${admin && item.project_active ? `<button class="mini toggle-user-planner ${item.planner_enabled ? 'active-toggle' : ''}" data-id="${item.id}" data-enabled="${item.planner_enabled ? 1 : 0}">${item.planner_enabled ? 'Planner ✓' : 'Planner —'}</button>` : ''}${admin && item.project_active && item.system_role !== 'system_admin' ? `<button class="mini edit-user-areas" data-id="${item.id}">Obszary</button>` : ''}${canManageUser(item) ? `<button class="mini edit-user" data-id="${item.id}">Edytuj dostęp</button>` : ''}</div>`).join('');
+  const definitions = {
+    projects: ['Projekty systemu', `<section class="config-panel-body"><p class="sub">Konta są globalne, a role i dostęp są niezależne dla każdego projektu.</p>${state.projects.map(item => `<div class="settings-row"><span><b>${escapeHtml(item.code)} · ${escapeHtml(item.name)}</b><small class="sub">${escapeHtml(item.description || '')}</small></span><button class="mini edit-project" data-id="${item.id}">Edytuj</button><button class="mini danger-outline delete-project" data-id="${item.id}" ${state.projects.length <= 1 ? 'disabled title="Nie można usunąć ostatniego projektu"' : ''}>Usuń</button></div>`).join('')}<button class="secondary" id="new-project">+ Dodaj projekt</button></section>`],
+    hierarchy: ['Hierarchia obszarów / sterowników', `<section class="config-panel-body"><p class="sub">Projekt → obszar → podobszar → sterownik. Wybierz element po lewej, a jego działania pojawią się po prawej.</p>${controllerHierarchyConfig(admin)}</section>`],
+    function_groups: ['Grupy funkcyjne i punkty statusu', functionGroupConfig(admin)],
+    status_categories: ['Kategorie statusu i otwartych punktów', `<section class="config-panel-body">${categoryConfig('status', state.config.categories, admin)}<form class="inline-form add-category" data-scope="status"><input name="name" placeholder="Nowa kategoria" required><button class="mini">Dodaj</button></form></section>`],
+    task_categories: ['Kategorie zadań', `<section class="config-panel-body">${categoryConfig('task', state.config.task_categories, admin)}<form class="inline-form add-category" data-scope="task"><input name="name" placeholder="Nowa kategoria zadań" required><button class="mini">Dodaj</button></form></section>`],
+    users: ['Użytkownicy projektu', `<section class="config-panel-body">${users}${systemAdmin ? '<button class="secondary" id="new-user">+ Dodaj globalne konto</button>' : ''}</section>`],
+    dictionaries: ['Słowniki projektu', `<section class="config-panel-body config-dictionaries">${dictionaries}</section>`],
+    reminders: ['Ustawienia przypomnień', `<section class="config-panel-body">${admin ? `<p class="sub">Źródło obszarów dla „Mojego podsumowania” każdy użytkownik wybiera indywidualnie w tym module.</p><label class="field"><span>Domyślne przypomnienie po utworzeniu (dni)</span><input id="default-reminder" type="number" min="1" value="${escapeHtml(state.config.settings.default_reminder_days || 14)}"></label><label class="field"><span>Okno „zbliżających się” przypomnień (dni)</span><input id="warning-days" type="number" min="1" value="${escapeHtml(state.config.settings.reminder_warning_days || 7)}"></label>` : '<p class="sub">Tylko administrator może zmieniać ustawienia projektu.</p>'}</section>`],
+    backup: ['Backup projektu', `<section class="config-panel-body"><p class="sub">Plik JSON zawiera konfigurację, status, zadania, cele, otwarte punkty, dziennik, Planner, Informator, powiązania i historię zmian.</p><div class="backup-actions"><button class="secondary" id="download-backup">Pobierz backup</button><label class="secondary file-button">Wczytaj backup<input id="restore-backup" type="file" accept="application/json,.json"></label></div></section>`],
+    exports: ['Szablony eksportu statusu', `<section class="config-panel-body">${(state.config.export_templates || []).map((item, index) => `<div class="settings-row">${orderControls('export_templates', state.config.export_templates, index)}<span><b>${escapeHtml(item.name)}</b><small class="sub">${escapeHtml(item.detail_level)}</small></span><button class="mini edit-export-template" data-id="${item.id}">Edytuj</button><button class="mini delete-export-template" data-id="${item.id}">Usuń</button></div>`).join('') || '<p class="sub">Brak własnych szablonów.</p>'}<button class="secondary" id="new-export-template">+ Nowy szablon</button></section>`]
+  };
+  return definitions[key] || ['Konfiguracja', '<div class="empty">Nie znaleziono tej grupy ustawień.</div>'];
+}
+
+function openConfigPanel(key) {
+  state.configPanel = key; state.configScroll = 0;
+  refreshConfigPanel();
+  if (!$('#config-full-dialog').open) $('#config-full-dialog').showModal();
+}
+
+function refreshConfigPanel() {
+  if (!state.configPanel) return;
+  const dialog = $('#config-full-dialog'); const [title, html] = configPanelDefinition(state.configPanel);
+  dialog.dataset.refreshing = '1';
+  $('#config-full-title').textContent = title;
+  $('#config-full-content').innerHTML = html;
   bindSettings();
-}
-
-function openConfigFull(card) {
-  if (!card || state.configExpanded) return;
-  const placeholder = document.createComment('config-card-placeholder');
-  card.before(placeholder);
-  state.configExpanded = { card, placeholder };
-  card.classList.add('expanded-config-card');
-  $('#config-full-title').textContent = card.querySelector('h2')?.textContent || 'Pełna lista konfiguracji';
-  $('#config-full-content').replaceChildren(card);
-  $('#config-full-dialog').showModal();
-}
-
-function restoreConfigCard() {
-  if (!state.configExpanded) return;
-  const { card, placeholder } = state.configExpanded;
-  card.classList.remove('expanded-config-card');
-  placeholder.replaceWith(card);
-  state.configExpanded = null;
+  requestAnimationFrame(() => { $('#config-full-content').scrollTop = state.configScroll || 0; dialog.dataset.dirty = ''; dialog.dataset.refreshing = ''; });
 }
 
 function bindSettings() {
-  $$('.expand-config').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); openConfigFull(button.closest('.settings-card')); }));
   $$('.move-item').forEach(button => button.addEventListener('click', () => moveConfigItem(button.dataset.kind, Number(button.dataset.id), Number(button.dataset.direction))));
+  $$('.select-hierarchy-node').forEach(button => button.addEventListener('click', () => { state.hierarchySelection = button.dataset.node; state.configScroll = $('#config-full-content')?.scrollTop || 0; refreshConfigPanel(); }));
   $('#new-root-group')?.addEventListener('click', () => saveControllerGroup(null, null));
+  $('#new-controller-selected')?.addEventListener('click', button => openRecord('controllers', null, { group_id: Number(button.currentTarget.dataset.group) }));
   $$('.add-child-group').forEach(button => button.addEventListener('click', () => saveControllerGroup(null, Number(button.dataset.id))));
   $$('.edit-controller-group').forEach(button => button.addEventListener('click', () => saveControllerGroup(Number(button.dataset.id), Number(button.dataset.parent) || null, button.dataset.name)));
   $$('.delete-controller-group').forEach(button => button.addEventListener('click', async () => { if (!await uiConfirm('Usuń obszar', 'Podobszary i przypisania mogą również zostać usunięte.', 'Usuń', true)) return; try { await api(`/api/controller-groups/${button.dataset.id}`, { method: 'DELETE' }); state.controller = 'all'; await loadData(); } catch (error) { toast(error.message, true); } }));
-  $('#function-group-controller')?.addEventListener('change', event => { state.functionGroupController = event.target.value; renderSettings(); });
+  $('#function-group-controller')?.addEventListener('change', event => { state.functionGroupController = event.target.value; state.configScroll = 0; refreshConfigPanel(); });
   $('#new-function-group')?.addEventListener('submit', async event => {
     event.preventDefault();
     try {
@@ -1512,10 +1719,17 @@ async function saveFunctionGroupPoints() {
   const button = $('#function-points-save');
   button.disabled = true;
   try {
-    await api(`/api/function-groups/${state.functionPointGroup.id}/checks`, { method: 'PUT', body: JSON.stringify({ points: state.functionPointDraft }) });
-    $('#function-points-dialog').close();
+    const groupId = state.functionPointGroup.id;
+    await api(`/api/function-groups/${groupId}/checks`, { method: 'PUT', body: JSON.stringify({ points: state.functionPointDraft }) });
     toast('Punkty grupy zapisano i zsynchronizowano ze Statusem');
     await loadData();
+    const updated = (state.config.function_groups || []).find(item => item.id === groupId);
+    if (updated) {
+      state.functionPointGroup = updated;
+      state.functionPointDraft = (updated.checks || []).map(check => ({ id: check.id, element_id: check.element_id, group_subcategory_id: check.group_subcategory_id, title: check.title, category: check.category, criticality: check.criticality, subcategory_ids: [...(check.subcategory_ids || [])] }));
+      renderFunctionPointDraft();
+      $('#function-points-dialog').dataset.dirty = '';
+    }
   } catch (error) { toast(error.message, true); }
   finally { button.disabled = false; }
 }
@@ -1570,14 +1784,15 @@ const formDefinitions = {
     ['category', 'Kategoria', 'category', 'status'], ['subcategory', 'Podkategoria', 'subcategory', 'status'],
     ['status', 'Status', 'select', ['Not started', 'Ready to test', 'In progress', 'Blocked', 'NOK / Rework', 'Retest required', 'Done', 'N/A']],
     ['criticality', 'Krytyczność', 'select', ['Low', 'Medium', 'High', 'Critical']], ['responsible_user_ids', 'Osoby odpowiedzialne', 'users'],
-    ['milestone', 'Milestone'], ['environment', 'Środowisko testu'], ['current_note', 'Aktualna notatka', 'textarea'], ['evidence_link', 'Dodatkowe informacje / link'], ['links', 'Powiązane elementy', 'multi-links', ['task', 'point', 'note', 'goal']]
+    ['environment', 'Środowisko testu'], ['current_note', 'Aktualna notatka', 'textarea'], ['evidence_link', 'Dodatkowe informacje / link'], ['links', 'Powiązane elementy', 'multi-links', ['task', 'point', 'note', 'goal']]
   ] },
   tasks: { endpoint: '/api/tasks', title: 'zadanie', fields: [
-    ['hierarchy_target', 'Zakres w hierarchii projektu', 'hierarchy-target'], ['title', 'Tytuł'], ['direct_assignee_user_ids', 'Odpowiedzialni', 'users'], ['checklist', 'Lista kontrolna', 'checklist'], ['scope_checklist', 'Kontrola sterowników w zakresie', 'scope-checklist'],
+    ['hierarchy_target', 'Zakres w hierarchii projektu', 'hierarchy-target'], ['title', 'Tytuł', 'wide-text'], ['description', 'Opis', 'textarea'], ['info_link', 'Dodatkowe informacje / link', 'wide-text'],
+    ['direct_assignee_user_ids', 'Odpowiedzialni', 'users'], ['checklist', 'Lista kontrolna', 'checklist'], ['scope_checklist', 'Kontrola sterowników w zakresie', 'scope-checklist'],
     ['function_group_id', 'Grupa funkcyjna', 'function-group'], ['function_group_element_id', 'Element grupy funkcyjnej', 'function-element'], ['other_object', 'Inne (gdy nie dotyczy grupy)'],
     ['status', 'Status', 'select', ['To do', 'In progress', 'Done']], ['priority', 'Priorytet', 'select', ['Low', 'Medium', 'High', 'Critical']],
     ['start_date', 'Planowany start', 'date'], ['due_date', 'Deadline', 'date'], ['category', 'Kategoria zadania', 'category', 'task'], ['subcategory', 'Podkategoria zadania', 'subcategory', 'task'],
-    ['links', 'Powiązane elementy', 'multi-links', ['status', 'point', 'note']], ['info_link', 'Dodatkowe informacje / link'], ['description', 'Opis', 'textarea']
+    ['links', 'Powiązane elementy', 'multi-links', ['status', 'point', 'note']]
   ] },
   points: { endpoint: '/api/open-points', title: 'otwarty punkt', fields: [
     ['controller', 'Sterownik', 'controller'], ['title', 'Temat'], ['owner_user_id', 'Odpowiedzialny', 'user'],
@@ -1593,6 +1808,11 @@ const formDefinitions = {
   ] },
   goals: { endpoint: '/api/goals', title: 'cel', fields: [
     ['controller', 'Sterownik', 'controller'], ['title', 'Nazwa celu'], ['status', 'Status', 'select', ['Open', 'In progress', 'Done']], ['priority', 'Priorytet', 'select', ['Low', 'Medium', 'High', 'Critical']], ['due_date', 'Termin', 'date'], ['description', 'Opis', 'textarea'], ['goal_links', 'Powiązane elementy', 'goal-links']
+  ] },
+  announcements: { endpoint: '/api/announcements', title: 'wiadomość', fields: [
+    ['title', 'Tytuł', 'wide-text'], ['content', 'Treść', 'bigtextarea'], ['info_link', 'Link', 'wide-text'],
+    ['scope_group_ids', 'Zakres projektu', 'announcement-scopes'], ['recipient_user_ids', 'Osoby, których wiadomość bezpośrednio dotyczy', 'announcement-users'],
+    ['links', 'Przypięte elementy', 'multi-links', ['status', 'task', 'point', 'note', 'goal']]
   ] },
   users: { endpoint: '/api/users', title: 'użytkownika', fields: [
     ['username', 'Login'], ['display_name', 'Imię i nazwisko'], ['password', 'Hasło', 'password'], ['system_role', 'Rola systemowa', 'select', ['user', 'system_admin']], ['project_role', 'Rola w tym projekcie', 'select', ['user', 'moderator', 'project_admin']], ['project_active', 'Dostęp do projektu', 'boolean'], ['planner_enabled', 'Uwzględniaj w Plannerze', 'boolean'], ['active', 'Konto globalnie aktywne', 'boolean']
@@ -1666,6 +1886,15 @@ function fieldHtml([name, label, type = 'text', extra], record) {
   if (type === 'checklist') return checklistField(record);
   if (type === 'scope-checklist') return scopeChecklistField(record);
   if (type === 'goal-links') return goalLinksField();
+  if (type === 'announcement-scopes') {
+    const selected = new Set((record?.scope_group_ids || []).map(Number));
+    return `<div class="field full"><label>${escapeHtml(label)}</label><details class="multi-user-select"><summary>${selected.size ? `${selected.size} wybranych obszarów` : 'Cały projekt'}</summary><div class="mentions announcement-scope-grid">${state.controllerGroups.map(group => `<label class="mention hierarchy-option" style="--depth:${Math.max(0, Number(group.depth || 1) - 1)}"><input type="checkbox" name="scope_group_ids" value="${group.id}" ${selected.has(group.id) ? 'checked' : ''}>${escapeHtml(group.path_label || group.name)}</label>`).join('')}</div></details><small class="sub">Brak wyboru oznacza cały projekt. Nie wybieraj jednocześnie obszaru nadrzędnego i jego podobszaru.</small></div>`;
+  }
+  if (type === 'announcement-users') {
+    const selected = new Set((record?.recipient_user_ids || []).map(Number));
+    const users = state.users.filter(item => item.active && item.project_active);
+    return `<div class="field full"><label>${escapeHtml(label)}</label><details class="multi-user-select"><summary>${selected.size ? `${selected.size} wskazanych osób` : 'Bez wskazania konkretnych osób'}</summary><div class="mentions assignee-grid">${users.map(user => `<label class="mention"><input type="checkbox" name="recipient_user_ids" value="${user.id}" ${selected.has(user.id) ? 'checked' : ''}>${escapeHtml(user.display_name)}</label>`).join('')}</div></details></div>`;
+  }
   let input;
   if (type === 'controller') input = `<select name="${name}" id="form-controller">${selectOptions(state.controllers.map(item => ({ value: item.code, label: item.display_name || item.code })), value)}</select>`;
   else if (type === 'hierarchy-target') {
@@ -1697,10 +1926,11 @@ function fieldHtml([name, label, type = 'text', extra], record) {
   else if (type === 'subcategory') input = `<select name="${name}" id="form-subcategory">${selectOptions(subcategories(extra, record?.category), value)}</select>`;
   else if (type === 'options') input = `<select name="${name}">${selectOptions(options(extra), value)}</select>`;
   else if (type === 'textarea' || type === 'bigtextarea') input = `<textarea name="${name}">${escapeHtml(value)}</textarea>`;
+  else if (type === 'wide-text') input = `<input name="${name}" type="text" value="${escapeHtml(value)}" ${name === 'title' ? 'required' : ''}>`;
   else if (type === 'boolean') input = `<select name="${name}"><option value="1"${Number(value) !== 0 ? ' selected' : ''}>Tak</option><option value="0"${Number(value) === 0 ? ' selected' : ''}>Nie</option></select>`;
   else if (type === 'readonly') input = `<span class="id-lock"><input name="${name}" value="${escapeHtml(value || 'Zostanie nadane automatycznie')}" readonly></span>`;
   else input = `<input name="${name}" type="${type}" value="${escapeHtml(value)}" ${['title', 'username', 'display_name'].includes(name) || (name === 'password' && !record) ? 'required' : ''}>`;
-  return `<label class="field ${['textarea', 'bigtextarea'].includes(type) ? `full ${type === 'bigtextarea' ? 'big' : ''}` : ''}"><span>${label}</span>${input}${type === 'readonly' ? '<small class="sub">ID jest unikalne w projekcie i nie można go edytować.</small>' : ''}</label>`;
+  return `<label class="field ${['textarea', 'bigtextarea', 'wide-text'].includes(type) ? `full ${type === 'bigtextarea' ? 'big' : ''}` : ''}"><span>${label}</span>${input}${type === 'readonly' ? '<small class="sub">ID jest unikalne w projekcie i nie można go edytować.</small>' : ''}</label>`;
 }
 
 function multiLinksField(allowedTypes) {
@@ -1717,7 +1947,7 @@ function checklistField(record) {
 }
 
 function checklistRow(item = {}) {
-  return `<div class="check-row"><label class="check-done"><input type="checkbox" data-check-done ${item.done ? 'checked' : ''}><span>Gotowe</span></label><textarea data-check-text rows="2" placeholder="Opisz konkretny rezultat podzadania…">${escapeHtml(item.text || '')}</textarea><div class="check-row-meta"><label><span>Waga</span><input type="number" data-check-weight min="0.1" max="1000" step="0.1" value="${escapeHtml(item.weight || 1)}"></label><label><span>Wykonawca</span><select data-check-owner>${selectOptions(assignableUsers().map(user => ({ value: user.id, label: user.display_name })), item.owner_user_id, 'Bez osoby')}</select></label><button type="button" class="mini delete-check" title="Usuń podzadanie">×</button></div></div>`;
+  return `<div class="check-row"><label class="check-text-field"><span>Treść podzadania</span><textarea data-check-text rows="3" placeholder="Opisz konkretny rezultat podzadania…">${escapeHtml(item.text || '')}</textarea></label><div class="check-row-meta"><label class="check-control check-done"><span>Stan</span><span class="check-toggle"><input type="checkbox" data-check-done ${item.done ? 'checked' : ''}><b>Gotowe</b></span></label><label class="check-control"><span>Waga</span><input type="number" data-check-weight min="0.1" max="1000" step="0.1" value="${escapeHtml(item.weight || 1)}"></label><label class="check-control check-owner"><span>Wykonawca</span><select data-check-owner>${selectOptions(assignableUsers().map(user => ({ value: user.id, label: user.display_name })), item.owner_user_id, 'Bez osoby')}</select></label><button type="button" class="mini delete-check" title="Usuń podzadanie">×</button></div></div>`;
 }
 
 function scopeControllersForGroup(groupId) {
@@ -1747,7 +1977,9 @@ function bindDynamicFields(type) {
   $$('.multi-user-select input[type="checkbox"]').forEach(input => input.addEventListener('change', event => {
     const details = event.target.closest('.multi-user-select');
     const names = [...details.querySelectorAll('input:checked')].map(item => item.closest('label').textContent.trim());
-    details.querySelector('summary').textContent = names.length ? `${names.length} · ${names.join(', ')}` : 'Wybierz osoby odpowiedzialne';
+    const fieldName = event.target.name;
+    const empty = fieldName === 'scope_group_ids' ? 'Cały projekt' : fieldName === 'recipient_user_ids' ? 'Bez wskazania konkretnych osób' : 'Wybierz osoby odpowiedzialne';
+    details.querySelector('summary').textContent = names.length ? `${names.length} · ${names.join(', ')}` : empty;
   }));
   $('#form-category')?.addEventListener('change', event => { const scope = event.target.dataset.scope; $('#form-subcategory').innerHTML = selectOptions(subcategories(scope, event.target.value)); if (type === 'status') applyDefaultFunction(); });
   $('#form-subcategory')?.addEventListener('change', () => { if (type === 'status') applyDefaultFunction(); });
@@ -2026,7 +2258,7 @@ function fieldLabel(field) { return ({
   station: 'Stacja / obiekt', function_detail: 'Test / funkcja', function_group_id: 'Grupa funkcyjna', function_group_element_id: 'Element grupy', function_group_subcategory_id: 'Podkategoria grupy funkcyjnej',
   other_object: 'Inny obiekt', owner: 'Odpowiedzialny (opis)', owner_user_id: 'Odpowiedzialny', responsible: 'Odpowiedzialny (opis)', responsible_user_id: 'Odpowiedzialny', responsible_user_ids: 'Osoby odpowiedzialne', direct_assignee_user_ids: 'Odpowiedzialni', mentioned_user_ids: 'Wspomniane osoby',
   due_date: 'Deadline', reminder_date: 'Przypomnienie', start_date: 'Planowany start', note_date: 'Data wpisu', checked_on: 'Data sprawdzenia', checked_by: 'Sprawdził',
-  current_note: 'Aktualna notatka', milestone: 'Milestone', environment: 'Środowisko', criticality: 'Krytyczność', evidence_link: 'Dowód / link', info_link: 'Dodatkowe informacje / link',
+  current_note: 'Aktualna notatka', environment: 'Środowisko', criticality: 'Krytyczność', evidence_link: 'Dowód / link', info_link: 'Dodatkowe informacje / link',
   impact: 'Wpływ', waiting_for: 'Oczekiwanie na', next_action: 'Następny krok', shift: 'Zmiana', type: 'Typ wpisu', content: 'Treść', author: 'Autor',
   linked_entity_id: 'Powiązany element', linked_entity_type: 'Typ powiązania', checklist: 'Lista kontrolna / podzadania', scope_checklist: 'Kontrola sterowników w zakresie', links: 'Powiązania'
 })[field] || field.replaceAll('_', ' '); }
@@ -2089,6 +2321,8 @@ async function saveRecord(event) {
   input.mentioned_user_ids = formData.getAll('mentioned_user_ids').map(Number);
   input.direct_assignee_user_ids = formData.getAll('direct_assignee_user_ids').map(Number);
   input.responsible_user_ids = formData.getAll('responsible_user_ids').map(Number);
+  input.scope_group_ids = formData.getAll('scope_group_ids').map(Number);
+  input.recipient_user_ids = formData.getAll('recipient_user_ids').map(Number);
   if (formDefinitions[type].fields.some(field => field[2] === 'multi-links')) { captureMultiLinks(); input.links = state.linkDraft; }
   if (type === 'tasks') {
     input.checklist = $$('#checklist .check-row').map(row => ({ text: row.querySelector('[data-check-text]').value, done: row.querySelector('[data-check-done]').checked, weight: Number(row.querySelector('[data-check-weight]').value) || 1, owner_user_id: Number(row.querySelector('[data-check-owner]').value) || null })).filter(item => item.text.trim());

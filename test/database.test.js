@@ -307,7 +307,7 @@ test('V5 data remains compatible with planner, calendar, weighted teamwork, cano
       assert.throws(() => repository.dailySummary('2026-01-01', '2026-01-15'), /14 dni/);
 
       const backup = repository.projectBackup();
-      assert.equal(backup.version, 7);
+      assert.equal(backup.version, 8);
       assert.ok(Array.isArray(backup.tables.planner_entries));
       assert.ok(Array.isArray(backup.tables.task_assignees));
       assert.ok(Array.isArray(backup.tables.calendar_annotations));
@@ -466,7 +466,69 @@ test('V7 supports canonical hierarchy IDs, area tasks, goal links and configurab
       assert.ok(overview.overall.goals.total >= 1);
       assert.ok(Array.isArray(overview.status_breakdown));
       assert.ok(overview.trends.week.every(point => point.goals && Number.isFinite(point.goals.total)));
-      assert.equal(repository.projectBackup().version, 7);
+      assert.equal(repository.projectBackup().version, 8);
+    });
+  } finally {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
+test('V8 supports announcements, aggregated KPI trends, unified Planner requirements and today-only guests', () => {
+  const temporary = temporaryDatabase();
+  const repository = openDatabase(temporary.path);
+  try {
+    const account = repository.authenticate('admin');
+    repository.withProject(1, () => {
+      const admin = repository.me(account.id, 1);
+      const today = new Date().toISOString().slice(0, 10);
+      const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+      const roots = repository.controllerGroups().filter(item => !item.parent_id);
+      const controller = repository.controllers()[0];
+      const guestRecord = repository.saveUser(null, { username: 'v8guest', display_name: 'V8 Today Guest', password: 'secret123', project_role: 'user', planner_enabled: 0 });
+      const guest = repository.me(guestRecord.id, 1);
+      repository.setPlannerEnabled(guest.id, { planner_enabled: 0 });
+
+      const status = repository.saveStatus(null, { controller: controller.code, function_detail: 'V8 test status', category: 'Hardware', status: 'In progress', milestone: 'legacy milestone' }, admin);
+      assert.equal(status.milestone, '');
+      const task = repository.saveTask(null, { controller: controller.code, title: 'V8 linked task', status: 'To do' }, admin);
+
+      const announcement = repository.saveAnnouncement(null, {
+        title: 'Wiadomość testowa V8', content: 'Treść dla zespołu', info_link: 'https://example.com',
+        scope_group_ids: [roots[0].id], recipient_user_ids: [guest.id],
+        links: [{ entity_type: 'task', entity_id: task.id }, { entity_type: 'task', entity_id: task.id }, { entity_type: 'status', entity_id: status.id }]
+      }, admin);
+      assert.deepEqual(announcement.scope_group_ids, [roots[0].id]);
+      assert.deepEqual(announcement.recipient_user_ids, [guest.id]);
+      assert.equal(announcement.links.length, 2);
+      assert.equal(repository.announcements(guest)[0].can_edit, false);
+
+      repository.savePlannerDay({ user_id: guest.id, plan_date: today, entries: [{ controller_group_id: roots[0].id, work_mode: 'online', shift: 'Dzień' }] }, admin);
+      assert.throws(() => repository.savePlannerDay({ user_id: guest.id, plan_date: tomorrow, entries: [{ controller_group_id: roots[0].id, work_mode: 'online', shift: 'Dzień' }] }, admin), /wyłącznie do dzisiejszego/);
+      repository.setPlannerRequirements({ plan_date: today, controller_group_id: roots[0].id, online_required: 3, offline_required: 1, note: 'Rozruch' }, admin);
+      const managerPlan = repository.planner(today, today, admin);
+      const userPlan = repository.planner(today, today, guest);
+      assert.equal(managerPlan.can_manage_requirements, true);
+      assert.equal(managerPlan.requirements.length, 2);
+      assert.equal(userPlan.can_manage_requirements, false);
+      assert.equal(userPlan.requirements.length, 0);
+      assert.equal(managerPlan.area_day_summary.find(item => item.id === roots[0].id).days[0].online_required, 3);
+
+      repository.setPlannerEnabled(guest.id, { planner_enabled: 1 });
+      const entry = repository.planner(today, today, admin).entries.find(item => item.user_id === guest.id);
+      repository.movePlannerEntry({ entry_id: entry.id, target_user_id: guest.id, target_date: tomorrow, copy: true }, admin);
+      assert.ok(repository.planner(today, tomorrow, admin).entries.some(item => item.user_id === guest.id && item.plan_date === tomorrow));
+
+      const overview = repository.overview('all');
+      const rootTrend = overview.hierarchy_trends.find(item => item.scope === `group:${roots[0].id}`);
+      assert.ok(rootTrend);
+      assert.ok(Array.isArray(rootTrend.trends.day));
+      assert.ok(Array.isArray(rootTrend.trends.week));
+      assert.ok(Array.isArray(rootTrend.trends.month));
+      assert.equal(repository.projectBackup().version, 8);
+
+      repository.deleteAnnouncement(announcement.id);
+      assert.equal(repository.announcements(admin).some(item => item.id === announcement.id), false);
     });
   } finally {
     repository.close();

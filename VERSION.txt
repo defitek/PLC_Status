@@ -1,4 +1,4 @@
-PLC Commissioning Hub V7.0.0
-Release: 2026-09-25
+PLC Commissioning Hub V8.0.0
+Release: 2026-10-07
 
-Po poprawnym wdrożeniu adres /api/health zwraca release 7.0.0 i version 7.
+Po poprawnym wdrożeniu adres /api/health zwraca release 8.0.0 i version 8.

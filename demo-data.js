@@ -187,7 +187,7 @@ function seedStatuses(db, target, controllers, users) {
     const createdAt = asTimestamp(-(index % 42), 6 + (index % 12));
     const result = insert.run(
       controller.id, testId, `${String((index % 24) + 1).padStart(3, '0')}ABS${String((index % 8) + 1).padStart(3, '0')}`,
-      cycle(statusFunctions, index), category, subcategory, `M${(index % 5) + 1}`, cycle(['Low', 'Medium', 'High', 'Critical'], index),
+      cycle(statusFunctions, index), category, subcategory, '', cycle(['Low', 'Medium', 'High', 'Critical'], index),
       owner.display_name, owner.id, status, status === 'Done' ? owner.display_name : '', status === 'Done' ? asDate(-(index % 14)) : null,
       cycle(['Factory', 'Simulation', 'Production'], index), status === 'Blocked' ? 'Test oczekuje na usunięcie blokady.' : 'Dane demonstracyjne do weryfikacji widoków.',
       `https://example.invalid/demo/status/${testId}`, creator.id, createdAt, asTimestamp(-(index % 12), 8 + (index % 8))

@@ -1,19 +1,38 @@
-# PLC Commissioning Hub V7.0.0
+# PLC Commissioning Hub V8.0.0
 
 Samodzielna aplikacja WWW do zarządzania uruchomieniem PLC, zespołem i kilkoma projektami. Działa na Node.js 24 oraz SQLite, bez zewnętrznych usług i bez zależności npm.
 
-## Najważniejsze zmiany V7
+## Najważniejsze zmiany V8
+
+Wydanie V8 zachowuje konfigurację Railway z poprzedniej paczki, rozwija Overview i wprowadza Informator oraz operacyjne planowanie zapotrzebowania zespołu.
+
+### Skrót zmian V8
+
+- Overview pokazuje przy zakresie „Cały projekt” zagregowane główne obszary, liczbę wszystkich, otwartych i zamkniętych pozycji oraz przełączany widok sterowników;
+- trend KPI znajduje się bezpośrednio pod realizacją, a „Szczegółowe KPI” otwiera rozwijalne drzewo obszarów, podobszarów i sterowników dla dni, tygodni albo miesięcy;
+- Planner używa jednej tabeli dla pracy `ON · fabryka` i `OFF · biuro`, obsługuje drag & drop, kopiowanie aktywności na zakres do 31 dni oraz tymczasowe dopisanie osoby wyłącznie na dzisiaj;
+- administrator projektu i administrator systemu mogą definiować zapotrzebowanie ON/OFF per obszar i dzień; braki obsady są wyróżniane w podsumowaniu;
+- nowy moduł Informator pozwala publikować wiadomości dla projektu lub wybranych obszarów, wskazywać osoby i przypinać elementy wszystkich modułów; pięć ostatnich wiadomości trafia na górny pasek;
+- panel Konfiguracja jest ekranem skrótów, a wszystkie grupy ustawień otwierają się w osobnych popupach, które pozostają otwarte po zapisie;
+- edytor hierarchii został przebudowany na zwarte drzewo z panelem szczegółów i operacjami zależnymi od wybranego poziomu;
+- cele można edytować kliknięciem tła karty, adnotacje Kalendarza można usuwać z edycji i menu prawego przycisku;
+- usunięto pole Milestone ze Statusu, ponieważ funkcję kamieni milowych realizuje moduł Cele;
+- formularz zadania ma uporządkowaną kolejność tytuł/zakres/opis/link oraz jednolite wizualnie pola checklisty;
+- ujednolicono skalę typografii i zagęszczono powierzchnie robocze bez utraty czytelności;
+- backup projektu obejmuje również Informator i zapotrzebowanie Plannera; schemat bazy został podniesiony do `8.0`.
+
+## Funkcje bazowe zachowane z V7
 
 Wydanie V7 rozwija poprzednią wersję bez zmiany konfiguracji Railway. Poprawia identyfikację sterowników według pełnej hierarchii, czytelność historii zmian i usuwanie projektów. Dodaje zadania dla całych obszarów, szczegółowy Overview, dzienne zestawienie obsady per obszar oraz indywidualną konfigurację źródła danych w „Moim podsumowaniu”.
 
-### Skrót zmian V7
+### Skrót funkcji V7
 
 - pełna ścieżka `projekt → obszar → podobszar → sterownik`; techniczny identyfikator liścia ma postać np. `UB-UB51-SPS1`, a użytkownik nadal widzi przyjazne `UB51 SPS1`;
 - dwa sterowniki mogą mieć tę samą nazwę liścia w różnych gałęziach, lecz duplikat w tej samej gałęzi jest blokowany;
 - systemowe identyfikatory punktów nie są prezentowane użytkownikom w listach, oknach ani eksportach;
 - dwustopniowo zabezpieczone usuwanie projektu, dostępne wyłącznie administratorowi systemu;
 - indywidualnie przełączane źródło obszarów w „Moim podsumowaniu”: konfiguracja użytkownika albo Planner z najbliższych 14 dni;
-- Planner z niezależnym włączaniem każdego aktywnego użytkownika, także administratora systemu, oraz osobnymi sekcjami `online · fabryka` i `offline · biuro`;
+- Planner z niezależnym włączaniem każdego aktywnego użytkownika, także administratora systemu, oraz jednym widokiem z oznaczeniami `ON · fabryka` i `OFF · biuro`;
 - ostrzeżenie przy równoczesnym zaplanowaniu osoby online i offline oraz dzienna obsada online dla każdego głównego obszaru;
 - zadania można przypisać do dowolnego poziomu hierarchii; dla obszaru powstaje automatyczna checklista wszystkich sterowników końcowych;
 - ukończone zadania są domyślnie ukryte w widoku listy;
@@ -181,9 +200,9 @@ Po redeployu trzeba zalogować się ponownie, ponieważ sesje są przechowywane 
 
 ## Aktualizacja istniejącej bazy
 
-V7 automatycznie migruje bazy ze starszych wydań, nie kasując rekordów. Migracja zachowuje nazwę liścia sterownika, a jego techniczny kod przebudowuje z pełnej ścieżki. Dodaje ustawienie udziału w Plannerze, indywidualne źródło obszarów w „Moim podsumowaniu”, zakres hierarchiczny zadań oraz checklisty sterowników. Dotychczasowe powiązania celów są synchronizowane z relacjami pozostałych modułów.
+V8 automatycznie migruje bazy ze starszych wydań, nie kasując rekordów. Migracja zachowuje nazwę liścia sterownika i techniczny kod pełnej ścieżki, dodaje Informator oraz zapotrzebowanie Plannera i usuwa użycie dawnego pola Milestone. Dotychczasowe powiązania celów pozostają zsynchronizowane z relacjami pozostałych modułów.
 
-Przed wdrożeniem produkcyjnym zalecany jest snapshot Railway Volume lub kopia pliku `/app/data/plc-status.db`. Po uruchomieniu V7 można też używać kopii projektowych w **Konfiguracja → Backup projektu**.
+Przed wdrożeniem produkcyjnym zalecany jest snapshot Railway Volume lub kopia pliku `/app/data/plc-status.db`. Po uruchomieniu V8 można też używać kopii projektowych w **Konfiguracja → Backup projektu**.
 
 Jeśli w fazie koncepcyjnej potrzebny jest czysty start, usuń wyłącznie pliki:
 
@@ -195,7 +214,7 @@ Jeśli w fazie koncepcyjnej potrzebny jest czysty start, usuń wyłącznie pliki
 
 Następnie wykonaj redeploy. Nie usuwaj całego Volume, jeśli znajdują się na nim inne pliki.
 
-## Uprawnienia prototypowe V7
+## Uprawnienia prototypowe V8
 
 | Czynność | Administrator systemu | Administrator projektu | Moderator | Użytkownik |
 |---|:---:|:---:|:---:|:---:|
@@ -205,6 +224,8 @@ Następnie wykonaj redeploy. Nie usuwaj całego Volume, jeśli znajdują się na
 | Sterowniki, hierarchia, grupy funkcyjne | pełne | pełne | podgląd | podgląd |
 | Kategorie i słowniki | pełne | pełne | dodawanie/edycja/kolejność | podgląd |
 | Planner — edycja planu | ✓ | ✓ | ✓ | — |
+| Planner — zapotrzebowanie obsady | ✓ | ✓ | — | — |
+| Informator — publikowanie i edycja | ✓ | ✓ | — | — |
 | Kalendarz — adnotacje koordynacyjne | ✓ | ✓ | ✓ | — |
 | Dane robocze i zmiana sterownika | ✓ | ✓ | ✓ | ✓ |
 | Usuwanie danych innych osób | ✓ | ✓ | — | — |
@@ -228,7 +249,7 @@ Kontrola zdrowia i wersji:
 curl http://localhost:8080/api/health
 ```
 
-Oczekiwany release: `7.0.0`.
+Oczekiwany release: `8.0.0`.
 
 ## Testy automatyczne
 
@@ -238,4 +259,4 @@ W Node.js 24 lub nowszym:
 npm test
 ```
 
-Testy obejmują tworzenie nowej bazy, migracje, kolejność konfiguracji, grupy funkcyjne, izolację i zabezpieczone usuwanie projektów, pełne identyfikatory hierarchii, zadania obszarowe, backup/restore, udział w Plannerze, Kalendarz z celami, ważone zadania, wieloosobowy Status, dwukierunkowe powiązania z celami i podsumowanie dnia.
+Testy obejmują tworzenie nowej bazy, migracje, kolejność konfiguracji, grupy funkcyjne, izolację i zabezpieczone usuwanie projektów, pełne identyfikatory hierarchii, zadania obszarowe, backup/restore, udział i zapotrzebowanie w Plannerze, Informator, Kalendarz z celami, ważone zadania, wieloosobowy Status, trendy KPI, dwukierunkowe powiązania z celami i podsumowanie dnia.
