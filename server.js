@@ -12,6 +12,7 @@ const databasePath = process.env.DB_PATH || join(moduleDir, 'data', 'plc-status.
 const port = Number(process.env.PORT || 3000);
 const repository = openDatabase(databasePath);
 const sessions = new Map();
+const liveClients = new Set();
 const mimeTypes = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json; charset=utf-8', '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
 
 function json(response, statusCode, payload, headers = {}) {
@@ -46,6 +47,25 @@ function requireRole(user, role = 'user') {
 }
 function numericId(pathname, prefix) { const match = pathname.match(new RegExp(`^${prefix}/(\\d+)$`)); return match ? Number(match[1]) : null; }
 function projectFilename(project, suffix, extension) { return `${project.code}_${suffix}_${new Date().toISOString().slice(0, 10)}.${extension}`; }
+function openEventStream(request, response, projectId, userId, clientId) {
+  response.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive', 'X-Accel-Buffering': 'no'
+  });
+  response.write(`event: ready\ndata: ${JSON.stringify({ project_id: projectId })}\n\n`);
+  const client = { response, projectId: Number(projectId), userId: Number(userId), clientId: String(clientId || '') };
+  liveClients.add(client);
+  const heartbeat = setInterval(() => response.write(': heartbeat\n\n'), 20000);
+  heartbeat.unref();
+  request.on('close', () => { clearInterval(heartbeat); liveClients.delete(client); });
+}
+function broadcastProjectChange(projectId, payload) {
+  const body = `event: change\ndata: ${JSON.stringify(payload)}\n\n`;
+  for (const client of liveClients) {
+    if (client.projectId !== Number(projectId)) continue;
+    try { client.response.write(body); } catch { liveClients.delete(client); }
+  }
+}
 
 async function handleProjectApi(request, response, url, user) {
   const method = request.method || 'GET';
@@ -69,6 +89,7 @@ async function handleProjectApi(request, response, url, user) {
   if (method === 'PUT' && path === '/api/planner/requirements') { requireRole(user, 'moderator'); return json(response, 200, repository.setPlannerRequirements(await readJson(request), user)); }
   if (method === 'PUT' && path === '/api/planner/requirements/batch') { requireRole(user, 'moderator'); return json(response, 200, repository.setPlannerRequirementsBatch(await readJson(request), user)); }
   if (method === 'POST' && path === '/api/planner/holidays') { requireRole(user, 'moderator'); return json(response, 201, repository.savePlannerHoliday(null, await readJson(request), user)); }
+  if (method === 'POST' && path === '/api/planner/holidays/bulk') { requireRole(user, 'moderator'); return json(response, 201, repository.savePlannerHolidaysBulk(await readJson(request), user)); }
   const holidayId = numericId(path, '/api/planner/holidays');
   if (holidayId !== null) {
     requireRole(user, 'moderator');
@@ -152,6 +173,8 @@ async function handleProjectApi(request, response, url, user) {
   }
 
   if (path === '/api/users' && method === 'POST') { requireRole(user, 'system_admin'); return json(response, 201, repository.saveUser(null, await readJson(request))); }
+  const userPasswordMatch = path.match(/^\/api\/users\/(\d+)\/password$/);
+  if (userPasswordMatch && method === 'PUT') { requireRole(user, 'system_admin'); return json(response, 200, repository.resetUserPassword(Number(userPasswordMatch[1]), await readJson(request))); }
   let id = numericId(path, '/api/users');
   if (id !== null) {
     requireRole(user, 'project_admin');
@@ -223,6 +246,13 @@ async function handleProjectApi(request, response, url, user) {
     if (method === 'DELETE') { requireRole(user, 'project_admin'); repository.deleteCompletionRequirement(id); response.writeHead(204); return response.end(); }
   }
 
+  if (path === '/api/announcement-labels' && method === 'POST') { requireRole(user, 'moderator'); return json(response, 201, repository.saveAnnouncementLabel(null, await readJson(request))); }
+  id = numericId(path, '/api/announcement-labels');
+  if (id !== null) {
+    if (method === 'PATCH') { requireRole(user, 'moderator'); return json(response, 200, repository.saveAnnouncementLabel(id, await readJson(request))); }
+    if (method === 'DELETE') { requireRole(user, 'project_admin'); repository.deleteAnnouncementLabel(id); response.writeHead(204); return response.end(); }
+  }
+
   if (path === '/api/export-templates' && method === 'POST') { requireRole(user, 'project_admin'); return json(response, 201, repository.saveExportTemplate(null, await readJson(request), user)); }
   id = numericId(path, '/api/export-templates');
   if (id !== null) { requireRole(user, 'project_admin'); if (method === 'PATCH') return json(response, 200, repository.saveExportTemplate(id, await readJson(request), user)); if (method === 'DELETE') { repository.deleteExportTemplate(id); response.writeHead(204); return response.end(); } }
@@ -237,7 +267,7 @@ async function handleProjectApi(request, response, url, user) {
 
 async function handleApi(request, response, url) {
   const method = request.method || 'GET'; const path = url.pathname;
-  if (method === 'GET' && path === '/api/health') return json(response, 200, { status: 'ok', version: 9, release: '9.0.0' });
+  if (method === 'GET' && path === '/api/health') return json(response, 200, { status: 'ok', version: 10, release: '10.0.0' });
   if (method === 'POST' && path === '/api/login') {
     const input = await readJson(request); const account = repository.authenticate(input.username);
     if (!account || !verifyPassword(input.password || '', account.password_hash)) return json(response, 401, { error: 'Nieprawidłowy login lub hasło' });
@@ -252,6 +282,7 @@ async function handleApi(request, response, url) {
   if (method === 'GET' && path === '/api/me') return json(response, 200, user);
   if (method === 'GET' && path === '/api/projects/available') return json(response, 200, user.projects);
   if (method === 'PATCH' && path === '/api/preferences') return json(response, 200, repository.setPreference(user.id, await readJson(request)));
+  if (method === 'PUT' && path === '/api/account/password') return json(response, 200, repository.changeOwnPassword(user.id, await readJson(request)));
   if (method === 'POST' && path === '/api/select-project') {
     const input = await readJson(request); const selected = user.projects.find(project => project.id === Number(input.project_id));
     if (!selected) return json(response, 403, { error: 'Projekt jest niedostępny dla tego użytkownika' });
@@ -269,6 +300,15 @@ async function handleApi(request, response, url) {
     }
   }
   if (!user.current_project || !active.session.projectId) return json(response, 409, { error: 'Najpierw wybierz projekt', code: 'PROJECT_REQUIRED' });
+  if (method === 'GET' && path === '/api/events') return openEventStream(request, response, active.session.projectId, user.id, url.searchParams.get('client_id'));
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+    const projectIdForEvent = active.session.projectId;
+    response.once('finish', () => {
+      if (response.statusCode < 400) broadcastProjectChange(projectIdForEvent, {
+        method, path, at: new Date().toISOString(), client_id: String(request.headers['x-client-id'] || ''), user_id: user.id
+      });
+    });
+  }
   return repository.withProject(active.session.projectId, () => handleProjectApi(request, response, url, user));
 }
 
@@ -292,6 +332,6 @@ export const server = createServer(async (request, response) => {
     return json(response, statusCode, { error: statusCode === 500 ? `Nieoczekiwany błąd serwera: ${error.message}` : error.message });
   }
 });
-if (process.argv[1] === fileURLToPath(import.meta.url)) server.listen(port, '0.0.0.0', () => console.log(`PLC Commissioning Hub V9.0.0 running on port ${port}`));
+if (process.argv[1] === fileURLToPath(import.meta.url)) server.listen(port, '0.0.0.0', () => console.log(`PLC Commissioning Hub V10.0.0 running on port ${port}`));
 function shutdown() { server.close(() => { repository.close(); process.exit(0); }); }
 process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);

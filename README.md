@@ -1,8 +1,23 @@
-# PLC Commissioning Hub V9.0.0
+# PLC Commissioning Hub V10.0.0
 
 Samodzielna aplikacja WWW do zarządzania uruchomieniem PLC, zespołem i kilkoma projektami. Działa na Node.js 24 oraz SQLite, bez zewnętrznych usług i bez zależności npm.
 
-## Najważniejsze zmiany V9
+## Najważniejsze zmiany V10
+
+V10 rozwija współpracę wielu użytkowników i porządkuje interfejs operacyjny, zachowując dotychczasową konfigurację Railway. Najważniejsze zmiany:
+
+- aktualizacje na żywo przez Server-Sent Events z automatycznym trybem awaryjnego odświeżania;
+- ochrona przed nadpisaniem rekordu zmienionego równolegle przez inną osobę;
+- samodzielna zmiana hasła oraz reset hasła przez administratora systemu;
+- etykiety i konfigurowalne poziomy ważności Informatora, filtrowanie oraz potwierdzenia wyłącznie od wskazanych odbiorców;
+- notatki dzienne przypisywane do całego projektu, obszaru, podobszaru albo sterownika;
+- konfigurowalne normy czasu pracy, szybki import świąt, korekty godzin oraz narastające nadgodziny bez mnożnika i z mnożnikiem;
+- poziomy zapotrzebowania kadrowego przedstawione w poziomym kalendarzu;
+- kompaktowe edytory kategorii i grup funkcyjnych, poprawiony mobilny panel nawigacji i formularz logowania;
+- usunięte automatyczne mini-podglądy po najechaniu na Status, Zadania i Otwarte punkty; szczegóły otwierają się dopiero po świadomym kliknięciu;
+- schemat bazy oraz backup projektu w wersji `10.0`.
+
+## Poprzednie zmiany V9
 
 Wydanie V9 zachowuje konfigurację Railway z poprzedniej paczki i domyka funkcje operacyjne: responsywny interfejs, powiadomienia, komentarze, bezpieczne duplikowanie, zakresy Kalendarza, zapotrzebowanie kadrowe oraz kalkulację czasu pracy.
 
@@ -10,7 +25,7 @@ Wydanie V9 zachowuje konfigurację Railway z poprzedniej paczki i domyka funkcje
 
 - nieruchomy górny pasek i menu boczne na komputerze; przewijana jest wyłącznie powierzchnia robocza, a telefon i tablet korzystają z wysuwanego menu i dopasowanych okien;
 - techniczna rola `moderator` jest prezentowana w interfejsie jako **Manager projektu**;
-- Status, Zadania i Otwarte punkty mają podgląd po najechaniu, menu prawego przycisku i bezpieczne duplikowanie; kopia 1:1 jest blokowana;
+- Status, Zadania i Otwarte punkty otrzymały w V9 podgląd po najechaniu, menu prawego przycisku i bezpieczne duplikowanie; w V10 podgląd po najechaniu został usunięty, a pozostałe funkcje zachowane;
 - Status, Zadania, Otwarte punkty i Cele obsługują komentarze, a historia edycji jest domyślnie zwinięta i dostępna na dole formularza;
 - przypisanie zadania oraz komentarz generują powiadomienie w aplikacji i są priorytetowo pokazywane w dziennym podsumowaniu zmian;
 - Informator wysyła powiadomienia wszystkim użytkownikom projektu, zbiera potwierdzenia przeczytania i pokazuje pięć ostatnich wiadomości w przewijanym pasku;
@@ -221,9 +236,9 @@ Po redeployu trzeba zalogować się ponownie, ponieważ sesje są przechowywane 
 
 ## Aktualizacja istniejącej bazy
 
-V9 automatycznie migruje bazy ze starszych wydań, nie kasując rekordów. Migracja zachowuje nazwę liścia sterownika i techniczny kod pełnej ścieżki, usuwa ograniczenie unikalności nazw punktów Statusu oraz dodaje komentarze, powiadomienia, potwierdzenia Informatora, wymagania do spełnienia, święta i nieobecności. Dotychczasowe powiązania celów pozostają zsynchronizowane z relacjami pozostałych modułów.
+V10 automatycznie migruje bazy ze starszych wydań, nie kasując rekordów. Migracja zachowuje funkcje V9 oraz dodaje zakres hierarchiczny notatek, etykiety Informatora i ręczne korekty czasu pracy. Dotychczasowe powiązania celów pozostają zsynchronizowane z relacjami pozostałych modułów.
 
-Przed wdrożeniem produkcyjnym zalecany jest snapshot Railway Volume lub kopia pliku `/app/data/plc-status.db`. Po uruchomieniu V9 można też używać kopii projektowych w **Konfiguracja → Backup projektu**.
+Przed wdrożeniem produkcyjnym zalecany jest snapshot Railway Volume lub kopia pliku `/app/data/plc-status.db`. Po uruchomieniu V10 można też używać kopii projektowych w **Konfiguracja → Backup projektu**.
 
 Jeśli w fazie koncepcyjnej potrzebny jest czysty start, usuń wyłącznie pliki:
 
@@ -235,7 +250,7 @@ Jeśli w fazie koncepcyjnej potrzebny jest czysty start, usuń wyłącznie pliki
 
 Następnie wykonaj redeploy. Nie usuwaj całego Volume, jeśli znajdują się na nim inne pliki.
 
-## Uprawnienia prototypowe V9
+## Uprawnienia prototypowe V10
 
 | Czynność | Administrator systemu | Administrator projektu | Manager projektu | Użytkownik |
 |---|:---:|:---:|:---:|:---:|
@@ -270,7 +285,7 @@ Kontrola zdrowia i wersji:
 curl http://localhost:8080/api/health
 ```
 
-Oczekiwany release: `9.0.0`.
+Oczekiwany release: `10.0.0`.
 
 ## Testy automatyczne
 
@@ -280,4 +295,4 @@ W Node.js 24 lub nowszym:
 npm test
 ```
 
-Testy obejmują tworzenie nowej bazy, migracje, kolejność konfiguracji, grupy funkcyjne, izolację i zabezpieczone usuwanie projektów, pełne identyfikatory hierarchii, zadania obszarowe, backup/restore V9, wymagania do spełnienia, bezpieczne duplikowanie, komentarze i powiadomienia, potwierdzenia Informatora, wielodniowy Kalendarz, urlopy, święta, nadgodziny, udział i zapotrzebowanie w Plannerze, ważone zadania, wieloosobowy Status, trendy KPI, dwukierunkowe powiązania z celami i podsumowanie dnia.
+Testy obejmują tworzenie nowej bazy, migracje, kolejność konfiguracji, grupy funkcyjne, izolację i zabezpieczone usuwanie projektów, pełne identyfikatory hierarchii, zadania obszarowe, backup/restore V10, wymagania do spełnienia, bezpieczne duplikowanie, komentarze i powiadomienia, skierowane potwierdzenia Informatora, zakresy notatek, wielodniowy Kalendarz, urlopy, święta, ręczne korekty godzin, narastające nadgodziny, udział i zapotrzebowanie w Plannerze, ważone zadania, wieloosobowy Status, trendy KPI, dwukierunkowe powiązania z celami i podsumowanie dnia.

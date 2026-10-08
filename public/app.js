@@ -1,14 +1,16 @@
 const state = {
   view: 'overview', controller: 'all', me: null, projects: [], controllerGroups: [], controllers: [], users: [],
-  config: { categories: [], task_categories: [], function_groups: [], options: [], settings: {} },
+  config: { categories: [], task_categories: [], function_groups: [], options: [], announcement_labels: [], settings: {} },
   overview: null, announcements: [], notifications: [], mine: null, dashboard: {}, status: [], tasks: [], points: [], notes: [], goals: [], planner: null, calendar: null, history: [],
   dialog: null, dialogInitial: '', dirtyCloseAttempt: new WeakSet(), goalDraftLinks: [], goalPickerCollections: null, linkDraft: [], taskMode: 'board', taskShowCompleted: false, pointMode: 'list', trendPeriod: 'week',
   functionGroupController: '', functionPointGroup: null, functionPointDraft: [], quickStatusDraft: [],
   notesFrom: '', notesTo: '', notesWeek: '', draggingTask: false, plannerFrom: '', plannerDays: 14,
   plannerCell: null, plannerClipboard: null, plannerDragEntry: null, calendarFrom: '', calendarTo: '', calendarMode: 'week', calendarTypes: ['task', 'point', 'status', 'goal', 'note', 'annotation'], calendarPriorities: ['Low', 'Medium', 'High', 'Critical'], calendarOnlyMine: false, calendarCategory: '',
   kpiModules: ['status', 'tasks', 'points', 'goals'], globalTrendMode: 'combined', overviewDetailed: false, detailedKpiMode: 'combined', detailedKpiPeriod: 'week', linkPickerAllowed: [], linkPickerDraft: [], linkPickerCollections: null, actionResolve: null, actionDialogGeneration: 0, actionClosingGeneration: 0, configPanel: null, configScroll: 0, hierarchySelection: null, dailySummaryOpening: false,
-  selectionContext: null, selectionDraft: [], selectionCollections: null, duplicateSource: null, checklistTask: null, notificationSeen: new Set(), previewTimer: null,
-  grouping: { status: 'category', tasks: '', notes: 'controller', history: 'hierarchy' },
+  selectionContext: null, selectionDraft: [], selectionCollections: null, duplicateSource: null, checklistTask: null, notificationSeen: new Set(),
+  announcementLabelFilter: '', announcementImportanceFilter: '', liveSource: null, liveRefreshTimer: null,
+  categorySelection: { status: null, task: null },
+  grouping: { status: 'category', tasks: '', notes: 'scope', history: 'hierarchy' },
   sort: { status: { key: '', direction: 1 }, tasks: { key: '', direction: 1 }, points: { key: '', direction: 1 } }
 };
 
@@ -22,6 +24,7 @@ const mondayOf = value => { const date = new Date(`${value}T12:00:00Z`); date.se
 const dateRange = (from, to) => { const result = []; for (let value = from; value <= to && result.length < 370; value = addDays(value, 1)) result.push(value); return result; };
 const displayDate = value => value ? new Intl.DateTimeFormat('pl-PL', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(value.length === 10 ? `${value}T12:00:00` : value)) : '—';
 const displayDateTime = value => value ? new Intl.DateTimeFormat('pl-PL', { dateStyle: 'short', timeStyle: 'medium' }).format(new Date(value.replace(' ', 'T') + (value.includes('Z') ? '' : 'Z'))) : '—';
+const clientId = globalThis.crypto?.randomUUID?.() || `client-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 const pageCopy = {
   overview: ['Overview', 'Liczbowy obraz gotowości całego projektu', ''],
@@ -48,7 +51,7 @@ const badgeMap = {
 const badge = value => { const item = badgeMap[value] || [value || '—', 'gray']; return `<span class="badge ${item[1]}">${escapeHtml(item[0])}</span>`; };
 
 async function api(path, options = {}) {
-  const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
+  const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', 'X-Client-Id': clientId, ...(options.headers || {}) } });
   if (response.status === 401) { location.href = '/login.html'; throw new Error('Sesja wygasła'); }
   if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || `Błąd serwera (${response.status})`);
   return response.status === 204 ? null : response.json();
@@ -59,7 +62,7 @@ function options(kind) { return state.config.options.filter(item => item.kind ==
 function statusCategories() { return state.config.categories.map(item => item.name); }
 function taskCategories() { return state.config.task_categories.map(item => item.name); }
 function functionGroups(controllerCode) { return (state.config.function_groups || []).filter(item => !controllerCode || item.controller === controllerCode); }
-function assignableUsers() { return state.users.filter(item => item.active && item.project_active && item.system_role !== 'system_admin'); }
+function assignableUsers() { return state.users.filter(item => item.active && item.project_active); }
 function controllerLabel(item) {
   if (!item) return '';
   if (item.scope_label) return item.scope_label;
@@ -171,7 +174,7 @@ async function initialize() {
     bindShell();
     updateIdentity();
     if (!state.me.current_project) openProjectDialog(true);
-    else await loadData();
+    else { await loadData(); startLiveSync(); }
     startNotificationPolling();
   } catch (error) { toast(error.message, true); }
 }
@@ -199,6 +202,7 @@ function bindShell() {
   $('#project-switch').addEventListener('click', () => openProjectDialog(false));
   $('#project-close').addEventListener('click', () => { if (state.me.current_project) $('#project-dialog').close(); });
   $('#theme-switch').addEventListener('click', openThemeDialog);
+  $('#password-change').addEventListener('click', changeOwnPassword);
   $('#daily-summary-open').addEventListener('click', () => state.me.current_project ? openDailySummary(false) : toast('Najpierw wybierz projekt', true));
   $('#daily-summary-close').addEventListener('click', () => $('#daily-summary-dialog').close());
   $('#daily-summary-range').addEventListener('submit', event => { event.preventDefault(); loadDailySummary($('#daily-summary-from').value, $('#daily-summary-to').value); });
@@ -252,7 +256,7 @@ function bindShell() {
   $('#planner-requirements-close').addEventListener('click', () => $('#planner-requirements-dialog').close());
   $('#requirement-level').addEventListener('change', renderPlannerRequirementsCalendar);
   $('#planner-requirements-save').addEventListener('click', savePlannerRequirementsCalendar);
-  $('#planner-holiday-add').addEventListener('click', addPlannerHoliday);
+  $('#planner-holiday-add')?.addEventListener('click', addPlannerHoliday);
   $('#planner-hours-close').addEventListener('click', () => $('#planner-hours-dialog').close());
   $('#task-checklist-close').addEventListener('click', () => $('#task-checklist-dialog').close());
   $('#task-checklist-cancel').addEventListener('click', () => $('#task-checklist-dialog').close());
@@ -270,8 +274,6 @@ function bindShell() {
   $('#entity-selection-type').addEventListener('change', renderEntitySelection);
   $('#entity-selection-apply').addEventListener('click', applyEntitySelection);
   document.addEventListener('click', event => { if (!event.target.closest('#context-menu')) $('#context-menu').classList.add('hidden'); });
-  document.addEventListener('pointerover', previewPointerOver);
-  document.addEventListener('pointerout', previewPointerOut);
   installDialogOutsideClose();
 }
 
@@ -307,6 +309,7 @@ function openProjectDialog(mandatory = false) {
       updateIdentity();
       dialog.close();
       await loadData();
+      startLiveSync();
       toast(`Wybrano projekt ${state.me.current_project.code}`);
     } catch (error) { toast(error.message, true); }
   }));
@@ -434,9 +437,9 @@ function finishAction(result) {
   if (resolve) resolve(result);
 }
 
-async function loadData() {
+async function loadData(silent = false) {
   if ($('#config-full-dialog')?.open) state.configScroll = $('#config-full-content')?.scrollTop || 0;
-  $('#content').innerHTML = '<div class="loading">Ładowanie danych…</div>';
+  if (!silent) $('#content').innerHTML = '<div class="loading">Ładowanie danych…</div>';
   const query = `?controller=${encodeURIComponent(state.controller)}`;
   state.notesFrom ||= twoWeeksAgo();
   state.notesTo ||= today();
@@ -463,11 +466,56 @@ async function loadData() {
   updateNotificationUi(true);
   renderTopNews();
   render();
+  if ($('#config-full-dialog')?.open && state.configPanel) refreshConfigPanel();
   const summaryKey = `daily-summary:${state.me.current_project?.id}:${today()}`;
   if (state.me.current_project && !sessionStorage.getItem(summaryKey) && !state.dailySummaryOpening) {
     sessionStorage.setItem(summaryKey, '1');
     queueMicrotask(() => openDailySummary(true));
   }
+}
+
+async function changeOwnPassword() {
+  const result = await uiForm({ title: 'Zmień hasło', description: 'Po zapisaniu używaj nowego hasła przy kolejnym logowaniu.', submitLabel: 'Zmień hasło', fields: [
+    { name: 'current_password', label: 'Bieżące hasło', type: 'password', required: true },
+    { name: 'new_password', label: 'Nowe hasło (min. 8 znaków)', type: 'password', required: true },
+    { name: 'confirm_password', label: 'Powtórz nowe hasło', type: 'password', required: true }
+  ] });
+  if (!result) return;
+  if (result.new_password !== result.confirm_password) return toast('Nowe hasła nie są takie same', true);
+  try { await api('/api/account/password', { method: 'PUT', body: JSON.stringify(result) }); toast('Hasło zostało zmienione'); }
+  catch (error) { toast(error.message, true); }
+}
+
+function startLiveSync() {
+  state.liveSource?.close();
+  if (!state.me?.current_project || !globalThis.EventSource) return;
+  const source = new EventSource(`/api/events?client_id=${encodeURIComponent(clientId)}`);
+  state.liveSource = source;
+  source.addEventListener('change', event => {
+    let change; try { change = JSON.parse(event.data); } catch { return; }
+    if (change.client_id === clientId) return;
+    clearTimeout(state.liveRefreshTimer);
+    state.liveRefreshTimer = setTimeout(async () => {
+      try {
+        if ($('#config-full-dialog')?.open && $('#config-full-dialog').dataset.dirty === '1') {
+          [state.announcements, state.notifications] = await Promise.all([api('/api/announcements'), api('/api/notifications')]);
+          updateNotificationUi(true); renderTopNews();
+          toast('Inny użytkownik zmienił dane. Zapisz lub zamknij konfigurację, aby odświeżyć pełny widok.');
+        } else {
+          const openDialog = state.dialog?.record && $('#modal')?.open ? { type: state.dialog.type, id: state.dialog.record.id, updated_at: state.dialog.record.updated_at, dirty: $('#modal').dataset.dirty === '1' } : null;
+          await loadData(true);
+          if (openDialog) {
+            const entityType = typeToEntity(openDialog.type);
+            const fresh = openDialog.type === 'announcements' ? state.announcements.find(item => item.id === Number(openDialog.id)) : entityType ? entity(entityType, openDialog.id) : null;
+            if (fresh && fresh.updated_at !== openDialog.updated_at) {
+              if (openDialog.dirty) toast('Ten otwarty element został zmieniony przez inną osobę. Twoje pola pozostają bez zmian; zapis wymaga ponownego otwarcia najnowszej wersji.', true);
+              else { $('#modal').close(); await openRecord(openDialog.type, fresh); toast('Otwarty element zaktualizowano na żywo'); }
+            }
+          }
+        }
+      } catch { /* EventSource ponowi połączenie, a okresowe sprawdzanie pozostaje aktywne. */ }
+    }, 180);
+  });
 }
 
 function updateCounts() {
@@ -485,10 +533,10 @@ function startNotificationPolling() {
   notificationPollTimer = setInterval(async () => {
     if (!state.me?.current_project || document.hidden) return;
     try {
-      state.notifications = await api('/api/notifications');
-      updateNotificationUi(true);
+      if (!state.liveSource || state.liveSource.readyState !== 1) await loadData(true);
+      else { state.notifications = await api('/api/notifications'); updateNotificationUi(true); }
     } catch { /* kolejna próba nastąpi automatycznie */ }
-  }, 30000);
+  }, 15000);
 }
 
 function notificationTarget(notification) {
@@ -532,13 +580,29 @@ async function openNotification(item) {
     }
   } catch (error) { toast(error.message, true); }
   $('#notifications-dialog').close();
+  try {
+    if (item.entity_type === 'announcement') state.announcements = await api('/api/announcements');
+    else {
+      const targets = {
+        status: ['/api/status?controller=all', 'status'], task: ['/api/tasks?controller=all', 'tasks'],
+        point: ['/api/open-points?controller=all', 'points'], note: [`/api/daily-notes?controller=all&from=${addDays(today(), -3650)}&to=${addDays(today(), 3650)}`, 'notes'],
+        goal: ['/api/goals?controller=all', 'goals']
+      };
+      const targetInfo = targets[item.entity_type];
+      if (targetInfo) state[targetInfo[1]] = await api(targetInfo[0]);
+    }
+  } catch (error) { toast(`Nie udało się pobrać elementu: ${error.message}`, true); }
   if (item.entity_type === 'announcement') {
     const announcement = notificationTarget(item);
-    if (announcement) openAnnouncementDetails(announcement);
+    if (announcement) { setView('announcements'); openAnnouncementDetails(announcement); }
+    else toast('Wiadomość nie jest już dostępna', true);
     return;
   }
   const target = notificationTarget(item);
-  if (target) jumpTo(item.entity_type, item.entity_id);
+  if (target) {
+    state.controller = 'all'; fillScopeSelect($('#controller'), 'all');
+    jumpTo(item.entity_type, item.entity_id);
+  }
   else toast('Powiązany element nie jest już dostępny', true);
 }
 
@@ -557,6 +621,7 @@ async function acknowledgeAnnouncement(id) {
 
 function setView(view) {
   if (view === 'settings' && state.me.role === 'user') return;
+  if (view === 'announcements' && state.view !== 'announcements') { state.announcementLabelFilter = ''; state.announcementImportanceFilter = ''; }
   state.view = view;
   document.body.classList.remove('nav-open');
   $$('#nav button').forEach(button => button.classList.toggle('active', button.dataset.view === view));
@@ -597,7 +662,11 @@ function openAnnouncementDetails(item) {
   $('#insight-title').textContent = item.title;
   $('#insight-description').textContent = `${announcementAudience(item)} · ${item.created_by_name || 'System'} · ${displayDateTime(item.created_at)}`;
   const href = safeExternalLink(item.info_link);
-  $('#insight-content').innerHTML = `<article class="announcement-detail"><p>${escapeHtml(item.content).replace(/\n/g, '<br>')}</p>${href ? `<a class="announcement-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">Otwórz dołączony link ↗</a>` : ''}<div class="announcement-audience"><span><b>Zakres:</b> ${escapeHtml(announcementAudience(item))}</span><span><b>Dotyczy bezpośrednio:</b> ${escapeHtml((item.recipient_names || []).join(', ') || 'bez wskazania osób')}</span></div><div class="goal-links">${(item.links || []).map(link => linkChip(link.entity_type, link.entity_id, ({ status: 'Status', task: 'Zadanie', point: 'Otwarty punkt', note: 'Dziennik', goal: 'Cel' })[link.entity_type])).join('') || '<span class="sub">Brak przypiętych elementów</span>'}</div>${!item.accepted_by_me ? '<button class="primary" id="ack-announcement">Akceptuję · przeczytane</button>' : `<span class="announcement-read-self">✓ Zaakceptowano ${displayDateTime(item.accepted_at)}</span>`}${canManageAnnouncements() ? `<section class="announcement-receipts"><header><b>Potwierdzenia przeczytania</b><span>${item.accepted_count || 0}/${item.audience_count || 0}</span></header><div>${(item.accepted_users || []).map(user => `<span><b>${escapeHtml(user.display_name)}</b><small>${displayDateTime(user.read_at)}</small></span>`).join('') || '<small>Brak potwierdzeń.</small>'}</div></section><button class="secondary" id="edit-announcement-detail">Edytuj wiadomość</button>` : ''}</article>`;
+  const labels = (item.labels || []).map(label => `<span class="announcement-label ${escapeHtml(label.color)}">${escapeHtml(label.name)}</span>`).join('');
+  const acknowledgement = item.requires_ack
+    ? (!item.accepted_by_me ? '<button class="primary" id="ack-announcement">Akceptuję · przeczytane</button>' : `<span class="announcement-read-self">✓ Zaakceptowano ${displayDateTime(item.accepted_at)}</span>`)
+    : '<span class="announcement-read-self neutral">Wiadomość informacyjna — potwierdzenie nie jest wymagane od tego użytkownika.</span>';
+  $('#insight-content').innerHTML = `<article class="announcement-detail"><div class="announcement-tags"><span class="importance importance-${escapeHtml(String(item.importance || 'normalna').toLowerCase())}">${escapeHtml(item.importance || 'Normalna')}</span>${labels}</div><p>${escapeHtml(item.content).replace(/\n/g, '<br>')}</p>${href ? `<a class="announcement-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">Otwórz dołączony link ↗</a>` : ''}<div class="announcement-audience"><span><b>Zakres:</b> ${escapeHtml(announcementAudience(item))}</span><span><b>Dotyczy bezpośrednio:</b> ${escapeHtml((item.recipient_names || []).join(', ') || 'wszyscy aktywni uczestnicy projektu')}</span></div><div class="goal-links">${(item.links || []).map(link => linkChip(link.entity_type, link.entity_id, ({ status: 'Status', task: 'Zadanie', point: 'Otwarty punkt', note: 'Dziennik', goal: 'Cel' })[link.entity_type])).join('') || '<span class="sub">Brak przypiętych elementów</span>'}</div>${acknowledgement}${canManageAnnouncements() ? `<section class="announcement-receipts"><header><b>Potwierdzenia przeczytania</b><span>${item.accepted_count || 0}/${item.audience_count || 0}</span></header><div>${(item.accepted_users || []).map(user => `<span><b>${escapeHtml(user.display_name)}</b><small>${displayDateTime(user.read_at)}</small></span>`).join('') || '<small>Brak potwierdzeń.</small>'}</div></section><button class="secondary" id="edit-announcement-detail">Edytuj wiadomość</button>` : ''}</article>`;
   bindJumpItems();
   $('#ack-announcement')?.addEventListener('click', () => acknowledgeAnnouncement(item.id));
   $('#edit-announcement-detail')?.addEventListener('click', () => { $('#insight-dialog').close(); openRecord('announcements', item); });
@@ -606,10 +675,15 @@ function openAnnouncementDetails(item) {
 
 function renderAnnouncements() {
   $('#add').hidden = !canManageAnnouncements();
-  $('#content').innerHTML = `<section class="announcements-feed">${state.announcements.map(item => {
+  const importanceOptions = options('announcement_importance');
+  const filtered = state.announcements.filter(item => (!state.announcementLabelFilter || (item.label_ids || []).includes(Number(state.announcementLabelFilter))) && (!state.announcementImportanceFilter || item.importance === state.announcementImportanceFilter));
+  $('#content').innerHTML = `<section class="panel announcement-filters"><div class="toolbar"><strong>Wszystkie wiadomości</strong><label>Etykieta <select id="announcement-label-filter">${selectOptions((state.config.announcement_labels || []).map(item => ({ value: item.id, label: item.name })), state.announcementLabelFilter, 'Wszystkie')}</select></label><label>Ważność <select id="announcement-importance-filter">${selectOptions(importanceOptions, state.announcementImportanceFilter, 'Wszystkie')}</select></label><button class="mini" id="announcement-clear-filters">Wyczyść</button></div></section><section class="announcements-feed">${filtered.map(item => {
     const href = safeExternalLink(item.info_link);
-    return `<article class="announcement-card ${item.accepted_by_me ? 'read' : 'unread'}" data-announcement-id="${item.id}"><header><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.created_by_name || 'System')} · ${displayDateTime(item.created_at)}</small></span><span class="badge blue">${escapeHtml(announcementAudience(item))}</span></header><p>${escapeHtml(item.content)}</p><footer><span>${(item.recipient_names || []).length ? `Osoby: ${escapeHtml(item.recipient_names.join(', '))}` : 'Wiadomość ogólna'}</span><span>${item.accepted_by_me ? '✓ przeczytane' : 'wymaga potwierdzenia'}${canManageAnnouncements() ? ` · ${item.accepted_count || 0}/${item.audience_count || 0} potwierdzeń` : ''}</span></footer></article>`;
+    return `<article class="announcement-card ${item.accepted_by_me ? 'read' : 'unread'}" data-announcement-id="${item.id}"><header><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.created_by_name || 'System')} · ${displayDateTime(item.created_at)}</small></span><span class="badge blue">${escapeHtml(announcementAudience(item))}</span></header><div class="announcement-tags"><span class="importance importance-${escapeHtml(String(item.importance || 'normalna').toLowerCase())}">${escapeHtml(item.importance || 'Normalna')}</span>${(item.labels || []).map(label => `<span class="announcement-label ${escapeHtml(label.color)}">${escapeHtml(label.name)}</span>`).join('')}</div><p>${escapeHtml(item.content)}</p><footer><span>${(item.recipient_names || []).length ? `Osoby: ${escapeHtml(item.recipient_names.join(', '))}` : 'Wiadomość ogólna'}</span><span>${item.requires_ack ? (item.accepted_by_me ? '✓ przeczytane' : 'wymaga potwierdzenia') : 'informacyjna'}${canManageAnnouncements() ? ` · ${item.accepted_count || 0}/${item.audience_count || 0} potwierdzeń` : ''}</span></footer></article>`;
   }).join('') || '<div class="empty">Informator nie zawiera jeszcze wiadomości.</div>'}</section>`;
+  $('#announcement-label-filter').addEventListener('change', event => { state.announcementLabelFilter = event.target.value; renderAnnouncements(); });
+  $('#announcement-importance-filter').addEventListener('change', event => { state.announcementImportanceFilter = event.target.value; renderAnnouncements(); });
+  $('#announcement-clear-filters').addEventListener('click', () => { state.announcementLabelFilter = ''; state.announcementImportanceFilter = ''; renderAnnouncements(); });
   $$('.announcement-card').forEach(card => card.addEventListener('click', event => {
     if (event.target.closest('a,button')) return;
     const item = state.announcements.find(value => value.id === Number(card.dataset.announcementId));
@@ -801,7 +875,7 @@ function renderPlanner() {
   const holidayMap = new Map((data.holidays || []).map(item => [item.holiday_date, item]));
   const summaryMap = new Map((data.summary || []).map(item => [item.plan_date, item]));
   const mode = data.mode_summary || {};
-  $('#content').innerHTML = `<section class="planner-command compact"><div class="planner-controls"><button class="mini planner-shift" data-days="-${state.plannerDays}">←</button><button class="mini" id="planner-today">Dzisiaj</button><button class="mini planner-shift" data-days="${state.plannerDays}">→</button><label>Zakres <select id="planner-days"><option value="7">7 dni</option><option value="14">14 dni</option><option value="28">28 dni</option><option value="31">31 dni</option><option value="90">Kwartał</option><option value="365">Rok</option></select></label>${['project_admin', 'system_admin'].includes(state.me.role) ? '<button class="mini" id="planner-participants">Uczestnicy Plannera</button>' : ''}${data.can_manage_requirements ? '<button class="mini requirement-button" id="planner-requirements-open">Zapotrzebowanie</button>' : ''}${data.can_manage_time ? '<button class="mini" id="planner-hours-open">Czas pracy i nadgodziny</button>' : ''}<span>${displayDate(days[0])} – ${displayDate(days.at(-1))}</span></div><div class="planner-summary mode-summary"><span><b>${data.summary?.find(item => item.plan_date === today())?.headcount || 0}</b> osób dzisiaj</span><span class="online"><b>${mode.today_online || 0}</b> ON · fabryka<small>${mode.online_planned_days || 0} zaplanowanych dni</small></span><span class="offline"><b>${mode.today_offline || 0}</b> OFF · biuro<small>${mode.offline_planned_days || 0} zaplanowanych dni</small></span><span><b>${data.users.length}</b> uczestników</span>${data.can_manage_time ? `<span><b>${(data.time_details?.users || []).reduce((sum, item) => sum + item.actual_hours + item.credited_hours, 0).toFixed(1)}</b> h w zakresie</span>` : ''}${(data.shift_summary || []).map(item => `<span><b>${item.assignments}</b> ${escapeHtml(item.shift)}</span>`).join('')}</div></section>
+  $('#content').innerHTML = `<section class="planner-command compact"><div class="planner-controls"><button class="mini planner-shift" data-days="-${state.plannerDays}">←</button><button class="mini" id="planner-today">Dzisiaj</button><button class="mini planner-shift" data-days="${state.plannerDays}">→</button><label>Zakres <select id="planner-days"><option value="7">7 dni</option><option value="14">14 dni</option><option value="28">28 dni</option><option value="31">31 dni</option><option value="90">Kwartał</option><option value="365">Rok</option></select></label>${['project_admin', 'system_admin'].includes(state.me.role) ? '<button class="mini" id="planner-participants">Uczestnicy Plannera</button>' : ''}${data.can_manage_requirements ? '<button class="mini requirement-button" id="planner-requirements-open">Zapotrzebowanie</button><button class="mini" id="planner-config-open">Konfiguracja</button>' : ''}${data.can_manage_time ? '<button class="mini" id="planner-hours-open">Czas pracy i nadgodziny</button>' : ''}<span>${displayDate(days[0])} – ${displayDate(days.at(-1))}</span></div><div class="planner-summary mode-summary"><span><b>${data.summary?.find(item => item.plan_date === today())?.headcount || 0}</b> osób dzisiaj</span><span class="online"><b>${mode.today_online || 0}</b> ON · fabryka<small>${mode.online_planned_days || 0} zaplanowanych dni</small></span><span class="offline"><b>${mode.today_offline || 0}</b> OFF · biuro<small>${mode.offline_planned_days || 0} zaplanowanych dni</small></span><span><b>${data.users.length}</b> uczestników</span>${data.can_manage_time ? `<span><b>${(data.time_details?.users || []).reduce((sum, item) => sum + item.actual_hours + item.credited_hours, 0).toFixed(1)}</b> h w zakresie</span>` : ''}${(data.shift_summary || []).map(item => `<span><b>${item.assignments}</b> ${escapeHtml(item.shift)}</span>`).join('')}</div></section>
   ${plannerUnifiedSection(data.users || [], days, entryMap, workMap, summaryMap, data.area_day_summary || [], data.can_manage_requirements, absenceMap, timeMap, holidayMap, data.can_manage_time)}
   ${(data.available_today_users || []).length && days.includes(today()) && canCoordinate() ? `<section class="planner-unassigned"><strong>Dostępni tylko na dzisiaj</strong><small>Te osoby należą do projektu, ale nie są stałymi uczestnikami Plannera.</small><div>${data.available_today_users.map(user => `<button class="mini planner-today-user" data-user-id="${user.id}">+ ${escapeHtml(user.display_name)}</button>`).join('')}</div></section>` : ''}
   <p class="planner-legend"><span class="mode-dot online"></span> ON · fabryka <span class="mode-dot offline"></span> OFF · biuro <span><b>T</b> transport</span><span><b>T+P</b> transport i praca</span><span class="workload-dot"></span> zadania / punkty / status / notatki${data.can_manage_requirements ? '<span class="requirement-shortage-key"></span> obsada poniżej zapotrzebowania' : ''}</p>`;
@@ -811,6 +885,7 @@ function renderPlanner() {
   $('#planner-today').addEventListener('click', async () => { state.plannerFrom = mondayOf(today()); await reloadPlanner(); });
   $('#planner-participants')?.addEventListener('click', openPlannerParticipants);
   $('#planner-requirements-open')?.addEventListener('click', () => openPlannerRequirements(today()));
+  $('#planner-config-open')?.addEventListener('click', () => openConfigPanel('planner'));
   $('#planner-hours-open')?.addEventListener('click', openPlannerHours);
   if (canCoordinate()) {
     $$('.planner-cell').forEach(cell => {
@@ -844,10 +919,10 @@ function plannerHeadcountCell(day = {}, showRequirements = false) {
 function plannerCell(user, date, entries, work, absence, timeDetail, holiday, showTime) {
   const weekend = [0, 6].includes(new Date(`${date}T12:00:00Z`).getUTCDay());
   const editable = canCoordinate() && (Number(user.planner_enabled) || date === today());
-  const chips = entries.map(entry => `<span class="plan-chip ${entry.transport_mode} ${entry.work_mode}" data-entry-id="${entry.id}" draggable="${editable ? 'true' : 'false'}"><b class="mode-label">${entry.work_mode === 'offline' ? 'OFF' : 'ON'}</b>${entry.transport_mode === 'transport_only' ? '<b>T</b>' : entry.transport_mode === 'transport_work' ? '<b>T+P</b>' : ''}<span>${entry.area_path ? escapeHtml(entry.area_path) : entry.area_name ? escapeHtml(entry.area_name) : 'Transport / ogólne'}</span><small>${escapeHtml(entry.shift)}</small></span>`).join('');
+  const chips = entries.map(entry => `<span class="plan-chip ${entry.transport_mode} ${entry.work_mode}" data-entry-id="${entry.id}" draggable="${editable ? 'true' : 'false'}"><b class="mode-label">${entry.work_mode === 'offline' ? 'OFF' : 'ON'}</b>${entry.transport_mode === 'transport_only' ? '<b>T</b>' : entry.transport_mode === 'transport_work' ? '<b>T+P</b>' : ''}<span>${entry.area_path ? escapeHtml(entry.area_path) : entry.area_name ? escapeHtml(entry.area_name) : 'Transport / ogólne'}</span>${entry.note ? `<i class="plan-note" data-note="${escapeHtml(entry.note)}" aria-label="Notatka">▤</i>` : ''}<small>${escapeHtml(entry.shift)}</small></span>`).join('');
   const workload = work && (work.tasks || work.points || work.statuses || work.notes) ? `<span class="workload" title="Zadania / otwarte punkty / status / notatki">${work.tasks}/${work.points}/${work.statuses}/${work.notes}</span>` : '';
   const absenceChip = absence ? `<span class="absence-chip ${absence.absence_type}"><b>${absence.absence_type === 'vacation' ? 'URLOP' : 'WOLNE'}</b><small>${escapeHtml(absence.note || '')}</small></span>` : '';
-  const hours = showTime && (timeDetail?.actual_hours || timeDetail?.credited_hours || timeDetail?.overtime_balance) ? `<span class="planner-hours-chip" title="Godziny rzeczywiste / zaliczone · bilans nadgodzin">${Number(timeDetail.actual_hours + timeDetail.credited_hours).toFixed(1)}h <b>${timeDetail.overtime_balance >= 0 ? '+' : ''}${Number(timeDetail.overtime_balance).toFixed(1)}</b></span>` : '';
+  const hours = showTime && timeDetail ? `<span class="planner-hours-chip" title="Dzisiaj: ${Number(timeDetail.actual_hours + timeDetail.credited_hours).toFixed(1)} h · narastająco bez mnożnika: ${Number(timeDetail.overtime_raw_cumulative || 0).toFixed(1)} h · z mnożnikiem: ${Number(timeDetail.overtime_weighted_cumulative || 0).toFixed(1)} h"><b>${Number(timeDetail.actual_hours + timeDetail.credited_hours).toFixed(1)}h</b><i>Σ ${Number(timeDetail.overtime_raw_cumulative || 0).toFixed(1)} / ${Number(timeDetail.overtime_weighted_cumulative || 0).toFixed(1)}</i></span>` : '';
   return `<td class="planner-cell ${weekend ? 'weekend' : ''} ${holiday ? 'holiday' : ''} ${absence ? 'absent' : ''} ${date === today() ? 'today' : ''} ${entries.length ? 'planned' : ''} ${editable ? '' : 'read-only'}" data-user-id="${user.id}" data-date="${date}" data-editable="${editable ? 1 : 0}" title="${holiday ? `${escapeHtml(holiday.name)} · ` : ''}${editable ? 'Kliknij: edycja · prawy klik: kopiowanie · przeciągnij aktywność' : 'Plan tylko do odczytu'}">${absenceChip}${chips}${workload}${hours}${!absenceChip && !chips && editable ? '<i>+</i>' : ''}</td>`;
 }
 
@@ -880,12 +955,17 @@ function openPlannerCell(userId, date) {
   if (!Number(user.planner_enabled) && date !== today()) return toast('Osobę nieuwzględnioną stale w Plannerze można dopisać wyłącznie do dzisiejszego dnia', true);
   const entries = state.planner.entries.filter(item => item.user_id === userId && item.plan_date === date);
   const absence = (state.planner.absences || []).find(item => item.user_id === userId && item.absence_date === date);
+  const timeDetail = (state.planner.time_details?.details || []).find(item => item.user_id === userId && item.date === date) || {};
   state.plannerCell = { userId, date };
   $('#planner-dialog-title').textContent = `${user?.display_name || 'Pracownik'} · ${displayDate(date)}`;
   $('#planner-dialog-description').textContent = 'Obszar można wskazać tylko raz. Obszar nadrzędny wyklucza jego podobszary.';
   $('#planner-entry-list').innerHTML = entries.map(plannerEntryRow).join('') || plannerEntryRow();
   $('#planner-day-kind').value = absence?.absence_type || 'work';
   $('#planner-absence-note').value = absence?.note || '';
+  $('#planner-actual-adjustment').value = Number(timeDetail.actual_hours_adjustment || 0);
+  $('#planner-raw-adjustment').value = Number(timeDetail.overtime_raw_adjustment || 0);
+  $('#planner-weighted-adjustment').value = Number(timeDetail.overtime_weighted_adjustment || 0);
+  $('#planner-adjustment-note').value = timeDetail.adjustment_note || '';
   bindPlannerEntryRows();
   updatePlannerDayKind();
   $('#planner-dialog').showModal();
@@ -904,7 +984,7 @@ async function savePlannerCell(event) {
   const absenceType = $('#planner-day-kind').value === 'work' ? '' : $('#planner-day-kind').value;
   const entries = absenceType ? [] : $$('#planner-entry-list .planner-entry-row').map(row => ({ controller_group_id: Number(row.querySelector('[data-plan-area]').value) || null, work_mode: row.querySelector('[data-plan-mode]').value, shift: row.querySelector('[data-plan-shift]').value, transport_mode: row.querySelector('[data-plan-transport]').value, note: row.querySelector('[data-plan-note]').value }));
   if (!await confirmMixedPlannerModes(state.plannerCell.userId, state.plannerCell.date, entries)) return;
-  try { await api('/api/planner/day', { method: 'PUT', body: JSON.stringify({ user_id: state.plannerCell.userId, plan_date: state.plannerCell.date, entries, absence_type: absenceType, absence_note: $('#planner-absence-note').value }) }); $('#planner-dialog').close(); toast('Plan dnia został zapisany'); await reloadPlanner(); } catch (error) { toast(error.message, true); }
+  try { await api('/api/planner/day', { method: 'PUT', body: JSON.stringify({ user_id: state.plannerCell.userId, plan_date: state.plannerCell.date, entries, absence_type: absenceType, absence_note: $('#planner-absence-note').value, actual_hours_adjustment: Number($('#planner-actual-adjustment').value) || 0, overtime_raw_adjustment: Number($('#planner-raw-adjustment').value) || 0, overtime_weighted_adjustment: Number($('#planner-weighted-adjustment').value) || 0, adjustment_note: $('#planner-adjustment-note').value }) }); $('#planner-dialog').close(); toast('Plan dnia i korekty czasu zostały zapisane'); await reloadPlanner(); } catch (error) { toast(error.message, true); }
 }
 
 async function savePlannerTarget(userId, date, entries) {
@@ -949,12 +1029,7 @@ function renderPlannerRequirementsCalendar() {
     if (!values.has(key)) values.set(key, { online: 0, offline: 0 });
     values.get(key)[row.work_mode] += Number(row.required_count || 0);
   }
-  const holidays = (state.planner.holidays || []).filter(item => days.includes(item.holiday_date));
-  $('#planner-requirements-calendar').innerHTML = `${holidays.length ? `<div class="holiday-list"><b>Święta w zakresie</b>${holidays.map(item => `<span>${displayDate(item.holiday_date)} · ${escapeHtml(item.name)} <button type="button" class="delete-holiday" data-id="${item.id}" title="Usuń">×</button></span>`).join('')}</div>` : ''}<div class="requirement-calendar-scroll"><table style="--requirement-days:${days.length}"><thead><tr><th class="requirement-area">Obszar</th>${days.map(date => `<th class="${[0, 6].includes(new Date(`${date}T12:00:00Z`).getUTCDay()) ? 'weekend' : ''}"><b>${date.slice(8, 10)}</b><small>${new Intl.DateTimeFormat('pl-PL', { weekday: 'short', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`))}<br>${isoWeek(date).label}</small></th>`).join('')}</tr></thead><tbody>${groups.map(group => `<tr><th class="requirement-area"><b>${escapeHtml(group.path_label || group.name)}</b></th>${days.map(date => { const value = values.get(`${group.id}:${date}`) || {}; return `<td data-requirement-cell data-group="${group.id}" data-date="${date}"><label class="on"><span>ON</span><input type="number" min="0" max="999" value="${value.online || 0}" data-required-online></label><label class="off"><span>OFF</span><input type="number" min="0" max="999" value="${value.offline || 0}" data-required-offline></label></td>`; }).join('')}</tr>`).join('') || `<tr><td colspan="${days.length + 1}" class="empty">Brak obszarów.</td></tr>`}</tbody></table></div>`;
-  $$('.delete-holiday').forEach(button => button.addEventListener('click', async () => {
-    if (!await uiConfirm('Usuń święto', 'Dzień przestanie być liczony jako święto w kalkulacji nadgodzin.', 'Usuń', true)) return;
-    try { await api(`/api/planner/holidays/${button.dataset.id}`, { method: 'DELETE' }); await reloadPlanner(); renderPlannerRequirementsCalendar(); toast('Święto usunięto'); } catch (error) { toast(error.message, true); }
-  }));
+  $('#planner-requirements-calendar').innerHTML = `<div class="requirement-calendar-scroll"><table style="--requirement-days:${days.length}"><thead><tr><th class="requirement-area">Obszar</th>${days.map(date => `<th class="${[0, 6].includes(new Date(`${date}T12:00:00Z`).getUTCDay()) ? 'weekend' : ''}"><b>${date.slice(8, 10)}</b><small>${new Intl.DateTimeFormat('pl-PL', { weekday: 'short', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`))}<br>${isoWeek(date).label}</small></th>`).join('')}</tr></thead><tbody>${groups.map(group => `<tr><th class="requirement-area"><b>${escapeHtml(group.path_label || group.name)}</b></th>${days.map(date => { const value = values.get(`${group.id}:${date}`) || {}; return `<td data-requirement-cell data-group="${group.id}" data-date="${date}"><div class="requirement-pair"><label class="on"><span>ON</span><input type="number" min="0" max="999" value="${value.online || 0}" data-required-online></label><label class="off"><span>OFF</span><input type="number" min="0" max="999" value="${value.offline || 0}" data-required-offline></label></div></td>`; }).join('')}</tr>`).join('') || `<tr><td colspan="${days.length + 1}" class="empty">Brak obszarów.</td></tr>`}</tbody></table></div>`;
 }
 
 async function savePlannerRequirementsCalendar() {
@@ -985,7 +1060,8 @@ async function addPlannerHoliday() {
 function openPlannerHours() {
   if (!state.planner?.can_manage_time) return;
   const report = state.planner.time_details || { users: [], details: [] };
-  $('#planner-hours-content').innerHTML = `<section class="hours-rules"><b>Zasady kalkulacji</b><span>ON 10,5 h</span><span>OFF 8 h</span><span>Dzień roboczy: 1,5× ponad 8 h</span><span>Sobota: 1,5× całość</span><span>Niedziela / święto: 2× całość</span><span>Wolne z nadgodzin: −8 h</span></section><div class="tablewrap"><table class="hours-table"><thead><tr><th>Pracownik</th><th>Praca</th><th>Urlop zaliczony</th><th>Nadgodziny rzeczywiste</th><th>Nadgodziny ważone / bilans</th><th>Przeciążenie</th></tr></thead><tbody>${report.users.map(item => `<tr class="${item.overloaded_weeks?.length ? 'overloaded' : ''}"><td><b>${escapeHtml(item.display_name)}</b></td><td>${Number(item.actual_hours).toFixed(1)} h</td><td>${Number(item.credited_hours).toFixed(1)} h</td><td>${Number(item.overtime_raw).toFixed(1)} h</td><td><b>${item.overtime_balance >= 0 ? '+' : ''}${Number(item.overtime_balance).toFixed(1)} h</b></td><td>${item.overloaded_weeks?.length ? `<span class="badge red">${item.overloaded_weeks.map(week => `${week.week}: ${week.hours} h`).join(', ')}</span>` : '<span class="badge green">w normie</span>'}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">Brak danych w zakresie.</td></tr>'}</tbody></table></div><details class="hours-details"><summary>Szczegóły dzienne</summary><div class="tablewrap"><table><thead><tr><th>Data</th><th>Pracownik</th><th>Rodzaj</th><th>Praca</th><th>Zaliczone</th><th>Bilans nadgodzin</th></tr></thead><tbody>${report.details.filter(item => item.label || item.overtime_balance).map(item => `<tr><td>${displayDate(item.date)}</td><td>${escapeHtml(item.display_name)}</td><td>${escapeHtml(item.label || '—')}${item.is_holiday ? ' · święto' : ''}</td><td>${Number(item.actual_hours).toFixed(1)} h</td><td>${Number(item.credited_hours).toFixed(1)} h</td><td>${item.overtime_balance >= 0 ? '+' : ''}${Number(item.overtime_balance).toFixed(1)} h</td></tr>`).join('')}</tbody></table></div></details>`;
+  const s = state.config.settings || {};
+  $('#planner-hours-content').innerHTML = `<section class="hours-rules"><b>Zasady kalkulacji</b><span>ON ${escapeHtml(s.planner_online_hours || '10.5')} h</span><span>OFF ${escapeHtml(s.planner_offline_hours || '8')} h</span><span>Dzień roboczy: ${escapeHtml(s.planner_weekday_multiplier || '1.5')}× ponad ${escapeHtml(s.planner_base_hours || '8')} h</span><span>Sobota: ${escapeHtml(s.planner_saturday_multiplier || '1.5')}× całość</span><span>Niedziela / święto: ${escapeHtml(s.planner_sunday_holiday_multiplier || '2')}× całość</span><span>Wolne z nadgodzin: −${escapeHtml(s.planner_time_off_debit || '8')} h</span></section><div class="tablewrap"><table class="hours-table"><thead><tr><th>Pracownik</th><th>Praca</th><th>Urlop zaliczony</th><th>Nadgodziny bez mnożnika</th><th>Nadgodziny z mnożnikiem</th><th>Przeciążenie</th></tr></thead><tbody>${report.users.map(item => `<tr class="${item.overloaded_weeks?.length ? 'overloaded' : ''}"><td><b>${escapeHtml(item.display_name)}</b></td><td>${Number(item.actual_hours).toFixed(1)} h</td><td>${Number(item.credited_hours).toFixed(1)} h</td><td>${Number(item.overtime_raw).toFixed(1)} h</td><td><b>${item.overtime_balance >= 0 ? '+' : ''}${Number(item.overtime_balance).toFixed(1)} h</b></td><td>${item.overloaded_weeks?.length ? `<span class="badge red">${item.overloaded_weeks.map(week => `${week.week}: ${week.hours} h`).join(', ')}</span>` : '<span class="badge green">w normie</span>'}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">Brak danych w zakresie.</td></tr>'}</tbody></table></div><details class="hours-details"><summary>Szczegóły dzienne i przebieg bilansu</summary><div class="tablewrap"><table><thead><tr><th>Data</th><th>Pracownik</th><th>Rodzaj</th><th>Praca</th><th>Korekta dnia</th><th>Nadgodziny</th><th>Σ bez mnożnika</th><th>Σ z mnożnikiem</th><th>Powód korekty</th></tr></thead><tbody>${report.details.filter(item => item.label || item.overtime_balance || item.adjustment_note).map(item => `<tr><td>${displayDate(item.date)}</td><td>${escapeHtml(item.display_name)}</td><td>${escapeHtml(item.label || '—')}${item.is_holiday ? ' · święto' : ''}</td><td>${Number(item.actual_hours).toFixed(1)} h</td><td>${Number(item.actual_hours_adjustment || 0).toFixed(1)} h</td><td>${Number(item.overtime_raw).toFixed(1)} / ${Number(item.overtime_weighted).toFixed(1)} h</td><td>${Number(item.overtime_raw_cumulative || 0).toFixed(1)} h</td><td>${Number(item.overtime_weighted_cumulative || 0).toFixed(1)} h</td><td>${escapeHtml(item.adjustment_note || '—')}</td></tr>`).join('')}</tbody></table></div></details>`;
   $('#planner-hours-dialog').showModal();
 }
 
@@ -1106,7 +1182,7 @@ async function reloadCalendar() {
 
 function openCalendarFilters() {
   const labels = { task: 'Zadania', point: 'Otwarte punkty', status: 'Status', goal: 'Cele', note: 'Dziennik', annotation: 'Adnotacje' };
-  $('#calendar-filter-fields').innerHTML = `<div class="field full"><label>Typy informacji</label><div class="mentions">${Object.entries(labels).map(([type, label]) => `<label class="mention"><input type="checkbox" name="type" value="${type}" ${state.calendarTypes.includes(type) ? 'checked' : ''}>${label}</label>`).join('')}</div></div><div class="field full"><label>Priorytety zadań, statusu, punktów i celów</label><div class="mentions">${['Low', 'Medium', 'High', 'Critical'].map(priority => `<label class="mention"><input type="checkbox" name="priority" value="${priority}" ${state.calendarPriorities.includes(priority) ? 'checked' : ''}>${badgeText(priority)}</label>`).join('')}</div></div><label class="field"><span>Kategoria / branża zawiera</span><input name="category" value="${escapeHtml(state.calendarCategory)}" placeholder="np. Electrical"></label><label class="field calendar-own-filter"><span>Zakres osobisty</span><span class="toggle-line"><input name="only_mine" type="checkbox" value="1" ${state.calendarOnlyMine ? 'checked' : ''}><b>Tylko elementy utworzone przeze mnie lub przypisane / wspomniane przy mnie</b></span></label>`;
+  $('#calendar-filter-fields').innerHTML = `<section class="calendar-filter-section full"><header><b>Typy informacji</b><small>Zaznacz moduły widoczne na osi czasu.</small></header><div class="calendar-choice-grid">${Object.entries(labels).map(([type, label]) => `<label class="calendar-choice"><input type="checkbox" name="type" value="${type}" ${state.calendarTypes.includes(type) ? 'checked' : ''}><span>${label}</span></label>`).join('')}</div></section><section class="calendar-filter-section full"><header><b>Priorytety</b><small>Dotyczy zadań, statusu, punktów i celów.</small></header><div class="calendar-choice-grid four">${['Low', 'Medium', 'High', 'Critical'].map(priority => `<label class="calendar-choice"><input type="checkbox" name="priority" value="${priority}" ${state.calendarPriorities.includes(priority) ? 'checked' : ''}><span>${badgeText(priority)}</span></label>`).join('')}</div></section><label class="field calendar-filter-text"><span>Kategoria / branża zawiera</span><input name="category" value="${escapeHtml(state.calendarCategory)}" placeholder="np. Electrical"></label><label class="calendar-own-filter"><input name="only_mine" type="checkbox" value="1" ${state.calendarOnlyMine ? 'checked' : ''}><span><b>Tylko moje elementy</b><small>Utworzone przeze mnie lub takie, do których jestem przypisany / wspomniany.</small></span></label>`;
   $('#calendar-filter-dialog').showModal();
 }
 
@@ -1249,7 +1325,7 @@ function drawStatusRows() {
   for (const group of orderedGroups('status', grouping, rows)) {
     const items = grouping ? rows.filter(row => (row[grouping] || 'Bez wartości') === group) : rows;
     if (grouping) html += `<tr class="group-row"><td colspan="11">${escapeHtml(group)} <small>${items.length} pozycji</small></td></tr>`;
-    html += items.map(item => `<tr data-id="${item.id}" data-preview-type="status" data-preview-id="${item.id}"><td class="maincell">${escapeHtml(item.function_group_name || item.station)}<span class="sub">${item.function_group_subcategory_name ? `${escapeHtml(item.function_group_subcategory_name)} · ` : ''}${escapeHtml(item.current_note || item.function_detail)}</span></td><td>${escapeHtml(item.function_group_element_name || '—')}</td><td>${escapeHtml(controllerLabel(item))}</td><td>${escapeHtml(item.category)}</td><td>${escapeHtml(item.subcategory || '—')}</td><td>${badge(item.status)}</td><td><span class="status-related"><b>${item.related_work_progress}%</b><small class="sub">${item.related_work_done}/${item.related_work_total}</small><span class="progress"><i style="width:${item.related_work_progress}%"></i></span></span></td><td>${badge(item.criticality)}</td><td>${escapeHtml(item.responsible_name || '—')}</td><td>${escapeHtml(item.requirement_names || '—')}</td><td>${displayDate((item.updated_at || '').slice(0, 10))}</td></tr>`).join('');
+    html += items.map(item => `<tr data-id="${item.id}"><td class="maincell">${escapeHtml(item.function_group_name || item.station)}<span class="sub">${item.function_group_subcategory_name ? `${escapeHtml(item.function_group_subcategory_name)} · ` : ''}${escapeHtml(item.current_note || item.function_detail)}</span></td><td>${escapeHtml(item.function_group_element_name || '—')}</td><td>${escapeHtml(controllerLabel(item))}</td><td>${escapeHtml(item.category)}</td><td>${escapeHtml(item.subcategory || '—')}</td><td>${badge(item.status)}</td><td><span class="status-related"><b>${item.related_work_progress}%</b><small class="sub">${item.related_work_done}/${item.related_work_total}</small><span class="progress"><i style="width:${item.related_work_progress}%"></i></span></span></td><td>${badge(item.criticality)}</td><td>${escapeHtml(item.responsible_name || '—')}</td><td>${escapeHtml(item.requirement_names || '—')}</td><td>${displayDate((item.updated_at || '').slice(0, 10))}</td></tr>`).join('');
   }
   $('#status-body').innerHTML = html || '<tr><td colspan="10" class="empty">Brak wyników</td></tr>';
   $$('#status-body tr[data-id]').forEach(row => {
@@ -1391,7 +1467,7 @@ async function saveBulkStatus(event) {
 function taskCard(item) {
   const time = taskTimeLabel(item);
   const allChecks = [...(item.checklist || []), ...(item.scope_checklist || [])];
-  return `<article class="task-card compact" draggable="true" data-task-id="${item.id}" data-preview-type="task" data-preview-id="${item.id}"><div class="task-card-head"><h3>${escapeHtml(item.title)}</h3><span class="progress-value ${item.progress >= 100 ? 'done' : item.progress > 0 ? 'active' : ''}"><b>${item.progress || 0}%</b><i><u style="width:${item.progress || 0}%"></u></i></span></div><p>${escapeHtml(controllerLabel(item))} · ${escapeHtml(item.function_group_name || item.other_object || (item.scope_is_group ? 'zadanie obszarowe' : 'bez grupy'))}${item.function_group_element_name ? ` → ${escapeHtml(item.function_group_element_name)}` : ''}</p><div class="cardmeta"><span>${escapeHtml(item.owner_name || 'Nieprzypisane')}</span><span>${item.due_date ? displayDate(item.due_date) : 'bez deadline’u'}</span></div>${time ? `<span class="time-chip ${time.overdue ? 'overdue' : ''}">${escapeHtml(time.label)}</span>` : ''}<div class="checkbar"><i style="width:${item.progress || 0}%"></i></div><div class="task-card-foot"><button type="button" class="task-check-count" data-checklist-task="${item.id}">${allChecks.filter(entry => entry.done).length}/${allChecks.length} punktów kontroli</button><span>${escapeHtml(item.category || 'Bez kategorii')} · utworzył ${escapeHtml(item.created_by_name || 'dane historyczne')}</span></div></article>`;
+  return `<article class="task-card compact" draggable="true" data-task-id="${item.id}"><div class="task-card-head"><h3>${escapeHtml(item.title)}</h3><span class="progress-value ${item.progress >= 100 ? 'done' : item.progress > 0 ? 'active' : ''}"><b>${item.progress || 0}%</b><i><u style="width:${item.progress || 0}%"></u></i></span></div><p>${escapeHtml(controllerLabel(item))} · ${escapeHtml(item.function_group_name || item.other_object || (item.scope_is_group ? 'zadanie obszarowe' : 'bez grupy'))}${item.function_group_element_name ? ` → ${escapeHtml(item.function_group_element_name)}` : ''}</p><div class="cardmeta"><span>${escapeHtml(item.owner_name || 'Nieprzypisane')}</span><span>${item.due_date ? displayDate(item.due_date) : 'bez deadline’u'}</span></div>${time ? `<span class="time-chip ${time.overdue ? 'overdue' : ''}">${escapeHtml(time.label)}</span>` : ''}<div class="checkbar"><i style="width:${item.progress || 0}%"></i></div><div class="task-card-foot"><button type="button" class="task-check-count" data-checklist-task="${item.id}">${allChecks.filter(entry => entry.done).length}/${allChecks.length} punktów kontroli</button><span>${escapeHtml(item.category || 'Bez kategorii')} · utworzył ${escapeHtml(item.created_by_name || 'dane historyczne')}</span></div></article>`;
 }
 
 function renderTasks() {
@@ -1465,7 +1541,7 @@ function drawTaskListRows() {
   for (const group of orderedGroups('tasks', grouping, rows)) {
     const items = grouping ? rows.filter(row => (row[grouping] || 'Bez wartości') === group) : rows;
     if (grouping) html += `<tr class="group-row"><td colspan="13">${escapeHtml(group)} <small>${items.length} pozycji</small></td></tr>`;
-    html += items.map(item => { const time = taskTimeLabel(item); return `<tr data-id="${item.id}" data-preview-type="task" data-preview-id="${item.id}"><td class="maincell">${escapeHtml(item.title)}<span class="sub">${escapeHtml(item.description)}</span>${time ? `<span class="time-chip ${time.overdue ? 'overdue' : ''}">${escapeHtml(time.label)}</span>` : ''}</td><td>${escapeHtml(controllerLabel(item))}</td><td>${escapeHtml(item.function_group_name || item.other_object || '—')}</td><td>${escapeHtml(item.function_group_element_name || '—')}</td><td>${escapeHtml(item.category || '—')}</td><td>${escapeHtml(item.subcategory || '—')}</td><td>${escapeHtml(item.requirement_names || '—')}</td><td>${badge(item.status)}</td><td>${escapeHtml(item.owner_name || '—')}</td><td><span class="table-progress"><i><u style="width:${item.progress || 0}%"></u></i><b>${item.progress || 0}%</b></span></td><td>${displayDate(item.start_date)}</td><td>${displayDate(item.due_date)}</td><td>${badge(item.priority)}</td></tr>`; }).join('');
+    html += items.map(item => { const time = taskTimeLabel(item); return `<tr data-id="${item.id}"><td class="maincell">${escapeHtml(item.title)}<span class="sub">${escapeHtml(item.description)}</span>${time ? `<span class="time-chip ${time.overdue ? 'overdue' : ''}">${escapeHtml(time.label)}</span>` : ''}</td><td>${escapeHtml(controllerLabel(item))}</td><td>${escapeHtml(item.function_group_name || item.other_object || '—')}</td><td>${escapeHtml(item.function_group_element_name || '—')}</td><td>${escapeHtml(item.category || '—')}</td><td>${escapeHtml(item.subcategory || '—')}</td><td>${escapeHtml(item.requirement_names || '—')}</td><td>${badge(item.status)}</td><td>${escapeHtml(item.owner_name || '—')}</td><td><span class="table-progress"><i><u style="width:${item.progress || 0}%"></u></i><b>${item.progress || 0}%</b></span></td><td>${displayDate(item.start_date)}</td><td>${displayDate(item.due_date)}</td><td>${badge(item.priority)}</td></tr>`; }).join('');
   }
   $('#task-list-body').innerHTML = html || '<tr><td colspan="12" class="empty">Brak wyników</td></tr>';
   $$('#task-list-body tr[data-id]').forEach(row => {
@@ -1527,7 +1603,7 @@ function drawPointList() {
 
 function drawPointRows() {
   const rows = sortRows(filterRows(state.points, '#points-panel'), state.sort.points);
-  $('#points-body').innerHTML = rows.map(item => `<tr data-id="${item.id}" data-preview-type="point" data-preview-id="${item.id}"><td class="maincell">${escapeHtml(item.title)}<span class="sub">${escapeHtml(item.description)}</span><span class="sub">Utworzył: ${escapeHtml(item.created_by_name || 'dane historyczne')} · ${displayDate((item.created_at || '').slice(0, 10))}</span></td><td>${escapeHtml(controllerLabel(item))}</td><td>${escapeHtml(item.category || '—')}</td><td>${escapeHtml(item.subcategory || '—')}</td><td>${badge(item.status)}</td><td>${escapeHtml(item.waiting_for || '—')}</td><td>${escapeHtml(item.owner_name || '—')}</td><td>${escapeHtml(item.requirement_names || '—')}</td><td>${displayDate(item.due_date)}</td><td>${displayDate(item.reminder_date)}</td></tr>`).join('') || '<tr><td colspan="10" class="empty">Brak wyników</td></tr>';
+  $('#points-body').innerHTML = rows.map(item => `<tr data-id="${item.id}"><td class="maincell">${escapeHtml(item.title)}<span class="sub">${escapeHtml(item.description)}</span><span class="sub">Utworzył: ${escapeHtml(item.created_by_name || 'dane historyczne')} · ${displayDate((item.created_at || '').slice(0, 10))}</span></td><td>${escapeHtml(controllerLabel(item))}</td><td>${escapeHtml(item.category || '—')}</td><td>${escapeHtml(item.subcategory || '—')}</td><td>${badge(item.status)}</td><td>${escapeHtml(item.waiting_for || '—')}</td><td>${escapeHtml(item.owner_name || '—')}</td><td>${escapeHtml(item.requirement_names || '—')}</td><td>${displayDate(item.due_date)}</td><td>${displayDate(item.reminder_date)}</td></tr>`).join('') || '<tr><td colspan="10" class="empty">Brak wyników</td></tr>';
   $$('#points-body tr[data-id]').forEach(row => {
     const item = state.points.find(value => value.id === Number(row.dataset.id));
     row.addEventListener('click', () => openRecord('points', item));
@@ -1545,39 +1621,6 @@ function showEntityContext(event, type, item) {
   menu.classList.remove('hidden');
   menu.querySelector('[data-action="edit"]').addEventListener('click', () => { menu.classList.add('hidden'); openRecord(type, item); });
   menu.querySelector('[data-action="duplicate"]').addEventListener('click', () => { menu.classList.add('hidden'); openDuplicate(type, item); });
-}
-
-function previewPointerOver(event) {
-  const target = event.target.closest?.('[data-preview-type][data-preview-id]');
-  if (!target || target.contains(event.relatedTarget) || matchMedia('(hover: none)').matches) return;
-  clearTimeout(state.previewTimer);
-  state.previewTimer = setTimeout(() => showEntityPreview(target), 320);
-}
-
-function previewPointerOut(event) {
-  const target = event.target.closest?.('[data-preview-type][data-preview-id]');
-  if (!target || target.contains(event.relatedTarget)) return;
-  clearTimeout(state.previewTimer);
-  $('#entity-preview').classList.add('hidden');
-}
-
-function showEntityPreview(target) {
-  if (!target?.isConnected || document.querySelector('dialog[open]')) return;
-  const type = target.dataset.previewType;
-  const item = entity(type, Number(target.dataset.previewId));
-  if (!item) return;
-  const title = entityLabel(type, item);
-  const owner = item.owner_name || item.responsible_name || 'Nieprzypisane';
-  const date = item.due_date || item.reminder_date || item.checked_on;
-  const description = item.description || item.current_note || item.function_detail || '';
-  const extra = type === 'task' ? `${item.progress || 0}% wykonania` : type === 'status' ? `${item.related_work_progress || 0}% prac dodatkowych` : item.waiting_for || '';
-  const preview = $('#entity-preview');
-  preview.innerHTML = `<header><span class="type-dot ${type}"></span><b>${escapeHtml(title)}</b></header><p>${escapeHtml(description).slice(0, 260)}</p><dl><div><dt>Zakres</dt><dd>${escapeHtml(controllerLabel(item) || 'Cały projekt')}</dd></div><div><dt>Status</dt><dd>${escapeHtml(badgeText(item.status))}</dd></div><div><dt>Odpowiedzialni</dt><dd>${escapeHtml(owner)}</dd></div>${date ? `<div><dt>Termin</dt><dd>${displayDate(date)}</dd></div>` : ''}${extra ? `<div><dt>Postęp / informacja</dt><dd>${escapeHtml(extra)}</dd></div>` : ''}</dl>`;
-  const rect = target.getBoundingClientRect();
-  const width = 340;
-  preview.style.left = `${Math.max(12, Math.min(innerWidth - width - 12, rect.left + Math.min(rect.width, 80)))}px`;
-  preview.style.top = `${Math.max(70, Math.min(innerHeight - 260, rect.bottom + 8))}px`;
-  preview.classList.remove('hidden');
 }
 
 function openTaskChecklistPopup(taskId) {
@@ -1627,7 +1670,7 @@ function drawReminderView() {
 
 function renderNotes() {
   const weeks = [...new Map(state.notes.map(item => { const week = isoWeek(item.note_date); return [week.key, week]; })).values()];
-  $('#content').innerHTML = `<div class="panel"><div class="toolbar"><strong>Historia wpisów</strong><label>Od <input type="date" id="notes-from" value="${state.notesFrom}"></label><label>Do <input type="date" id="notes-to" value="${state.notesTo}"></label><label>Calendar week <select id="week-filter">${selectOptions(weeks.map(week => ({ value: week.key, label: week.label })), state.notesWeek, 'Wszystkie CW')}</select></label><label>Grupuj <select id="notes-group"><option value="controller">Sterownik</option><option value="type">Typ wpisu</option><option value="shift">Zmiana</option><option value="cw">Calendar week</option><option value="">Bez grupowania</option></select></label><button id="notes-refresh" class="secondary">Odśwież zakres</button></div></div><div id="notes-list" class="notes"></div>`;
+  $('#content').innerHTML = `<div class="panel"><div class="toolbar"><strong>Historia wpisów</strong><label>Od <input type="date" id="notes-from" value="${state.notesFrom}"></label><label>Do <input type="date" id="notes-to" value="${state.notesTo}"></label><label>Calendar week <select id="week-filter">${selectOptions(weeks.map(week => ({ value: week.key, label: week.label })), state.notesWeek, 'Wszystkie CW')}</select></label><label>Grupuj <select id="notes-group"><option value="scope">Zakres projektu</option><option value="type">Typ wpisu</option><option value="shift">Zmiana</option><option value="cw">Calendar week</option><option value="">Bez grupowania</option></select></label><button id="notes-refresh" class="secondary">Odśwież zakres</button></div></div><div id="notes-list" class="notes"></div>`;
   $('#notes-group').value = state.grouping.notes;
   $('#notes-group').addEventListener('change', event => { state.grouping.notes = event.target.value; drawNotes(); });
   $('#week-filter').addEventListener('change', event => { state.notesWeek = event.target.value; drawNotes(); });
@@ -1644,10 +1687,10 @@ function renderNotes() {
 
 function drawNotes() {
   const weekFilter = $('#week-filter')?.value || '';
-  const rows = state.notes.map(item => ({ ...item, cw: isoWeek(item.note_date).label, cwKey: isoWeek(item.note_date).key })).filter(item => !weekFilter || item.cwKey === weekFilter);
+  const rows = state.notes.map(item => ({ ...item, scope: item.scope_label || controllerLabel(item) || 'Cały projekt', cw: isoWeek(item.note_date).label, cwKey: isoWeek(item.note_date).key })).filter(item => !weekFilter || item.cwKey === weekFilter);
   const grouping = state.grouping.notes;
   const groups = grouping ? [...new Set(rows.map(item => item[grouping] || 'Bez wartości'))] : [''];
-  $('#notes-list').innerHTML = groups.map(group => `${grouping ? `<div class="group-title">${escapeHtml(group)} · ${rows.filter(item => (item[grouping] || 'Bez wartości') === group).length}</div>` : ''}${(grouping ? rows.filter(item => (item[grouping] || 'Bez wartości') === group) : rows).map(item => `<article class="note" data-id="${item.id}"><div class="note-meta">${displayDate(item.note_date)} · ${escapeHtml(item.cw)}<br>${escapeHtml(controllerLabel(item) || 'Ogólne')} · ${escapeHtml(item.shift)}<br>${escapeHtml(item.author || item.created_by_name)}<br>Utworzono: ${displayDateTime(item.created_at)}</div><div><strong>${escapeHtml(item.type)}</strong><p>${escapeHtml(item.content)}</p><div class="links">${(item.links || []).map(link => linkChip(link.entity_type, link.entity_id, ({ status: 'Status', task: 'Zadanie', point: 'Otwarty punkt' })[link.entity_type] || link.entity_type)).join('')}</div></div></article>`).join('')}`).join('') || '<div class="empty">Brak wpisów</div>';
+  $('#notes-list').innerHTML = groups.map(group => `${grouping ? `<div class="group-title">${escapeHtml(group)} · ${rows.filter(item => (item[grouping] || 'Bez wartości') === group).length}</div>` : ''}${(grouping ? rows.filter(item => (item[grouping] || 'Bez wartości') === group) : rows).map(item => { const links = item.links || []; return `<article class="note clickable-note" data-id="${item.id}"><div class="note-meta">${displayDate(item.note_date)} · ${escapeHtml(item.cw)}<br>${escapeHtml(item.scope_label || controllerLabel(item) || 'Cały projekt')} · ${escapeHtml(item.shift)}<br>${escapeHtml(item.author || item.created_by_name)}<br>Utworzono: ${displayDateTime(item.created_at)}</div><div><strong>${escapeHtml(item.type)}</strong><p class="note-content-clamp">${escapeHtml(item.content)}</p><div class="links">${links.slice(0, 2).map(link => linkChip(link.entity_type, link.entity_id, ({ status: 'Status', task: 'Zadanie', point: 'Otwarty punkt' })[link.entity_type] || link.entity_type)).join('')}${links.length > 2 ? `<span class="more-relations">+${links.length - 2} powiązania · otwórz notatkę</span>` : ''}</div></div></article>`; }).join('')}`).join('') || '<div class="empty">Brak wpisów</div>';
   $$('.note[data-id]').forEach(row => row.addEventListener('click', event => { if (!event.target.closest('.jump')) openRecord('notes', state.notes.find(item => item.id === Number(row.dataset.id))); }));
   bindJumpItems();
 }
@@ -1670,13 +1713,17 @@ function categoryConfig(scope, categories, admin) {
   const subKind = scope === 'task' ? 'task_subcategories' : 'subcategories';
   const deleteCategory = scope === 'task' ? 'task_category' : 'category';
   const deleteSub = scope === 'task' ? 'task_subcategory' : 'subcategory';
-  return categories.map((category, index) => `<div class="settings-row">${orderControls(kind, categories, index)}<span><b>${escapeHtml(category.name)}</b></span><button class="mini edit-category" data-scope="${scope}" data-id="${category.id}" data-value="${escapeHtml(category.name)}">Edytuj</button><button class="mini add-sub" data-scope="${scope}" data-id="${category.id}">+ podkategoria</button>${admin ? `<button class="mini delete-config" data-kind="${deleteCategory}" data-id="${category.id}">Usuń</button>` : ''}</div>${category.subcategories.map((sub, subIndex) => `<div class="settings-row">${orderControls(subKind, category.subcategories, subIndex)}<span>↳ ${escapeHtml(sub.name)}${scope === 'status' && sub.default_function ? `<small class="sub">${escapeHtml(sub.default_function)}</small>` : ''}</span><button class="mini edit-sub" data-scope="${scope}" data-id="${sub.id}" data-parent="${category.id}" data-value="${escapeHtml(sub.name)}" data-function="${escapeHtml(sub.default_function || '')}">Edytuj</button>${admin ? `<button class="mini delete-config" data-kind="${deleteSub}" data-id="${sub.id}">Usuń</button>` : ''}</div>`).join('')}`).join('');
+  if (!state.categorySelection[scope] || !categories.some(item => item.id === state.categorySelection[scope])) state.categorySelection[scope] = categories[0]?.id || null;
+  const selected = categories.find(item => item.id === state.categorySelection[scope]);
+  const categoryRows = categories.map((category, index) => `<div class="hierarchy-tree-row ${selected?.id === category.id ? 'selected' : ''}">${orderControls(kind, categories, index)}<button type="button" class="select-category-node" data-scope="${scope}" data-id="${category.id}"><b>${escapeHtml(category.name)}</b><small>${category.subcategories.length} podkategorii</small></button></div>`).join('');
+  const details = selected ? `<div class="category-detail-head"><div><small>Kategoria</small><h3>${escapeHtml(selected.name)}</h3></div><div><button class="mini edit-category" data-scope="${scope}" data-id="${selected.id}" data-value="${escapeHtml(selected.name)}">Edytuj nazwę</button><button class="mini add-sub" data-scope="${scope}" data-id="${selected.id}">+ Podkategoria</button>${admin ? `<button class="mini danger-outline delete-config" data-kind="${deleteCategory}" data-id="${selected.id}">Usuń</button>` : ''}</div></div><div class="category-sub-list">${selected.subcategories.map((sub, subIndex) => `<div class="settings-row">${orderControls(subKind, selected.subcategories, subIndex)}<span><b>${escapeHtml(sub.name)}</b>${scope === 'status' && sub.default_function ? `<small class="sub">${escapeHtml(sub.default_function)}</small>` : ''}</span><button class="mini edit-sub" data-scope="${scope}" data-id="${sub.id}" data-parent="${selected.id}" data-value="${escapeHtml(sub.name)}" data-function="${escapeHtml(sub.default_function || '')}">Edytuj</button>${admin ? `<button class="mini delete-config" data-kind="${deleteSub}" data-id="${sub.id}">Usuń</button>` : ''}</div>`).join('') || '<div class="empty compact-empty">Brak podkategorii.</div>'}</div>` : '<div class="empty">Dodaj pierwszą kategorię.</div>';
+  return `<div class="category-editor"><aside><strong>Kategorie</strong><div class="config-tree compact-tree">${categoryRows || '<div class="empty compact-empty">Brak kategorii.</div>'}</div></aside><section class="category-detail">${details}</section></div>`;
 }
 
 function functionGroupConfig(admin) {
   const groups = functionGroups(state.functionGroupController);
   return `<section class="settings-card settings-wide"><div class="settings-title-row"><div><h2>Grupy funkcyjne i punkty statusu</h2><p class="sub">Osobna, uporządkowana lista stacji, robotów i innych grup dla każdego sterownika.</p></div><label class="field compact-field"><span>Sterownik</span><select id="function-group-controller">${selectOptions(state.controllers.map(item => ({ value: item.code, label: item.display_name || item.code })), state.functionGroupController)}</select></label></div>
-    <div class="function-group-list">${groups.map((group, index) => `<div class="function-group-block"><div class="settings-row function-group-row">${admin ? orderControls('function_groups', groups, index) : ''}<span><b>${escapeHtml(group.name)}</b><small class="sub">${group.check_count} zdefiniowanych punktów · ${group.status_count} wierszy w Statusie</small><span class="element-list">${(group.elements || []).map(element => `<span class="element-chip">${escapeHtml(element.name)}${admin ? ` <button class="delete-element" data-group="${group.id}" data-id="${element.id}" title="Usuń">×</button>` : ''}</span>`).join('') || '<small>Brak elementów</small>'}</span><span class="element-list group-subcategory-list">${(group.subcategories || []).map((subcategory, subIndex) => `<span class="element-chip violet">${admin ? orderControls('function_group_subcategories', group.subcategories, subIndex) : ''}${escapeHtml(subcategory.name)}${admin ? ` <button class="edit-group-subcategory" data-group="${group.id}" data-id="${subcategory.id}" data-name="${escapeHtml(subcategory.name)}" title="Edytuj">✎</button> <button class="delete-group-subcategory" data-group="${group.id}" data-id="${subcategory.id}" title="Usuń">×</button>` : ''}</span>`).join('') || '<small>Brak własnych podkategorii grupy</small>'}</span></span>${admin ? `<button class="mini edit-function-points" data-id="${group.id}">Punkty statusu</button><button class="mini rename-function-group" data-id="${group.id}" data-value="${escapeHtml(group.name)}">Zmień nazwę</button><button class="mini delete-function-group" data-id="${group.id}">Usuń</button>` : ''}</div>${admin ? `<div class="bulk-groups two"><label class="field"><span>Elementy grupy — po jednym wierszu</span><textarea class="bulk-elements" data-group="${group.id}" rows="2" placeholder="QM1\nQM2\nBZ1"></textarea><button class="mini bulk-elements-add" data-group="${group.id}">Dodaj elementy</button></label><label class="field"><span>Własne podkategorie — po jednym wierszu</span><textarea class="bulk-group-subcategories" data-group="${group.id}" rows="2" placeholder="Napędy\nCzujniki\nSekwencja"></textarea><button class="mini bulk-group-subcategories-add" data-group="${group.id}">Dodaj podkategorie</button></label></div>` : ''}</div>`).join('') || '<div class="empty compact-empty">Brak grup funkcyjnych dla wybranego sterownika.</div>'}</div>
+    <div class="function-group-list compact-function-groups">${groups.map((group, index) => `<div class="settings-row function-group-row">${admin ? orderControls('function_groups', groups, index) : ''}<span><b>${escapeHtml(group.name)}</b><small class="sub">${group.check_count} punktów statusu · ${group.status_count} wierszy · ${(group.elements || []).length} elementów · ${(group.subcategories || []).length} podkategorii</small></span>${admin ? `<button class="mini manage-function-group-list" data-group="${group.id}" data-kind="elements">Elementy (${(group.elements || []).length})</button><button class="mini manage-function-group-list" data-group="${group.id}" data-kind="subcategories">Podkategorie (${(group.subcategories || []).length})</button><button class="mini edit-function-points" data-id="${group.id}">Punkty statusu</button><button class="mini rename-function-group" data-id="${group.id}" data-value="${escapeHtml(group.name)}">Nazwa</button><button class="mini danger-outline delete-function-group" data-id="${group.id}">Usuń</button>` : ''}</div>`).join('') || '<div class="empty compact-empty">Brak grup funkcyjnych dla wybranego sterownika.</div>'}</div>
     ${admin ? `<div class="function-group-actions"><form id="new-function-group" class="inline-form"><input name="name" placeholder="Nowa grupa, np. Robot R01" required><button class="mini">Dodaj grupę</button></form><div class="bulk-groups"><label class="field"><span>Szybkie dodawanie — jeden wiersz = jedna grupa funkcyjna</span><textarea id="bulk-function-groups" rows="6" placeholder="Stacja 010\nRobot R01\nRobot R02"></textarea></label><button class="secondary" id="bulk-function-groups-add">Dodaj listę</button></div></div>` : '<p class="sub">Edycja grup funkcyjnych jest dostępna dla administratora.</p>'}
   </section>`;
 }
@@ -1717,6 +1764,8 @@ function renderSettings() {
     ['status_categories', 'Kategorie statusu', 'Kategorie i podkategorie w ustalonej kolejności', state.config.categories.length, '▤'],
     ['task_categories', 'Kategorie zadań', 'Niezależny słownik dla modułu Zadania', state.config.task_categories.length, '✓'],
     ['users', 'Użytkownicy projektu', 'Role, dostęp, Planner i przypisane obszary', state.users.length, '♙'],
+    ['announcements', 'Informator', 'Etykiety oraz poziomy ważności wiadomości', (state.config.announcement_labels || []).length, '◆'],
+    ...(admin ? [['planner', 'Planner i czas pracy', 'Święta, normy godzin i mnożniki nadgodzin', (state.planner?.holidays || []).length, '▥']] : []),
     ['dictionaries', 'Słowniki projektu', 'Zmiany, typy notatek i „Oczekiwanie na”', state.config.options.length, '≡'],
     ['completion_requirements', 'Wymagania do spełnienia', 'Zapotrzebowanie wybierane w statusie, zadaniach i otwartych punktach', (state.config.requirements || []).length, '◇'],
     ['reminders', 'Przypomnienia', 'Domyślne terminy i okno ostrzegawcze', 2, '◷'],
@@ -1735,7 +1784,14 @@ function configPanelDefinition(key) {
     const items = state.config.options.filter(item => item.kind === kind);
     return `<section class="config-subsection"><h3>${label}</h3>${items.map((item, index) => `<div class="settings-row">${orderControls('options', items, index)}<span>${escapeHtml(item.value)}</span><button class="mini edit-option" data-id="${item.id}" data-kind="${kind}" data-value="${escapeHtml(item.value)}">Edytuj</button>${admin ? `<button class="mini delete-config" data-kind="option" data-id="${item.id}">Usuń</button>` : ''}</div>`).join('')}<form class="inline-form add-option" data-kind="${kind}"><input name="value" placeholder="Nowa wartość" required><button class="mini">Dodaj</button></form></section>`;
   }).join('');
-  const users = state.users.map((item, index) => `<div class="settings-row user-config-row">${systemAdmin ? orderControls('users', state.users, index) : ''}<span><b>${escapeHtml(item.display_name)}</b><small class="sub">${escapeHtml(item.username)} · ${item.system_role === 'system_admin' ? 'Administrator systemu' : roleName(item.project_role)} · ${item.project_active ? 'w projekcie' : 'wyłączony z projektu'} · Planner: ${item.planner_enabled ? 'tak' : 'nie'}</small><small class="sub">Obszary: ${(item.area_ids || []).map(id => state.controllerGroups.find(group => group.id === id)?.path_label).filter(Boolean).map(escapeHtml).join(', ') || 'nie przypisano'}</small></span>${admin && item.project_active ? `<button class="mini toggle-user-planner ${item.planner_enabled ? 'active-toggle' : ''}" data-id="${item.id}" data-enabled="${item.planner_enabled ? 1 : 0}">${item.planner_enabled ? 'Planner ✓' : 'Planner —'}</button>` : ''}${admin && item.project_active && item.system_role !== 'system_admin' ? `<button class="mini edit-user-areas" data-id="${item.id}">Obszary</button>` : ''}${canManageUser(item) ? `<button class="mini edit-user" data-id="${item.id}">Edytuj dostęp</button>` : ''}</div>`).join('');
+  const users = state.users.map((item, index) => `<div class="settings-row user-config-row">${systemAdmin ? orderControls('users', state.users, index) : ''}<span><b>${escapeHtml(item.display_name)}</b><small class="sub">${escapeHtml(item.username)} · ${item.system_role === 'system_admin' ? 'Administrator systemu' : roleName(item.project_role)} · ${item.project_active ? 'w projekcie' : 'wyłączony z projektu'} · Planner: ${item.planner_enabled ? 'tak' : 'nie'}</small><small class="sub">Obszary: ${(item.area_ids || []).map(id => state.controllerGroups.find(group => group.id === id)?.path_label).filter(Boolean).map(escapeHtml).join(', ') || 'nie przypisano'}</small></span>${admin && item.project_active ? `<button class="mini toggle-user-planner ${item.planner_enabled ? 'active-toggle' : ''}" data-id="${item.id}" data-enabled="${item.planner_enabled ? 1 : 0}">${item.planner_enabled ? 'Planner ✓' : 'Planner —'}</button>` : ''}${admin && item.project_active && item.system_role !== 'system_admin' ? `<button class="mini edit-user-areas" data-id="${item.id}">Obszary</button>` : ''}${systemAdmin ? `<button class="mini reset-user-password" data-id="${item.id}" data-name="${escapeHtml(item.display_name)}">Nowe hasło</button>` : ''}${canManageUser(item) ? `<button class="mini edit-user" data-id="${item.id}">Edytuj dostęp</button>` : ''}</div>`).join('');
+  const importanceItems = state.config.options.filter(item => item.kind === 'announcement_importance');
+  const announcementConfig = `<section class="config-panel-body config-two-columns"><section class="config-subsection"><h3>Etykiety wiadomości</h3>${(state.config.announcement_labels || []).map((item, index, items) => `<div class="settings-row">${orderControls('announcement_labels', items, index)}<span><span class="announcement-label ${escapeHtml(item.color)}">${escapeHtml(item.name)}</span></span><button class="mini edit-announcement-label" data-id="${item.id}">Edytuj</button>${admin ? `<button class="mini delete-announcement-label" data-id="${item.id}">Usuń</button>` : ''}</div>`).join('')}<button class="secondary" id="new-announcement-label">+ Dodaj etykietę</button></section><section class="config-subsection"><h3>Poziomy ważności</h3>${importanceItems.map((item, index) => `<div class="settings-row">${orderControls('options', importanceItems, index)}<span>${escapeHtml(item.value)}</span><button class="mini edit-option" data-id="${item.id}" data-kind="announcement_importance" data-value="${escapeHtml(item.value)}">Edytuj</button>${admin ? `<button class="mini delete-config" data-kind="option" data-id="${item.id}">Usuń</button>` : ''}</div>`).join('')}<form class="inline-form add-option" data-kind="announcement_importance"><input name="value" placeholder="Nowy poziom" required><button class="mini">Dodaj</button></form></section></section>`;
+  const plannerSettingFields = [
+    ['planner_online_hours', 'Standard godzin ON', '10.5'], ['planner_offline_hours', 'Standard godzin OFF', '8'], ['planner_base_hours', 'Norma dnia roboczego', '8'],
+    ['planner_weekday_multiplier', 'Mnożnik nadgodzin w dzień roboczy', '1.5'], ['planner_saturday_multiplier', 'Mnożnik sobotni', '1.5'], ['planner_sunday_holiday_multiplier', 'Mnożnik niedziela / święto', '2'], ['planner_time_off_debit', 'Odjęcie za wolne z nadgodzin', '8']
+  ];
+  const plannerConfig = `<section class="config-panel-body planner-config-grid"><section class="config-subsection"><h3>Normy czasu pracy</h3><div class="planner-setting-grid">${plannerSettingFields.map(([key, label, fallback]) => `<label class="field"><span>${label}</span><input class="planner-setting" data-key="${key}" type="number" min="0" step="0.25" value="${escapeHtml(state.config.settings[key] || fallback)}"></label>`).join('')}</div></section><section class="config-subsection"><h3>Święta projektu</h3><div class="holiday-list-config">${(state.config.planner_holidays || []).map(item => `<div class="settings-row"><span><b>${displayDate(item.holiday_date)}</b> · ${escapeHtml(item.name)}</span><button class="mini edit-planner-holiday" data-id="${item.id}">Edytuj</button><button class="mini delete-planner-holiday" data-id="${item.id}">Usuń</button></div>`).join('') || '<div class="empty compact-empty">Brak zdefiniowanych świąt.</div>'}</div><label class="field"><span>Szybkie dodawanie — data + nazwa święta</span><textarea id="planner-holidays-bulk" rows="7" placeholder="2026-12-25 + Boże Narodzenie\n2026-12-26 + Drugi dzień świąt"></textarea></label><button class="secondary" id="planner-holidays-bulk-save">Dodaj listę świąt</button></section></section>`;
   const definitions = {
     projects: ['Projekty systemu', `<section class="config-panel-body"><p class="sub">Konta są globalne, a role i dostęp są niezależne dla każdego projektu.</p>${state.projects.map(item => `<div class="settings-row"><span><b>${escapeHtml(item.code)} · ${escapeHtml(item.name)}</b><small class="sub">${escapeHtml(item.description || '')}</small></span><button class="mini edit-project" data-id="${item.id}">Edytuj</button><button class="mini danger-outline delete-project" data-id="${item.id}" ${state.projects.length <= 1 ? 'disabled title="Nie można usunąć ostatniego projektu"' : ''}>Usuń</button></div>`).join('')}<button class="secondary" id="new-project">+ Dodaj projekt</button></section>`],
     hierarchy: ['Hierarchia obszarów / sterowników', `<section class="config-panel-body"><p class="sub">Projekt → obszar → podobszar → sterownik. Wybierz element po lewej, a jego działania pojawią się po prawej.</p>${controllerHierarchyConfig(admin)}</section>`],
@@ -1743,6 +1799,8 @@ function configPanelDefinition(key) {
     status_categories: ['Kategorie statusu i otwartych punktów', `<section class="config-panel-body">${categoryConfig('status', state.config.categories, admin)}<form class="inline-form add-category" data-scope="status"><input name="name" placeholder="Nowa kategoria" required><button class="mini">Dodaj</button></form></section>`],
     task_categories: ['Kategorie zadań', `<section class="config-panel-body">${categoryConfig('task', state.config.task_categories, admin)}<form class="inline-form add-category" data-scope="task"><input name="name" placeholder="Nowa kategoria zadań" required><button class="mini">Dodaj</button></form></section>`],
     users: ['Użytkownicy projektu', `<section class="config-panel-body">${users}${systemAdmin ? '<button class="secondary" id="new-user">+ Dodaj globalne konto</button>' : ''}</section>`],
+    announcements: ['Informator · etykiety i ważność', announcementConfig],
+    planner: ['Planner · konfiguracja', plannerConfig],
     dictionaries: ['Słowniki projektu', `<section class="config-panel-body config-dictionaries">${dictionaries}</section>`],
     completion_requirements: ['Wymagania do spełnienia', `<section class="config-panel-body"><p class="sub">Ta uporządkowana lista jest dostępna jako wielokrotny wybór w Statusie, Zadaniach i Otwartych punktach.</p>${(state.config.requirements || []).map((item, index, items) => `<div class="settings-row">${canEdit ? orderControls('completion_requirements', items, index) : ''}<span><b>${escapeHtml(item.name)}</b><small class="sub">${escapeHtml(item.description || 'Bez opisu')}</small></span>${canEdit ? `<button class="mini edit-requirement-config" data-id="${item.id}">Edytuj</button>` : ''}${admin ? `<button class="mini delete-requirement-config" data-id="${item.id}">Usuń</button>` : ''}</div>`).join('') || '<div class="empty compact-empty">Nie zdefiniowano jeszcze wymagań.</div>'}${canEdit ? '<button class="secondary" id="new-requirement-config">+ Dodaj wymaganie</button>' : ''}</section>`],
     reminders: ['Ustawienia przypomnień', `<section class="config-panel-body">${admin ? `<p class="sub">Źródło obszarów dla „Mojego podsumowania” każdy użytkownik wybiera indywidualnie w tym module.</p><label class="field"><span>Domyślne przypomnienie po utworzeniu (dni)</span><input id="default-reminder" type="number" min="1" value="${escapeHtml(state.config.settings.default_reminder_days || 14)}"></label><label class="field"><span>Okno „zbliżających się” przypomnień (dni)</span><input id="warning-days" type="number" min="1" value="${escapeHtml(state.config.settings.reminder_warning_days || 7)}"></label>` : '<p class="sub">Tylko administrator może zmieniać ustawienia projektu.</p>'}</section>`],
@@ -1771,6 +1829,7 @@ function refreshConfigPanel() {
 function bindSettings() {
   $$('.move-item').forEach(button => button.addEventListener('click', () => moveConfigItem(button.dataset.kind, Number(button.dataset.id), Number(button.dataset.direction))));
   $$('.select-hierarchy-node').forEach(button => button.addEventListener('click', () => { state.hierarchySelection = button.dataset.node; state.configScroll = $('#config-full-content')?.scrollTop || 0; refreshConfigPanel(); }));
+  $$('.select-category-node').forEach(button => button.addEventListener('click', () => { state.categorySelection[button.dataset.scope] = Number(button.dataset.id); state.configScroll = $('#config-full-content')?.scrollTop || 0; refreshConfigPanel(); }));
   $('#new-root-group')?.addEventListener('click', () => saveControllerGroup(null, null));
   $('#new-controller-selected')?.addEventListener('click', button => openRecord('controllers', null, { group_id: Number(button.currentTarget.dataset.group) }));
   $$('.add-child-group').forEach(button => button.addEventListener('click', () => saveControllerGroup(null, Number(button.dataset.id))));
@@ -1792,6 +1851,7 @@ function bindSettings() {
       toast('Lista grup została dodana'); await loadData();
     } catch (error) { toast(error.message, true); }
   });
+  $$('.manage-function-group-list').forEach(button => button.addEventListener('click', () => manageFunctionGroupList(Number(button.dataset.group), button.dataset.kind)));
   $$('.bulk-elements-add').forEach(button => button.addEventListener('click', async () => {
     const textarea = $(`.bulk-elements[data-group="${button.dataset.group}"]`);
     if (!textarea.value.trim()) return toast('Wklej co najmniej jeden element grupy', true);
@@ -1830,6 +1890,7 @@ function bindSettings() {
   $$('.delete-config').forEach(button => button.addEventListener('click', async () => { if (!await uiConfirm('Usuń pozycję konfiguracji', 'Zmiana może wpłynąć na istniejące rekordy projektu.', 'Usuń', true)) return; const endpoints = { category: 'categories', subcategory: 'subcategories', task_category: 'task-categories', task_subcategory: 'task-subcategories', option: 'options' }; await api(`/api/${endpoints[button.dataset.kind]}/${button.dataset.id}`, { method: 'DELETE' }); await loadData(); }));
   $$('.edit-controller').forEach(button => button.addEventListener('click', () => openRecord('controllers', state.controllers.find(item => item.id === Number(button.dataset.id)))));
   $$('.edit-user').forEach(button => button.addEventListener('click', () => openRecord('users', state.users.find(item => item.id === Number(button.dataset.id)))));
+  $$('.reset-user-password').forEach(button => button.addEventListener('click', () => resetUserPassword(Number(button.dataset.id), button.dataset.name)));
   $$('.edit-user-areas').forEach(button => button.addEventListener('click', () => editUserAreas(Number(button.dataset.id))));
   $$('.toggle-user-planner').forEach(button => button.addEventListener('click', async () => { try { await api(`/api/users/${button.dataset.id}/planner`, { method: 'PUT', body: JSON.stringify({ planner_enabled: button.dataset.enabled === '1' ? 0 : 1 }) }); toast('Ustawienie Plannera zostało zapisane'); await loadData(); } catch (error) { toast(error.message, true); } }));
   $('#new-controller')?.addEventListener('click', () => openRecord('controllers'));
@@ -1839,6 +1900,13 @@ function bindSettings() {
   $$('.delete-project').forEach(button => button.addEventListener('click', () => deleteProjectSafely(Number(button.dataset.id))));
   $('#default-reminder')?.addEventListener('change', event => saveSetting('default_reminder_days', event.target.value));
   $('#warning-days')?.addEventListener('change', event => saveSetting('reminder_warning_days', event.target.value));
+  $$('.planner-setting').forEach(input => input.addEventListener('change', event => saveSetting(event.target.dataset.key, event.target.value)));
+  $('#planner-holidays-bulk-save')?.addEventListener('click', savePlannerHolidaysBulk);
+  $$('.edit-planner-holiday').forEach(button => button.addEventListener('click', () => editPlannerHoliday(Number(button.dataset.id))));
+  $$('.delete-planner-holiday').forEach(button => button.addEventListener('click', async () => { if (!await uiConfirm('Usuń święto', 'Zmieni to kalkulację nadgodzin dla tego dnia.', 'Usuń', true)) return; try { await api(`/api/planner/holidays/${button.dataset.id}`, { method: 'DELETE' }); await loadData(true); toast('Święto usunięto'); } catch (error) { toast(error.message, true); } }));
+  $('#new-announcement-label')?.addEventListener('click', () => editAnnouncementLabel());
+  $$('.edit-announcement-label').forEach(button => button.addEventListener('click', () => editAnnouncementLabel(Number(button.dataset.id))));
+  $$('.delete-announcement-label').forEach(button => button.addEventListener('click', async () => { if (!await uiConfirm('Usuń etykietę', 'Etykieta zostanie odłączona od wiadomości.', 'Usuń', true)) return; try { await api(`/api/announcement-labels/${button.dataset.id}`, { method: 'DELETE' }); await loadData(true); } catch (error) { toast(error.message, true); } }));
   $('#download-backup')?.addEventListener('click', downloadBackup);
   $('#restore-backup')?.addEventListener('change', restoreBackup);
   $('#new-export-template')?.addEventListener('click', () => editExportTemplate());
@@ -1850,6 +1918,88 @@ function bindSettings() {
     if (!await uiConfirm('Usuń wymaganie', 'Wymaganie zostanie odłączone od wszystkich elementów projektu.', 'Usuń', true)) return;
     try { await api(`/api/completion-requirements/${button.dataset.id}`, { method: 'DELETE' }); toast('Wymaganie usunięto'); await loadData(); } catch (error) { toast(error.message, true); }
   }));
+}
+
+async function resetUserPassword(userId, name) {
+  const result = await uiForm({ title: `Nowe hasło · ${name}`, description: 'Administrator systemu ustawia hasło bez znajomości poprzedniego.', submitLabel: 'Ustaw nowe hasło', fields: [
+    { name: 'new_password', label: 'Nowe hasło (min. 8 znaków)', type: 'password', required: true },
+    { name: 'confirm_password', label: 'Powtórz hasło', type: 'password', required: true }
+  ] });
+  if (!result) return;
+  if (result.new_password !== result.confirm_password) return toast('Hasła nie są takie same', true);
+  try { await api(`/api/users/${userId}/password`, { method: 'PUT', body: JSON.stringify(result) }); toast('Hasło użytkownika zostało zmienione'); }
+  catch (error) { toast(error.message, true); }
+}
+
+async function editAnnouncementLabel(id = null) {
+  const existing = (state.config.announcement_labels || []).find(item => item.id === id);
+  const result = await uiForm({ title: id ? 'Edytuj etykietę Informatora' : 'Nowa etykieta Informatora', fields: [
+    { name: 'name', label: 'Nazwa', value: existing?.name || '', required: true },
+    { name: 'color', label: 'Kolor', type: 'select', value: existing?.color || 'blue', options: [
+      { value: 'blue', label: 'Niebieski' }, { value: 'green', label: 'Zielony' }, { value: 'amber', label: 'Bursztynowy' },
+      { value: 'red', label: 'Czerwony' }, { value: 'violet', label: 'Fioletowy' }, { value: 'gray', label: 'Szary' }
+    ] }
+  ], submitLabel: id ? 'Zapisz etykietę' : 'Dodaj etykietę' });
+  if (!result?.name) return;
+  try { await api('/api/announcement-labels' + (id ? `/${id}` : ''), { method: id ? 'PATCH' : 'POST', body: JSON.stringify(result) }); await loadData(true); toast('Etykiety Informatora zostały zapisane'); }
+  catch (error) { toast(error.message, true); }
+}
+
+async function savePlannerHolidaysBulk() {
+  const rows = String($('#planner-holidays-bulk')?.value || '').split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+  const items = [];
+  for (const row of rows) {
+    const match = row.match(/^(\d{4}-\d{2}-\d{2})\s*(?:\+|;|\|)\s*(.+)$/);
+    if (!match) return toast(`Nieprawidłowy wiersz: „${row}”. Użyj formatu RRRR-MM-DD + nazwa.`, true);
+    items.push({ holiday_date: match[1], name: match[2].trim() });
+  }
+  if (!items.length) return toast('Wklej co najmniej jedno święto', true);
+  try { await api('/api/planner/holidays/bulk', { method: 'POST', body: JSON.stringify({ items }) }); await loadData(true); toast(`Dodano lub zaktualizowano ${items.length} świąt`); }
+  catch (error) { toast(error.message, true); }
+}
+
+async function editPlannerHoliday(id) {
+  const existing = (state.config.planner_holidays || []).find(item => item.id === id);
+  if (!existing) return;
+  const result = await uiForm({ title: 'Edytuj święto projektu', fields: [
+    { name: 'holiday_date', label: 'Data', type: 'date', value: existing.holiday_date, required: true },
+    { name: 'name', label: 'Nazwa', value: existing.name, required: true }
+  ], submitLabel: 'Zapisz święto' });
+  if (!result) return;
+  try { await api(`/api/planner/holidays/${id}`, { method: 'PATCH', body: JSON.stringify(result) }); await loadData(true); toast('Święto zostało zmienione'); }
+  catch (error) { toast(error.message, true); }
+}
+
+async function manageFunctionGroupList(groupId, kind) {
+  const group = (state.config.function_groups || []).find(item => item.id === groupId);
+  if (!group) return;
+  const items = kind === 'elements' ? (group.elements || []) : (group.subcategories || []);
+  const singular = kind === 'elements' ? 'element' : 'podkategorię';
+  const result = await uiForm({ title: `${kind === 'elements' ? 'Elementy' : 'Podkategorie'} · ${group.name}`, description: `Aktualnie: ${items.map(item => item.name).join(', ') || 'brak'}`, submitLabel: 'Wykonaj', fields: [
+    { name: 'action', label: 'Operacja', type: 'select', value: 'add', options: [{ value: 'add', label: 'Dodaj listę' }, { value: 'rename', label: `Zmień ${singular}` }, { value: 'delete', label: `Usuń ${singular}` }] },
+    { name: 'item_id', label: 'Istniejąca pozycja (dla zmiany/usunięcia)', type: 'select', options: [{ value: '', label: '— wybierz —' }, ...items.map(item => ({ value: item.id, label: item.name }))] },
+    { name: 'value', label: 'Nowa nazwa lub lista (jeden wiersz = jedna pozycja)', type: 'textarea', rows: 5, full: true }
+  ] });
+  if (!result) return;
+  const base = `/api/function-groups/${groupId}/${kind}`;
+  try {
+    if (result.action === 'add') {
+      if (!result.value.trim()) return toast('Wpisz co najmniej jedną pozycję', true);
+      await api(`${base}/bulk`, { method: 'POST', body: JSON.stringify({ names: result.value }) });
+    } else {
+      const itemId = Number(result.item_id);
+      if (!itemId) return toast('Wybierz istniejącą pozycję', true);
+      if (result.action === 'delete') {
+        if (!await uiConfirm(`Usuń ${singular}`, 'Powiązania istniejących elementów zostaną wyczyszczone.', 'Usuń', true)) return;
+        await api(`${base}/${itemId}`, { method: 'DELETE' });
+      } else {
+        const name = result.value.split(/\r?\n/)[0].trim();
+        if (!name) return toast('Wpisz nową nazwę', true);
+        await api(`${base}/${itemId}`, { method: 'PATCH', body: JSON.stringify({ name }) });
+      }
+    }
+    await loadData(true); toast('Lista grupy funkcyjnej została zaktualizowana');
+  } catch (error) { toast(error.message, true); }
 }
 
 async function editCompletionRequirement(id = null) {
@@ -2092,14 +2242,14 @@ const formDefinitions = {
     ['impact', 'Wpływ', 'textarea'], ['next_action', 'Następny krok', 'textarea'], ['description', 'Opis techniczny', 'textarea'], ['mentioned_user_ids', 'Wspomniane osoby', 'mentions']
   ] },
   notes: { endpoint: '/api/daily-notes', title: 'notatkę', fields: [
-    ['controller', 'Sterownik', 'controller'], ['note_date', 'Data wpisu', 'date'], ['shift', 'Zmiana', 'options', 'shift'], ['type', 'Typ wpisu', 'options', 'note_type'],
+    ['hierarchy_target', 'Zakres projektu / obszar / sterownik', 'note-hierarchy-target'], ['note_date', 'Data wpisu', 'date'], ['shift', 'Zmiana', 'options', 'shift'], ['type', 'Typ wpisu', 'options', 'note_type'],
     ['content', 'Treść', 'bigtextarea'], ['links', 'Powiązane elementy', 'multi-links', ['status', 'task', 'point']], ['mentioned_user_ids', 'Wspomniane osoby', 'mentions']
   ] },
   goals: { endpoint: '/api/goals', title: 'cel', fields: [
     ['controller', 'Sterownik', 'controller'], ['title', 'Nazwa celu'], ['status', 'Status', 'select', ['Open', 'In progress', 'Done']], ['priority', 'Priorytet', 'select', ['Low', 'Medium', 'High', 'Critical']], ['due_date', 'Termin', 'date'], ['description', 'Opis', 'textarea'], ['goal_links', 'Powiązane elementy', 'goal-links']
   ] },
   announcements: { endpoint: '/api/announcements', title: 'wiadomość', fields: [
-    ['title', 'Tytuł', 'wide-text'], ['content', 'Treść', 'bigtextarea'], ['info_link', 'Link', 'wide-text'],
+    ['title', 'Tytuł', 'wide-text'], ['importance', 'Poziom ważności', 'options', 'announcement_importance'], ['label_ids', 'Etykiety', 'announcement-labels'], ['content', 'Treść', 'bigtextarea'], ['info_link', 'Link', 'wide-text'],
     ['scope_group_ids', 'Zakres projektu', 'announcement-scopes'], ['recipient_user_ids', 'Osoby, których wiadomość bezpośrednio dotyczy', 'announcement-users'],
     ['links', 'Przypięte elementy', 'multi-links', ['status', 'task', 'point', 'note', 'goal']]
   ] },
@@ -2252,11 +2402,19 @@ function fieldHtml([name, label, type = 'text', extra], record, formType = '') {
     const users = state.users.filter(item => item.active && item.project_active);
     return `<div class="field full"><label>${escapeHtml(label)}</label><details class="multi-user-select"><summary>${selected.size ? `${selected.size} wskazanych osób` : 'Bez wskazania konkretnych osób'}</summary><div class="mentions assignee-grid">${users.map(user => `<label class="mention"><input type="checkbox" name="recipient_user_ids" value="${user.id}" ${selected.has(user.id) ? 'checked' : ''}>${escapeHtml(user.display_name)}</label>`).join('')}</div></details></div>`;
   }
+  if (type === 'announcement-labels') {
+    const selected = new Set((record?.label_ids || []).map(Number));
+    return `<div class="field full"><label>${escapeHtml(label)}</label><div class="mentions announcement-label-picks">${(state.config.announcement_labels || []).map(item => `<label class="mention"><input type="checkbox" name="label_ids" value="${item.id}" ${selected.has(item.id) ? 'checked' : ''}><span class="announcement-label ${escapeHtml(item.color)}">${escapeHtml(item.name)}</span></label>`).join('') || '<span class="sub">Brak etykiet — dodaj je w Konfiguratorze.</span>'}</div></div>`;
+  }
   let input;
   if (type === 'controller') input = `<select name="${name}" id="form-controller" ${required ? 'required' : ''}>${selectOptions(state.controllers.map(item => ({ value: item.code, label: item.display_name || item.code })), value)}</select>`;
   else if (type === 'hierarchy-target') {
     const selected = record?.controller_group_id ? `group:${record.controller_group_id}` : record?.controller ? `controller:${record.controller}` : value;
-    input = `<select name="${name}" id="form-hierarchy-target" ${required ? 'required' : ''}>${selectOptions(taskHierarchyOptions(), selected, 'Wybierz zakres')}</select><small class="sub">Możesz wybrać cały obszar, podobszar albo pojedynczy sterownik.</small>`;
+    input = `<select name="${name}" id="form-hierarchy-target" ${required ? 'required' : ''}>${selectOptions(taskHierarchyOptions(), selected, 'Wybierz zakres')}</select>`;
+  }
+  else if (type === 'note-hierarchy-target') {
+    const selected = record?.controller_group_id ? `group:${record.controller_group_id}` : record?.controller ? `controller:${record.controller}` : (record?.hierarchy_target || (state.controller === 'all' ? 'all' : state.controller.startsWith('group:') ? state.controller : `controller:${state.controller}`));
+    input = `<select name="${name}" id="form-note-hierarchy-target">${selectOptions([{ value: 'all', label: 'Cały projekt' }, ...taskHierarchyOptions()], selected, 'Cały projekt')}</select>`;
   }
   else if (type === 'controller-group') input = `<select name="${name}">${selectOptions(hierarchyGroupOptions(), value, 'Bez grupy')}</select>`;
   else if (type === 'function-group') {
@@ -2275,8 +2433,7 @@ function fieldHtml([name, label, type = 'text', extra], record, formType = '') {
   else if (type === 'users') {
     const selected = new Set((record?.[name] || record?.assignee_user_ids || []).map(Number));
     const users = assignableUsers(); const selectedNames = users.filter(user => selected.has(user.id)).map(user => user.display_name);
-    const hint = name === 'direct_assignee_user_ids' ? 'Właściciel podzadania zostanie dodany automatycznie do odpowiedzialnych.' : 'Możesz wskazać dowolną liczbę aktywnych pracowników projektu.';
-    return `<div class="field full"><label>${escapeHtml(label)}</label><details class="multi-user-select"><summary>${escapeHtml(selectedNames.length ? `${selectedNames.length} · ${selectedNames.join(', ')}` : 'Wybierz osoby odpowiedzialne')}</summary><div class="mentions assignee-grid">${users.map(user => `<label class="mention"><input type="checkbox" name="${name}" value="${user.id}" ${selected.has(user.id) ? 'checked' : ''}>${escapeHtml(user.display_name)}</label>`).join('')}</div></details><small class="sub">${escapeHtml(hint)}</small></div>`;
+    return `<div class="field full"><label>${escapeHtml(label)}</label><details class="multi-user-select"><summary>${escapeHtml(selectedNames.length ? `${selectedNames.length} · ${selectedNames.join(', ')}` : 'Wybierz osoby odpowiedzialne')}</summary><div class="mentions assignee-grid">${users.map(user => `<label class="mention"><input type="checkbox" name="${name}" value="${user.id}" ${selected.has(user.id) ? 'checked' : ''}>${escapeHtml(user.display_name)}</label>`).join('')}</div></details></div>`;
   }
   else if (type === 'select') input = `<select name="${name}" ${required ? 'required' : ''}>${selectOptions(extra, value)}</select>`;
   else if (type === 'category') input = `<select name="${name}" id="form-category" data-scope="${extra}" ${required ? 'required' : ''}>${selectOptions(extra === 'task' ? taskCategories() : statusCategories(), value)}</select>`;
@@ -2294,11 +2451,11 @@ function requirementsField(record, name = 'requirement_ids', label = 'Dodatkowe 
   const selected = new Set((record?.[name] || []).map(Number));
   const items = state.config.requirements || [];
   const selectedNames = items.filter(item => selected.has(item.id)).map(item => item.name);
-  return `<div class="field full requirement-field"><label>${escapeHtml(label)}</label><details class="multi-user-select" data-empty-label="Brak dodatkowych wymagań"><summary>${selectedNames.length ? `${selectedNames.length} · ${escapeHtml(selectedNames.join(', '))}` : 'Brak dodatkowych wymagań'}</summary><div class="mentions requirement-picks">${items.map(item => `<label class="mention" title="${escapeHtml(item.description || '')}"><input type="checkbox" name="${name}" value="${item.id}" ${selected.has(item.id) ? 'checked' : ''}><span><b>${escapeHtml(item.name)}</b>${item.description ? `<small>${escapeHtml(item.description)}</small>` : ''}</span></label>`).join('') || '<span class="form-hint">Lista jest pusta. Dodaj wymagania w Konfiguracji.</span>'}</div></details><small class="sub">Możesz wybrać więcej niż jeden element z listy konfiguracyjnej.</small></div>`;
+  return `<div class="field full requirement-field"><label>${escapeHtml(label)}</label><details class="multi-user-select" data-empty-label="Brak dodatkowych wymagań"><summary>${selectedNames.length ? `${selectedNames.length} · ${escapeHtml(selectedNames.join(', '))}` : 'Brak dodatkowych wymagań'}</summary><div class="mentions requirement-picks">${items.map(item => `<label class="mention" title="${escapeHtml(item.description || '')}"><input type="checkbox" name="${name}" value="${item.id}" ${selected.has(item.id) ? 'checked' : ''}><span><b>${escapeHtml(item.name)}</b>${item.description ? `<small>${escapeHtml(item.description)}</small>` : ''}</span></label>`).join('') || '<span class="form-hint">Lista jest pusta. Dodaj wymagania w Konfiguracji.</span>'}</div></details></div>`;
 }
 
 function multiLinksField(allowedTypes) {
-  return `<div class="field full"><label>Powiązane elementy — można dodać wiele</label><div id="multi-links" class="links-editor"></div><button type="button" class="secondary" id="add-link">Wybierz z listy…</button><small class="sub">Wyszukiwanie, filtrowanie i sortowanie odbywa się w osobnym oknie. Duplikaty są blokowane.</small></div>`;
+  return `<div class="field full"><label>Powiązane elementy</label><div id="multi-links" class="links-editor"></div><button type="button" class="secondary" id="add-link">Wybierz z listy…</button></div>`;
 }
 
 function mentionsField(record) {
@@ -2689,6 +2846,8 @@ async function saveRecord(event) {
   input.requirement_ids = formData.getAll('requirement_ids').map(Number);
   input.scope_group_ids = formData.getAll('scope_group_ids').map(Number);
   input.recipient_user_ids = formData.getAll('recipient_user_ids').map(Number);
+  input.label_ids = formData.getAll('label_ids').map(Number);
+  if (record?.updated_at) input.updated_at = record.updated_at;
   if (duplicateSource?.id) input.duplicate_source_id = duplicateSource.id;
   if (formDefinitions[type].fields.some(field => field[2] === 'multi-links')) { captureMultiLinks(); input.links = state.linkDraft; }
   if (type === 'tasks') {

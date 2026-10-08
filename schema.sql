@@ -293,6 +293,7 @@ CREATE TABLE IF NOT EXISTS daily_notes (
   id INTEGER PRIMARY KEY,
   project_id INTEGER NOT NULL DEFAULT 1 REFERENCES projects(id) ON DELETE CASCADE,
   controller_id INTEGER REFERENCES controllers(id) ON DELETE SET NULL,
+  controller_group_id INTEGER REFERENCES controller_groups(id) ON DELETE SET NULL,
   note_date TEXT NOT NULL,
   shift TEXT NOT NULL DEFAULT 'Dzień',
   author TEXT NOT NULL,
@@ -429,10 +430,27 @@ CREATE TABLE IF NOT EXISTS announcements (
   title TEXT NOT NULL,
   content TEXT NOT NULL,
   info_link TEXT NOT NULL DEFAULT '',
+  importance TEXT NOT NULL DEFAULT 'Normalna',
   created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS announcement_labels (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL COLLATE NOCASE,
+  color TEXT NOT NULL DEFAULT 'blue',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
+  UNIQUE(project_id,name)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS announcement_label_links (
+  announcement_id INTEGER NOT NULL REFERENCES announcements(id) ON DELETE CASCADE,
+  label_id INTEGER NOT NULL REFERENCES announcement_labels(id) ON DELETE CASCADE,
+  PRIMARY KEY(announcement_id,label_id)
+) STRICT, WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS announcement_scopes (
   announcement_id INTEGER NOT NULL REFERENCES announcements(id) ON DELETE CASCADE,
@@ -524,6 +542,20 @@ CREATE TABLE IF NOT EXISTS planner_absences (
   UNIQUE(project_id,user_id,absence_date)
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS planner_time_adjustments (
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  plan_date TEXT NOT NULL,
+  actual_hours_adjustment REAL NOT NULL DEFAULT 0,
+  overtime_raw_adjustment REAL NOT NULL DEFAULT 0,
+  overtime_weighted_adjustment REAL NOT NULL DEFAULT 0,
+  note TEXT NOT NULL DEFAULT '',
+  updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(project_id,user_id,plan_date)
+) STRICT, WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS calendar_item_dates (
   id INTEGER PRIMARY KEY,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -569,6 +601,7 @@ CREATE INDEX IF NOT EXISTS idx_project_user_areas_user ON project_user_areas(pro
 CREATE INDEX IF NOT EXISTS idx_planner_project_date ON planner_entries(project_id,plan_date,user_id);
 CREATE INDEX IF NOT EXISTS idx_planner_requirements_date ON planner_requirements(project_id,plan_date,controller_group_id);
 CREATE INDEX IF NOT EXISTS idx_announcements_project ON announcements(project_id,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_announcement_labels_project ON announcement_labels(project_id,sort_order,name);
 CREATE INDEX IF NOT EXISTS idx_calendar_annotations_date ON calendar_annotations(project_id,start_date,end_date);
 CREATE INDEX IF NOT EXISTS idx_calendar_item_dates ON calendar_item_dates(project_id,calendar_date,entity_type);
 CREATE INDEX IF NOT EXISTS idx_comments_entity ON entity_comments(project_id,entity_type,entity_id,created_at);
@@ -576,3 +609,4 @@ CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(project_id,us
 CREATE INDEX IF NOT EXISTS idx_entity_requirements_entity ON entity_requirements(project_id,entity_type,entity_id);
 CREATE INDEX IF NOT EXISTS idx_planner_holidays_date ON planner_holidays(project_id,holiday_date);
 CREATE INDEX IF NOT EXISTS idx_planner_absences_date ON planner_absences(project_id,absence_date,user_id);
+CREATE INDEX IF NOT EXISTS idx_planner_time_adjustments_date ON planner_time_adjustments(project_id,plan_date,user_id);

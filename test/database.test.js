@@ -307,7 +307,7 @@ test('V5 data remains compatible with planner, calendar, weighted teamwork, cano
       assert.throws(() => repository.dailySummary('2026-01-01', '2026-01-15'), /14 dni/);
 
       const backup = repository.projectBackup();
-      assert.equal(backup.version, 9);
+      assert.equal(backup.version, 10);
       assert.ok(Array.isArray(backup.tables.planner_entries));
       assert.ok(Array.isArray(backup.tables.task_assignees));
       assert.ok(Array.isArray(backup.tables.calendar_annotations));
@@ -466,7 +466,7 @@ test('V7 supports canonical hierarchy IDs, area tasks, goal links and configurab
       assert.ok(overview.overall.goals.total >= 1);
       assert.ok(Array.isArray(overview.status_breakdown));
       assert.ok(overview.trends.week.every(point => point.goals && Number.isFinite(point.goals.total)));
-      assert.equal(repository.projectBackup().version, 9);
+      assert.equal(repository.projectBackup().version, 10);
     });
   } finally {
     repository.close();
@@ -525,7 +525,7 @@ test('V8 supports announcements, aggregated KPI trends, unified Planner requirem
       assert.ok(Array.isArray(rootTrend.trends.day));
       assert.ok(Array.isArray(rootTrend.trends.week));
       assert.ok(Array.isArray(rootTrend.trends.month));
-      assert.equal(repository.projectBackup().version, 9);
+      assert.equal(repository.projectBackup().version, 10);
 
       repository.deleteAnnouncement(announcement.id);
       assert.equal(repository.announcements(admin).some(item => item.id === announcement.id), false);
@@ -629,10 +629,66 @@ test('V9 supports requirements, guarded duplication, comments, pushes, calendar 
       assert.equal(workerPlanner.requirements.length, 0);
       assert.equal(workerPlanner.time_details, null);
 
-      assert.equal(repository.projectBackup().version, 9);
+      assert.equal(repository.projectBackup().version, 10);
       assert.ok(Array.isArray(repository.projectBackup().tables.completion_requirements));
       assert.ok(Array.isArray(repository.projectBackup().tables.entity_comments));
       assert.ok(Array.isArray(repository.projectBackup().tables.planner_absences));
+    });
+  } finally {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
+test('V10 supports live-safe edits, scoped notes, targeted news, passwords and Planner corrections', () => {
+  const temporary = temporaryDatabase();
+  const repository = openDatabase(temporary.path);
+  try {
+    const account = repository.authenticate('admin');
+    const admin = repository.me(account.id);
+    repository.withProject(1, () => {
+      const workerRecord = repository.saveUser(null, { username: 'v10worker', display_name: 'V10 Worker', password: 'secret123', project_role: 'user', planner_enabled: 1 });
+      const worker = repository.me(workerRecord.id);
+      const root = repository.controllerGroups().find(item => !item.parent_id);
+      const controller = repository.controllers()[0];
+
+      const note = repository.saveNote(null, { hierarchy_target: `group:${root.id}`, note_date: '2026-10-08', content: 'Notatka całego obszaru', shift: 'Dzień' }, admin);
+      assert.equal(note.controller_group_id, root.id);
+      assert.match(note.scope_label, new RegExp(root.name));
+
+      const label = repository.saveAnnouncementLabel(null, { name: 'Pilne V10', color: 'red' });
+      const announcement = repository.saveAnnouncement(null, { title: 'Tylko dla pracownika', content: 'Potwierdź odbiór.', importance: 'Krytyczna', label_ids: [label.id], recipient_user_ids: [worker.id] }, admin);
+      assert.deepEqual(announcement.label_ids, [label.id]);
+      assert.equal(repository.announcements(worker).find(item => item.id === announcement.id).requires_ack, true);
+      assert.equal(repository.announcements(admin).find(item => item.id === announcement.id).requires_ack, false);
+      assert.throws(() => repository.acknowledgeAnnouncement(announcement.id, admin), /nie wymaga potwierdzenia/i);
+      assert.equal(repository.acknowledgeAnnouncement(announcement.id, worker).accepted_by_me, true);
+
+      const task = repository.saveTask(null, { controller: controller.code, title: 'Edycja współbieżna V10' }, admin);
+      const stale = { ...task };
+      const updated = repository.saveTask(task.id, { ...task, title: 'Najnowszy tytuł', updated_at: task.updated_at }, admin);
+      assert.equal(updated.title, 'Najnowszy tytuł');
+      assert.throws(() => repository.saveTask(task.id, { ...stale, title: 'Stary zapis', updated_at: stale.updated_at }, admin), /zmieniony przez inną osobę/i);
+
+      repository.savePlannerDay({ user_id: worker.id, plan_date: '2026-10-08', entries: [], actual_hours_adjustment: 9, overtime_raw_adjustment: 2, overtime_weighted_adjustment: 3, adjustment_note: 'Korekta testowa' }, admin);
+      const detail = repository.planner('2026-10-08', '2026-10-08', admin).time_details.details.find(item => item.user_id === worker.id);
+      assert.equal(detail.actual_hours, 9);
+      assert.equal(detail.overtime_raw, 3);
+      assert.equal(detail.overtime_weighted, 4.5);
+      assert.equal(detail.overtime_raw_cumulative, 3);
+      assert.equal(detail.adjustment_note, 'Korekta testowa');
+      repository.savePlannerHolidaysBulk({ items: [{ holiday_date: '2026-12-25', name: 'Boże Narodzenie' }] }, admin);
+      assert.ok(repository.config().planner_holidays.some(item => item.holiday_date === '2026-12-25'));
+
+      repository.changeOwnPassword(admin.id, { current_password: 'test-password', new_password: 'new-password-10' });
+      assert.ok(verifyPassword('new-password-10', repository.authenticate('admin').password_hash));
+      repository.resetUserPassword(worker.id, { new_password: 'worker-password-10' });
+      assert.ok(verifyPassword('worker-password-10', repository.authenticate('v10worker').password_hash));
+
+      const backup = repository.projectBackup();
+      assert.equal(backup.version, 10);
+      assert.ok(Array.isArray(backup.tables.announcement_labels));
+      assert.ok(Array.isArray(backup.tables.planner_time_adjustments));
     });
   } finally {
     repository.close();
