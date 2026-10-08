@@ -5,15 +5,16 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#172554">
   <title>PLC Commissioning Hub</title>
-  <link rel="stylesheet" href="/styles.css?v=8.0.0">
-  <script type="module" src="/app.js?v=8.0.0"></script>
+  <link rel="stylesheet" href="/styles.css?v=9.0.0">
+  <script type="module" src="/app.js?v=9.0.0"></script>
 </head>
 <body>
   <header class="topbar">
+    <button id="mobile-menu" class="ghost mobile-menu" aria-label="Otwórz menu">☰</button>
     <div class="logo">PLC</div>
-    <div class="brand"><strong>Commissioning Hub</strong><span>Multi-project status & team workspace · V8.0</span></div>
+    <div class="brand"><strong>Commissioning Hub</strong><span>Multi-project status & team workspace · V9.0</span></div>
     <div id="top-news" class="top-news" aria-label="Najnowsze wiadomości projektu"></div>
-    <div class="top-actions"><button id="daily-summary-open" class="ghost" title="Podsumowanie zmian">☀ Podsumowanie</button><button id="project-switch" class="ghost project-chip">Wybierz projekt</button><button id="theme-switch" class="ghost" title="Zmień wygląd">◐ Motyw</button><div class="userbox"><span id="me"></span><button id="logout" class="ghost">Wyloguj</button></div></div>
+    <div class="top-actions"><button id="notification-open" class="ghost notification-button" title="Powiadomienia">● <span>Powiadomienia</span><b id="notification-count">0</b></button><button id="daily-summary-open" class="ghost" title="Podsumowanie zmian">☀ Podsumowanie</button><button id="project-switch" class="ghost project-chip">Wybierz projekt</button><button id="theme-switch" class="ghost" title="Zmień wygląd">◐ Motyw</button><div class="userbox"><span id="me"></span><button id="logout" class="ghost">Wyloguj</button></div></div>
   </header>
   <div class="layout">
     <aside class="sidebar">
@@ -43,6 +44,7 @@
       <section id="content"><div class="loading">Ładowanie…</div></section>
     </main>
   </div>
+  <button id="sidebar-backdrop" class="sidebar-backdrop" aria-label="Zamknij menu"></button>
 
   <dialog id="modal" class="record-dialog">
     <form id="form">
@@ -52,8 +54,10 @@
       </header>
       <div id="record-meta" class="record-meta"></div>
       <div id="fields" class="formgrid"></div>
+      <section id="comments-section" class="comments-section hidden"><header><h3>Komentarze</h3><span id="comments-count"></span></header><div id="comments-list"></div><div class="comment-compose"><textarea id="comment-content" rows="2" maxlength="5000" placeholder="Dodaj komentarz…"></textarea><button type="button" id="comment-add" class="secondary">Dodaj komentarz</button></div></section>
+      <button type="button" id="audit-toggle" class="secondary audit-toggle" hidden>Pokaż historię edycji</button>
       <section id="audit-section" class="audit-section hidden"><h3>Historia edycji</h3><div id="audit-list"></div></section>
-      <footer class="dialog-actions"><button type="button" id="remove" class="danger">Usuń</button><span></span><button type="button" id="cancel" class="secondary">Anuluj</button><button class="primary">Zapisz</button></footer>
+      <footer class="dialog-actions"><button type="button" id="remove" class="danger">Usuń</button><button type="button" id="duplicate" class="secondary">Duplikuj</button><span></span><button type="button" id="cancel" class="secondary">Anuluj</button><button class="primary">Zapisz</button></footer>
     </form>
   </dialog>
 
@@ -72,8 +76,8 @@
   </dialog>
 
   <dialog id="quick-status-dialog" class="wide-dialog quick-status-dialog">
-    <header class="dialog-head"><div><h2>Szybka edycja statusu</h2><p>Cała bieżąca lista w jednym oknie — zmiany zostaną zapisane zbiorczo.</p></div><button type="button" class="x" id="quick-status-close">×</button></header>
-    <div class="picker-tools"><input id="quick-status-search" type="search" placeholder="Szukaj po sterowniku, grupie, punkcie, kategorii lub notatce…"></div>
+    <header class="dialog-head"><div><h2>Szybka edycja statusu</h2><p>Cała bieżąca lista w jednym oknie — zmiany zostaną zapisane zbiorczo.</p></div><div class="dialog-head-actions"><button type="button" class="mini" id="quick-status-expand">Rozszerz</button><button type="button" class="x" id="quick-status-close">×</button></div></header>
+    <div class="picker-tools"><input id="quick-status-search" type="search" placeholder="Szukaj po sterowniku, grupie, punkcie, kategorii lub notatce…"><button type="button" class="secondary" id="bulk-status-open">+ Dodaj wiele punktów</button></div>
     <div class="tablewrap quick-status-wrap"><table class="quick-status-table"><thead><tr><th>Sterownik</th><th>Grupa funkcyjna</th><th>Podkategoria grupy</th><th>Element</th><th>Punkt / funkcja</th><th>Kategoria</th><th>Podkategoria statusu</th><th>Krytyczność</th><th>Status</th><th>Odpowiedzialny</th><th>Notatka</th></tr></thead><tbody id="quick-status-body"></tbody></table></div>
     <footer class="dialog-actions"><span id="quick-status-count" class="dialog-count"></span><span></span><button type="button" class="secondary" id="quick-status-cancel">Anuluj</button><button type="button" class="primary" id="quick-status-save">Zapisz wszystkie zmiany</button></footer>
   </dialog>
@@ -122,21 +126,23 @@
   </dialog>
 
   <dialog id="planner-dialog" class="record-dialog">
-    <form id="planner-form"><header class="dialog-head"><div><h2 id="planner-dialog-title">Plan dnia</h2><p id="planner-dialog-description"></p></div><button type="button" class="x" id="planner-dialog-close">×</button></header><div id="planner-entry-list" class="planner-entry-list"></div><button type="button" class="secondary" id="planner-entry-add">+ Dodaj obszar / transport</button><footer class="dialog-actions"><span></span><button type="button" class="secondary" id="planner-dialog-cancel">Anuluj</button><button class="primary">Zapisz plan dnia</button></footer></form>
+    <form id="planner-form"><header class="dialog-head"><div><h2 id="planner-dialog-title">Plan dnia</h2><p id="planner-dialog-description"></p></div><button type="button" class="x" id="planner-dialog-close">×</button></header><div class="planner-day-kind"><label class="field"><span>Rodzaj dnia</span><select id="planner-day-kind"><option value="work">Dzień pracy</option><option value="vacation">Urlop płatny</option><option value="time_off">Wolne z nadgodzin</option></select></label><label class="field"><span>Notatka nieobecności</span><input id="planner-absence-note" placeholder="Opcjonalnie"></label></div><div id="planner-entry-list" class="planner-entry-list"></div><button type="button" class="secondary" id="planner-entry-add">+ Dodaj obszar / transport</button><footer class="dialog-actions"><span></span><button type="button" class="secondary" id="planner-dialog-cancel">Anuluj</button><button class="primary">Zapisz plan dnia</button></footer></form>
   </dialog>
 
   <dialog id="planner-requirements-dialog" class="wide-dialog planner-requirements-dialog">
-    <header class="dialog-head"><div><h2>Zapotrzebowanie kadrowe</h2><p>Określ wymaganą obsadę ON i OFF dla obszaru oraz dnia.</p></div><button type="button" class="x" id="planner-requirements-close">×</button></header>
-    <form id="planner-requirements-form" class="requirements-form">
-      <label class="field"><span>Dzień</span><input type="date" name="plan_date" required></label>
-      <label class="field"><span>Obszar</span><select name="controller_group_id" required></select></label>
-      <label class="field"><span>Wymagane ON</span><input type="number" name="online_required" min="0" max="999" value="0"></label>
-      <label class="field"><span>Wymagane OFF</span><input type="number" name="offline_required" min="0" max="999" value="0"></label>
-      <label class="field requirement-note"><span>Notatka</span><input name="note" placeholder="Opcjonalne uzasadnienie"></label>
-      <button class="primary">Zapisz wymaganie</button>
-    </form>
-    <div id="planner-requirements-list" class="requirements-list"></div>
+    <header class="dialog-head"><div><h2>Zapotrzebowanie kadrowe</h2><p>Kalendarz wymaganej obsady ON/OFF oraz święta projektu.</p></div><button type="button" class="x" id="planner-requirements-close">×</button></header>
+    <div class="requirement-calendar-toolbar"><label>Poziom <select id="requirement-level"><option value="root">Główne obszary</option><option value="all">Cała hierarchia</option></select></label><button type="button" class="secondary" id="planner-holiday-add">+ Dodaj święto</button><span>Wpisz liczbę osób w polach ON/OFF i zapisz cały widoczny zakres.</span></div>
+    <div id="planner-requirements-calendar" class="requirement-calendar"></div>
+    <footer class="dialog-actions"><span></span><button type="button" class="primary" id="planner-requirements-save">Zapisz kalendarz zapotrzebowania</button></footer>
   </dialog>
+
+  <dialog id="planner-hours-dialog" class="wide-dialog"><header class="dialog-head"><div><h2>Planowana kalkulacja czasu pracy</h2><p>Godziny, nadgodziny ważone, urlopy i wolne z nadgodzin w wybranym zakresie.</p></div><button type="button" class="x" id="planner-hours-close">×</button></header><div id="planner-hours-content"></div></dialog>
+
+  <dialog id="task-checklist-dialog" class="record-dialog"><header class="dialog-head"><div><h2 id="task-checklist-title">Lista kontrolna</h2><p id="task-checklist-description"></p></div><button type="button" class="x" id="task-checklist-close">×</button></header><div id="task-checklist-popup" class="task-checklist-popup"></div><footer class="dialog-actions"><span></span><button type="button" class="secondary" id="task-checklist-cancel">Anuluj</button><button type="button" class="primary" id="task-checklist-save">Zapisz checklistę</button></footer></dialog>
+
+  <dialog id="bulk-status-dialog" class="record-dialog"><header class="dialog-head"><div><h2>Szybkie dodawanie punktów statusu</h2><p>Każdy wiersz utworzy osobny punkt z wybranymi parametrami.</p></div><button type="button" class="x" id="bulk-status-close">×</button></header><form id="bulk-status-form"><div id="bulk-status-fields" class="formgrid"></div><footer class="dialog-actions"><span></span><button type="button" class="secondary" id="bulk-status-cancel">Anuluj</button><button class="primary">Utwórz punkty</button></footer></form></dialog>
+
+  <dialog id="notifications-dialog" class="record-dialog"><header class="dialog-head"><div><h2>Powiadomienia</h2><p>Przypisania, komentarze i wiadomości Informatora.</p></div><button type="button" class="x" id="notifications-close">×</button></header><div id="notifications-list" class="notifications-list"></div></dialog>
 
   <dialog id="calendar-filter-dialog" class="choice-dialog">
     <form id="calendar-filter-form"><header class="dialog-head"><div><h2>Widok Kalendarza</h2><p>Wybierz dokładnie te informacje, które chcesz zobaczyć.</p></div><button type="button" class="x" id="calendar-filter-close">×</button></header><div id="calendar-filter-fields" class="formgrid"></div><footer class="dialog-actions"><span></span><button type="button" class="secondary" id="calendar-filter-cancel">Anuluj</button><button class="primary">Zastosuj filtry</button></footer></form>
@@ -162,6 +168,8 @@
   </dialog>
 
   <div id="context-menu" class="context-menu hidden"></div>
+  <div id="entity-preview" class="entity-preview hidden" role="tooltip"></div>
+  <div id="push-stack" class="push-stack" aria-live="polite"></div>
 
   <div id="toast" class="toast"></div>
 </body>

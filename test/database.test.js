@@ -307,7 +307,7 @@ test('V5 data remains compatible with planner, calendar, weighted teamwork, cano
       assert.throws(() => repository.dailySummary('2026-01-01', '2026-01-15'), /14 dni/);
 
       const backup = repository.projectBackup();
-      assert.equal(backup.version, 8);
+      assert.equal(backup.version, 9);
       assert.ok(Array.isArray(backup.tables.planner_entries));
       assert.ok(Array.isArray(backup.tables.task_assignees));
       assert.ok(Array.isArray(backup.tables.calendar_annotations));
@@ -466,7 +466,7 @@ test('V7 supports canonical hierarchy IDs, area tasks, goal links and configurab
       assert.ok(overview.overall.goals.total >= 1);
       assert.ok(Array.isArray(overview.status_breakdown));
       assert.ok(overview.trends.week.every(point => point.goals && Number.isFinite(point.goals.total)));
-      assert.equal(repository.projectBackup().version, 8);
+      assert.equal(repository.projectBackup().version, 9);
     });
   } finally {
     repository.close();
@@ -525,10 +525,114 @@ test('V8 supports announcements, aggregated KPI trends, unified Planner requirem
       assert.ok(Array.isArray(rootTrend.trends.day));
       assert.ok(Array.isArray(rootTrend.trends.week));
       assert.ok(Array.isArray(rootTrend.trends.month));
-      assert.equal(repository.projectBackup().version, 8);
+      assert.equal(repository.projectBackup().version, 9);
 
       repository.deleteAnnouncement(announcement.id);
       assert.equal(repository.announcements(admin).some(item => item.id === announcement.id), false);
+    });
+  } finally {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
+test('V9 supports requirements, guarded duplication, comments, pushes, calendar ranges and work-time calculation', () => {
+  const temporary = temporaryDatabase();
+  const repository = openDatabase(temporary.path);
+  try {
+    const account = repository.authenticate('admin');
+    repository.withProject(1, () => {
+      const admin = repository.me(account.id, 1);
+      const controller = repository.controllers()[0];
+      const root = repository.controllerGroups().find(item => !item.parent_id);
+      const workerRecord = repository.saveUser(null, {
+        username: 'v9worker', display_name: 'V9 Worker', password: 'secret123', project_role: 'user', planner_enabled: 1
+      });
+      const worker = repository.me(workerRecord.id, 1);
+
+      const requirement = repository.saveCompletionRequirement(null, {
+        name: 'Pomiary odbiorowe V9', description: 'Wymagane przed zamknięciem.'
+      });
+      const statusBatch = repository.bulkCreateStatus({
+        controller: controller.code,
+        names: ['Powtarzalna nazwa V9', 'Powtarzalna nazwa V9'],
+        category: 'Hardware', status: 'Not started', requirement_ids: [requirement.id]
+      }, admin);
+      assert.equal(statusBatch.created, 2);
+      assert.equal(statusBatch.items.every(item => item.requirement_ids.includes(requirement.id)), true);
+      assert.equal(repository.status('all', admin).filter(item => item.function_detail === 'Powtarzalna nazwa V9').length, 2);
+
+      const task = repository.saveTask(null, {
+        controller: controller.code, title: 'Zadanie V9', description: 'Kontrola duplikatu',
+        status: 'To do', start_date: '2026-10-08', due_date: '2026-10-10',
+        direct_assignee_user_ids: [worker.id],
+        checklist: [{ text: 'Potwierdzić wynik', done: false, weight: 2, owner_user_id: worker.id }],
+        requirement_ids: [requirement.id]
+      }, admin);
+      assert.deepEqual(task.requirement_ids, [requirement.id]);
+      assert.ok(repository.notifications(worker, 50).some(item => item.kind === 'assignment' && item.entity_id === task.id));
+      assert.throws(() => repository.saveTask(null, {
+        ...task, controller: controller.code, duplicate_source_id: task.id,
+        checklist: task.checklist, direct_assignee_user_ids: task.direct_assignee_user_ids,
+        requirement_ids: task.requirement_ids, links: task.links
+      }, admin), /musi różnić się/);
+      const duplicate = repository.saveTask(null, {
+        ...task, controller: controller.code, title: 'Zadanie V9 — kopia zmieniona', duplicate_source_id: task.id,
+        checklist: task.checklist, direct_assignee_user_ids: task.direct_assignee_user_ids,
+        requirement_ids: task.requirement_ids, links: task.links
+      }, admin);
+      assert.notEqual(duplicate.id, task.id);
+
+      const comment = repository.addComment({ entity_type: 'task', entity_id: task.id, content: 'Proszę potwierdzić wynik testu.' }, admin);
+      assert.equal(comment.user_name, admin.display_name);
+      assert.ok(repository.tasks('all', worker).find(item => item.id === task.id).comments.some(item => item.id === comment.id));
+      assert.ok(repository.notifications(worker, 50).some(item => item.kind === 'comment' && item.entity_id === task.id));
+      assert.ok(repository.audit('task', task.id).some(item => item.changes.comment?.to === 'Proszę potwierdzić wynik testu.'));
+
+      const point = repository.savePoint(null, {
+        controller: controller.code, title: 'Punkt V9', owner_user_id: worker.id,
+        start_date: '2026-10-08', due_date: '2026-10-11', reminder_date: '2026-10-09', requirement_ids: [requirement.id]
+      }, admin);
+      assert.deepEqual(point.requirement_ids, [requirement.id]);
+      assert.equal(repository.calendar({ from: '2026-10-08', to: '2026-10-11', types: ['task'], only_mine: false }, admin).events.some(item => item.entity_id === task.id && item.start_date === '2026-10-08' && item.end_date === '2026-10-10'), true);
+      const undated = repository.saveTask(null, { controller: controller.code, title: 'Bez dat V9' }, admin);
+      assert.equal(repository.calendar({ from: '2026-10-01', to: '2026-10-31', types: ['task'], only_mine: false }, admin).events.some(item => item.entity_id === undated.id), false);
+
+      const announcement = repository.saveAnnouncement(null, {
+        title: 'Komunikat V9', content: 'Wymagane potwierdzenie odczytu.', scope_group_ids: [root.id], recipient_user_ids: [worker.id]
+      }, admin);
+      assert.ok(repository.notifications(admin, 50).some(item => item.kind === 'announcement' && item.entity_id === announcement.id));
+      assert.ok(repository.notifications(worker, 50).some(item => item.kind === 'announcement' && item.entity_id === announcement.id));
+      repository.acknowledgeAnnouncement(announcement.id, worker);
+      assert.equal(repository.announcements(admin).find(item => item.id === announcement.id).accepted_users.some(item => item.user_id === worker.id), true);
+
+      repository.savePlannerDay({
+        user_id: worker.id, plan_date: '2026-10-08', entries: [{ controller_group_id: root.id, work_mode: 'online', shift: 'Dzień' }]
+      }, admin);
+      repository.savePlannerHoliday(null, { holiday_date: '2026-10-08', name: 'Święto testowe V9' }, admin);
+      repository.savePlannerDay({ user_id: worker.id, plan_date: '2026-10-09', absence_type: 'vacation', absence_note: 'Urlop' }, admin);
+      repository.savePlannerDay({ user_id: worker.id, plan_date: '2026-10-10', absence_type: 'time_off', absence_note: 'Odbiór nadgodzin' }, admin);
+      repository.savePlannerDay({
+        user_id: worker.id, plan_date: '2026-10-11', entries: [{ controller_group_id: root.id, work_mode: 'online', shift: 'Dzień', transport_mode: 'transport_only' }]
+      }, admin);
+      repository.setPlannerRequirementsBatch({ items: [{
+        plan_date: '2026-10-08', controller_group_id: root.id, online_required: 2, offline_required: 1
+      }] }, admin);
+      const managerPlanner = repository.planner('2026-10-08', '2026-10-11', admin);
+      const workerPlanner = repository.planner('2026-10-08', '2026-10-11', worker);
+      const workerHours = managerPlanner.time_details.users.find(item => item.user_id === worker.id);
+      assert.equal(workerHours.actual_hours, 10.5);
+      assert.equal(workerHours.credited_hours, 8);
+      assert.equal(workerHours.overtime_balance, 13);
+      assert.equal(managerPlanner.time_details.details.find(item => item.user_id === worker.id && item.date === '2026-10-11').actual_hours, 0);
+      assert.equal(managerPlanner.area_day_summary.find(item => item.id === root.id).days[0].online_required, 2);
+      assert.equal(workerPlanner.requirements.length, 0);
+      assert.equal(workerPlanner.time_details, null);
+
+      assert.equal(repository.projectBackup().version, 9);
+      assert.ok(Array.isArray(repository.projectBackup().tables.completion_requirements));
+      assert.ok(Array.isArray(repository.projectBackup().tables.entity_comments));
+      assert.ok(Array.isArray(repository.projectBackup().tables.planner_absences));
     });
   } finally {
     repository.close();

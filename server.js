@@ -62,20 +62,35 @@ async function handleProjectApi(request, response, url, user) {
   if (method === 'GET' && path === '/api/my-summary') return json(response, 200, repository.mySummary(user));
   if (method === 'GET' && path === '/api/audit') return json(response, 200, repository.audit(url.searchParams.get('type'), Number(url.searchParams.get('id'))));
   if (method === 'GET' && path === '/api/history') return json(response, 200, repository.history({ types: url.searchParams.getAll('type'), limit: url.searchParams.get('limit') }));
-  if (method === 'GET' && path === '/api/daily-summary') return json(response, 200, repository.dailySummary(url.searchParams.get('from'), url.searchParams.get('to')));
+  if (method === 'GET' && path === '/api/daily-summary') return json(response, 200, repository.dailySummary(url.searchParams.get('from'), url.searchParams.get('to'), user));
   if (method === 'GET' && path === '/api/planner') return json(response, 200, repository.planner(url.searchParams.get('from'), url.searchParams.get('to'), user));
   if (method === 'PUT' && path === '/api/planner/day') { requireRole(user, 'moderator'); return json(response, 200, repository.savePlannerDay(await readJson(request), user)); }
   if (method === 'POST' && path === '/api/planner/move') { requireRole(user, 'moderator'); return json(response, 200, repository.movePlannerEntry(await readJson(request), user)); }
-  if (method === 'PUT' && path === '/api/planner/requirements') { requireRole(user, 'project_admin'); return json(response, 200, repository.setPlannerRequirements(await readJson(request), user)); }
+  if (method === 'PUT' && path === '/api/planner/requirements') { requireRole(user, 'moderator'); return json(response, 200, repository.setPlannerRequirements(await readJson(request), user)); }
+  if (method === 'PUT' && path === '/api/planner/requirements/batch') { requireRole(user, 'moderator'); return json(response, 200, repository.setPlannerRequirementsBatch(await readJson(request), user)); }
+  if (method === 'POST' && path === '/api/planner/holidays') { requireRole(user, 'moderator'); return json(response, 201, repository.savePlannerHoliday(null, await readJson(request), user)); }
+  const holidayId = numericId(path, '/api/planner/holidays');
+  if (holidayId !== null) {
+    requireRole(user, 'moderator');
+    if (method === 'PATCH') return json(response, 200, repository.savePlannerHoliday(holidayId, await readJson(request), user));
+    if (method === 'DELETE') { repository.deletePlannerHoliday(holidayId); response.writeHead(204); return response.end(); }
+  }
   if (method === 'POST' && path === '/api/planner/assign-work') { requireRole(user, 'moderator'); return json(response, 200, repository.assignPlannerWork(await readJson(request), user)); }
   if (method === 'GET' && path === '/api/announcements') return json(response, 200, repository.announcements(user));
-  if (method === 'POST' && path === '/api/announcements') { requireRole(user, 'project_admin'); return json(response, 201, repository.saveAnnouncement(null, await readJson(request), user)); }
+  if (method === 'POST' && path === '/api/announcements') { requireRole(user, 'moderator'); return json(response, 201, repository.saveAnnouncement(null, await readJson(request), user)); }
+  const announcementAck = path.match(/^\/api\/announcements\/(\d+)\/ack$/);
+  if (announcementAck && method === 'POST') return json(response, 200, repository.acknowledgeAnnouncement(Number(announcementAck[1]), user));
   const announcementId = numericId(path, '/api/announcements');
   if (announcementId !== null) {
-    requireRole(user, 'project_admin');
+    if (method === 'PATCH') requireRole(user, 'moderator');
+    if (method === 'DELETE') requireRole(user, 'project_admin');
     if (method === 'PATCH') return json(response, 200, repository.saveAnnouncement(announcementId, await readJson(request), user));
     if (method === 'DELETE') { repository.deleteAnnouncement(announcementId); response.writeHead(204); return response.end(); }
   }
+  if (method === 'GET' && path === '/api/notifications') return json(response, 200, repository.notifications(user, url.searchParams.get('limit')));
+  const notificationRead = path.match(/^\/api\/notifications\/(\d+)\/read$/);
+  if (notificationRead && method === 'POST') return json(response, 200, repository.markNotificationRead(Number(notificationRead[1]), user));
+  if (method === 'POST' && path === '/api/comments') return json(response, 201, repository.addComment(await readJson(request), user));
   if (method === 'GET' && path === '/api/calendar') return json(response, 200, repository.calendar({
     from: url.searchParams.get('from'), to: url.searchParams.get('to'), scope,
     types: url.searchParams.getAll('type'), priorities: url.searchParams.getAll('priority'), category: url.searchParams.get('category'), only_mine: url.searchParams.get('only_mine') === '1'
@@ -114,6 +129,7 @@ async function handleProjectApi(request, response, url, user) {
     return download(response, statusWorkbook(repository.status(selectedScope, user), project, options), mimeTypes['.xlsx'], projectFilename(project, 'status', 'xlsx'));
   }
   if (method === 'PATCH' && path === '/api/status/batch') return json(response, 200, repository.batchUpdateStatus(await readJson(request), user));
+  if (method === 'POST' && path === '/api/status/bulk-create') return json(response, 201, repository.bulkCreateStatus(await readJson(request), user));
 
   const resources = [
     { path: '/api/status', list: () => repository.status(scope, user), save: (id, body) => repository.saveStatus(id, body, user), remove: id => repository.deleteStatus(id, user), deleteRole: 'project_admin' },
@@ -129,7 +145,7 @@ async function handleProjectApi(request, response, url, user) {
       if (method === 'PATCH') return json(response, 200, resource.save(recordId, await readJson(request)));
       if (method === 'DELETE') {
         if (resource.deleteRole === 'project_admin') requireRole(user, 'project_admin');
-        if (resource.deleteRole === 'owner' && user.role === 'moderator') throw Object.assign(new Error('Moderator nie może usuwać elementów'), { statusCode: 403 });
+        if (resource.deleteRole === 'owner' && user.role === 'moderator') throw Object.assign(new Error('Manager projektu nie może usuwać elementów'), { statusCode: 403 });
         resource.remove(recordId); response.writeHead(204); return response.end();
       }
     }
@@ -144,7 +160,7 @@ async function handleProjectApi(request, response, url, user) {
       const target = repository.users().find(item => item.id === id);
       if (user.role !== 'system_admin' && (target?.system_role === 'system_admin' || target?.project_role === 'project_admin') && Object.keys(input).some(key => key !== 'planner_enabled')) throw Object.assign(new Error('Dla administratora możesz tutaj zmienić wyłącznie udział w Plannerze'), { statusCode: 403 });
       const safe = user.role === 'system_admin' ? input : (target?.system_role === 'system_admin' || target?.project_role === 'project_admin') ? { planner_enabled: input.planner_enabled } : { project_role: input.project_role, project_active: input.project_active, planner_enabled: input.planner_enabled };
-      if (user.role !== 'system_admin' && Object.hasOwn(safe, 'project_role') && !['user', 'moderator'].includes(safe.project_role)) throw Object.assign(new Error('Administrator projektu może przydzielać wyłącznie role moderatora i użytkownika'), { statusCode: 403 });
+      if (user.role !== 'system_admin' && Object.hasOwn(safe, 'project_role') && !['user', 'moderator'].includes(safe.project_role)) throw Object.assign(new Error('Administrator projektu może przydzielać wyłącznie role managera projektu i użytkownika'), { statusCode: 403 });
       return json(response, 200, repository.saveUser(id, safe));
     }
     if (method === 'DELETE') { requireRole(user, 'system_admin'); if (id === user.id) throw Object.assign(new Error('Nie możesz usunąć własnego konta'), { statusCode: 400 }); repository.deleteUser(id); response.writeHead(204); return response.end(); }
@@ -200,6 +216,13 @@ async function handleProjectApi(request, response, url, user) {
     if (id !== null) { requireRole(user, 'moderator'); if (method === 'PATCH') return json(response, 200, resource.save(id, await readJson(request))); if (method === 'DELETE') { requireRole(user, 'project_admin'); repository.deleteConfig(resource.type, id); response.writeHead(204); return response.end(); } }
   }
 
+  if (path === '/api/completion-requirements' && method === 'POST') { requireRole(user, 'moderator'); return json(response, 201, repository.saveCompletionRequirement(null, await readJson(request))); }
+  id = numericId(path, '/api/completion-requirements');
+  if (id !== null) {
+    if (method === 'PATCH') { requireRole(user, 'moderator'); return json(response, 200, repository.saveCompletionRequirement(id, await readJson(request))); }
+    if (method === 'DELETE') { requireRole(user, 'project_admin'); repository.deleteCompletionRequirement(id); response.writeHead(204); return response.end(); }
+  }
+
   if (path === '/api/export-templates' && method === 'POST') { requireRole(user, 'project_admin'); return json(response, 201, repository.saveExportTemplate(null, await readJson(request), user)); }
   id = numericId(path, '/api/export-templates');
   if (id !== null) { requireRole(user, 'project_admin'); if (method === 'PATCH') return json(response, 200, repository.saveExportTemplate(id, await readJson(request), user)); if (method === 'DELETE') { repository.deleteExportTemplate(id); response.writeHead(204); return response.end(); } }
@@ -214,7 +237,7 @@ async function handleProjectApi(request, response, url, user) {
 
 async function handleApi(request, response, url) {
   const method = request.method || 'GET'; const path = url.pathname;
-  if (method === 'GET' && path === '/api/health') return json(response, 200, { status: 'ok', version: 8, release: '8.0.0' });
+  if (method === 'GET' && path === '/api/health') return json(response, 200, { status: 'ok', version: 9, release: '9.0.0' });
   if (method === 'POST' && path === '/api/login') {
     const input = await readJson(request); const account = repository.authenticate(input.username);
     if (!account || !verifyPassword(input.password || '', account.password_hash)) return json(response, 401, { error: 'Nieprawidłowy login lub hasło' });
@@ -269,6 +292,6 @@ export const server = createServer(async (request, response) => {
     return json(response, statusCode, { error: statusCode === 500 ? `Nieoczekiwany błąd serwera: ${error.message}` : error.message });
   }
 });
-if (process.argv[1] === fileURLToPath(import.meta.url)) server.listen(port, '0.0.0.0', () => console.log(`PLC Commissioning Hub V8.0.0 running on port ${port}`));
+if (process.argv[1] === fileURLToPath(import.meta.url)) server.listen(port, '0.0.0.0', () => console.log(`PLC Commissioning Hub V9.0.0 running on port ${port}`));
 function shutdown() { server.close(() => { repository.close(); process.exit(0); }); }
 process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);

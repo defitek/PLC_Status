@@ -1,12 +1,33 @@
-# PLC Commissioning Hub V8.0.0
+# PLC Commissioning Hub V9.0.0
 
 Samodzielna aplikacja WWW do zarządzania uruchomieniem PLC, zespołem i kilkoma projektami. Działa na Node.js 24 oraz SQLite, bez zewnętrznych usług i bez zależności npm.
 
-## Najważniejsze zmiany V8
+## Najważniejsze zmiany V9
 
-Wydanie V8 zachowuje konfigurację Railway z poprzedniej paczki, rozwija Overview i wprowadza Informator oraz operacyjne planowanie zapotrzebowania zespołu.
+Wydanie V9 zachowuje konfigurację Railway z poprzedniej paczki i domyka funkcje operacyjne: responsywny interfejs, powiadomienia, komentarze, bezpieczne duplikowanie, zakresy Kalendarza, zapotrzebowanie kadrowe oraz kalkulację czasu pracy.
 
-### Skrót zmian V8
+### Skrót zmian V9
+
+- nieruchomy górny pasek i menu boczne na komputerze; przewijana jest wyłącznie powierzchnia robocza, a telefon i tablet korzystają z wysuwanego menu i dopasowanych okien;
+- techniczna rola `moderator` jest prezentowana w interfejsie jako **Manager projektu**;
+- Status, Zadania i Otwarte punkty mają podgląd po najechaniu, menu prawego przycisku i bezpieczne duplikowanie; kopia 1:1 jest blokowana;
+- Status, Zadania, Otwarte punkty i Cele obsługują komentarze, a historia edycji jest domyślnie zwinięta i dostępna na dole formularza;
+- przypisanie zadania oraz komentarz generują powiadomienie w aplikacji i są priorytetowo pokazywane w dziennym podsumowaniu zmian;
+- Informator wysyła powiadomienia wszystkim użytkownikom projektu, zbiera potwierdzenia przeczytania i pokazuje pięć ostatnich wiadomości w przewijanym pasku;
+- lista kontrolna zadania została skompresowana; z karty otwiera ją przycisk `wykonane/wszystkie punktów kontroli`;
+- Kalendarz pokazuje zadania tylko wtedy, gdy mają zarówno planowany start, jak i deadline; element wielodniowy jest jednym rozciągniętym paskiem, a adnotacja ma datę od–do;
+- Status pozwala na powtarzające się nazwy i zbiorcze utworzenie do 500 punktów; Szybką edycję można rozszerzyć na całe okno;
+- Planner ma kalendarz zapotrzebowania ON/OFF, święta, urlopy, wolne z nadgodzin oraz osobny raport godzin i nadgodzin dostępny Managerowi projektu i administratorom;
+- konfiguracja zawiera uporządkowaną listę „Wymagania do spełnienia”; wiele wymagań można przypisać do Statusu, Zadania lub Otwartego punktu oraz filtrować po nich;
+- szczegółowe KPI pokazują etykietę dnia/tygodnia/miesiąca i wartość procentową;
+- poprawiono obsługę kliknięcia poza popupem: przeciągnięcie rozpoczęte wewnątrz okna nie zamyka go;
+- backup projektu obejmuje komentarze, powiadomienia, potwierdzenia Informatora, wymagania, święta i nieobecności; schemat bazy ma wersję `9.0`.
+
+## Funkcje bazowe zachowane z V8
+
+Wydanie V8 rozwinęło Overview, Informator oraz operacyjne planowanie zapotrzebowania zespołu. Wszystkie poniższe funkcje pozostają dostępne w V9.
+
+### Skrót funkcji V8
 
 - Overview pokazuje przy zakresie „Cały projekt” zagregowane główne obszary, liczbę wszystkich, otwartych i zamkniętych pozycji oraz przełączany widok sterowników;
 - trend KPI znajduje się bezpośrednio pod realizacją, a „Szczegółowe KPI” otwiera rozwijalne drzewo obszarów, podobszarów i sterowników dla dni, tygodni albo miesięcy;
@@ -54,7 +75,7 @@ Wydanie V7 rozwija poprzednią wersję bez zmiany konfiguracji Railway. Poprawia
 - użytkownicy globalni oraz niezależna rola i dostępność konta w każdym projekcie;
 - role: `system_admin`, `project_admin`, `moderator`, `user`;
 - administrator systemu zarządza projektami, kontami globalnymi oraz wszystkimi rolami;
-- administrator projektu zarządza swoim projektem i rolami moderator/użytkownik;
+- administrator projektu zarządza swoim projektem i rolami Manager projektu/użytkownik;
 - projekt niedostępny dla użytkownika nie pojawia się na liście wyboru;
 - istniejące dane są przypisane do projektu W371, a projekt W520 zawiera odrębne dane demonstracyjne;
 - identyfikatory punktów są nadawane automatycznie, nie można ich edytować i pozostają ukryte w interfejsie.
@@ -94,7 +115,7 @@ Wydanie V7 rozwija poprzednią wersję bez zmiany konfiguracji Railway. Poprawia
 ### Planner, Kalendarz, Historia i podsumowanie dnia
 
 - Planner manpoweru pokazuje aktywnych pracowników w wierszach i kolejne dni pogrupowane na tygodnie oraz miesiące;
-- moderator, administrator projektu i administrator systemu mogą przypisać na jeden dzień wiele obszarów, zmianę oraz `T` (transport) albo `T+P` (transport i praca); udział każdego konta w Plannerze jest włączany osobno przez administratora projektu lub systemu;
+- Manager projektu, administrator projektu i administrator systemu mogą przypisać na jeden dzień wiele obszarów, zmianę oraz `T` (transport) albo `T+P` (transport i praca); udział każdego konta w Plannerze jest włączany osobno przez administratora projektu lub systemu;
 - praca online na fabryce i offline w biurze jest grupowana i liczona osobno;
 - menu prawego przycisku umożliwia kopiowanie wpisu/dnia oraz przypisanie pracy z istniejących zadań, Statusu i otwartych punktów;
 - Planner pokazuje obciążenie zadaniami, otwartymi punktami, Statusem i notatkami oraz podsumowania liczby osób per obszar i zmiana;
@@ -200,9 +221,9 @@ Po redeployu trzeba zalogować się ponownie, ponieważ sesje są przechowywane 
 
 ## Aktualizacja istniejącej bazy
 
-V8 automatycznie migruje bazy ze starszych wydań, nie kasując rekordów. Migracja zachowuje nazwę liścia sterownika i techniczny kod pełnej ścieżki, dodaje Informator oraz zapotrzebowanie Plannera i usuwa użycie dawnego pola Milestone. Dotychczasowe powiązania celów pozostają zsynchronizowane z relacjami pozostałych modułów.
+V9 automatycznie migruje bazy ze starszych wydań, nie kasując rekordów. Migracja zachowuje nazwę liścia sterownika i techniczny kod pełnej ścieżki, usuwa ograniczenie unikalności nazw punktów Statusu oraz dodaje komentarze, powiadomienia, potwierdzenia Informatora, wymagania do spełnienia, święta i nieobecności. Dotychczasowe powiązania celów pozostają zsynchronizowane z relacjami pozostałych modułów.
 
-Przed wdrożeniem produkcyjnym zalecany jest snapshot Railway Volume lub kopia pliku `/app/data/plc-status.db`. Po uruchomieniu V8 można też używać kopii projektowych w **Konfiguracja → Backup projektu**.
+Przed wdrożeniem produkcyjnym zalecany jest snapshot Railway Volume lub kopia pliku `/app/data/plc-status.db`. Po uruchomieniu V9 można też używać kopii projektowych w **Konfiguracja → Backup projektu**.
 
 Jeśli w fazie koncepcyjnej potrzebny jest czysty start, usuń wyłącznie pliki:
 
@@ -214,18 +235,18 @@ Jeśli w fazie koncepcyjnej potrzebny jest czysty start, usuń wyłącznie pliki
 
 Następnie wykonaj redeploy. Nie usuwaj całego Volume, jeśli znajdują się na nim inne pliki.
 
-## Uprawnienia prototypowe V8
+## Uprawnienia prototypowe V9
 
-| Czynność | Administrator systemu | Administrator projektu | Moderator | Użytkownik |
+| Czynność | Administrator systemu | Administrator projektu | Manager projektu | Użytkownik |
 |---|:---:|:---:|:---:|:---:|
 | Projekty i konta globalne | pełne | — | — | — |
-| Role w projekcie | pełne | moderator/użytkownik | — | — |
+| Role w projekcie | pełne | manager/użytkownik | — | — |
 | Backup i odtwarzanie projektu | ✓ | ✓ | — | — |
 | Sterowniki, hierarchia, grupy funkcyjne | pełne | pełne | podgląd | podgląd |
 | Kategorie i słowniki | pełne | pełne | dodawanie/edycja/kolejność | podgląd |
 | Planner — edycja planu | ✓ | ✓ | ✓ | — |
-| Planner — zapotrzebowanie obsady | ✓ | ✓ | — | — |
-| Informator — publikowanie i edycja | ✓ | ✓ | — | — |
+| Planner — zapotrzebowanie, święta i czas pracy | ✓ | ✓ | ✓ | — |
+| Informator — publikowanie i edycja | ✓ | ✓ | ✓ | — |
 | Kalendarz — adnotacje koordynacyjne | ✓ | ✓ | ✓ | — |
 | Dane robocze i zmiana sterownika | ✓ | ✓ | ✓ | ✓ |
 | Usuwanie danych innych osób | ✓ | ✓ | — | — |
@@ -249,7 +270,7 @@ Kontrola zdrowia i wersji:
 curl http://localhost:8080/api/health
 ```
 
-Oczekiwany release: `8.0.0`.
+Oczekiwany release: `9.0.0`.
 
 ## Testy automatyczne
 
@@ -259,4 +280,4 @@ W Node.js 24 lub nowszym:
 npm test
 ```
 
-Testy obejmują tworzenie nowej bazy, migracje, kolejność konfiguracji, grupy funkcyjne, izolację i zabezpieczone usuwanie projektów, pełne identyfikatory hierarchii, zadania obszarowe, backup/restore, udział i zapotrzebowanie w Plannerze, Informator, Kalendarz z celami, ważone zadania, wieloosobowy Status, trendy KPI, dwukierunkowe powiązania z celami i podsumowanie dnia.
+Testy obejmują tworzenie nowej bazy, migracje, kolejność konfiguracji, grupy funkcyjne, izolację i zabezpieczone usuwanie projektów, pełne identyfikatory hierarchii, zadania obszarowe, backup/restore V9, wymagania do spełnienia, bezpieczne duplikowanie, komentarze i powiadomienia, potwierdzenia Informatora, wielodniowy Kalendarz, urlopy, święta, nadgodziny, udział i zapotrzebowanie w Plannerze, ważone zadania, wieloosobowy Status, trendy KPI, dwukierunkowe powiązania z celami i podsumowanie dnia.

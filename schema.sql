@@ -161,8 +161,7 @@ CREATE TABLE IF NOT EXISTS function_group_checks (
   sort_order INTEGER NOT NULL DEFAULT 0,
   active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE(function_group_id,title,category)
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS function_group_check_subcategories (
@@ -454,6 +453,77 @@ CREATE TABLE IF NOT EXISTS announcement_links (
   PRIMARY KEY(announcement_id,entity_type,entity_id)
 ) STRICT, WITHOUT ROWID;
 
+CREATE TABLE IF NOT EXISTS announcement_reads (
+  announcement_id INTEGER NOT NULL REFERENCES announcements(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  read_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(announcement_id,user_id)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS entity_comments (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point','goal')),
+  entity_id INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS notifications (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK(kind IN ('assignment','announcement','comment')),
+  entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point','goal','announcement')),
+  entity_id INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  message TEXT NOT NULL DEFAULT '',
+  read_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS completion_requirements (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL COLLATE NOCASE,
+  description TEXT NOT NULL DEFAULT '',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
+  UNIQUE(project_id,name)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS entity_requirements (
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point')),
+  entity_id INTEGER NOT NULL,
+  requirement_id INTEGER NOT NULL REFERENCES completion_requirements(id) ON DELETE CASCADE,
+  PRIMARY KEY(entity_type,entity_id,requirement_id)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS planner_holidays (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  holiday_date TEXT NOT NULL,
+  name TEXT NOT NULL,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(project_id,holiday_date)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS planner_absences (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  absence_date TEXT NOT NULL,
+  absence_type TEXT NOT NULL CHECK(absence_type IN ('time_off','vacation')),
+  note TEXT NOT NULL DEFAULT '',
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(project_id,user_id,absence_date)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS calendar_item_dates (
   id INTEGER PRIMARY KEY,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -501,3 +571,8 @@ CREATE INDEX IF NOT EXISTS idx_planner_requirements_date ON planner_requirements
 CREATE INDEX IF NOT EXISTS idx_announcements_project ON announcements(project_id,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_calendar_annotations_date ON calendar_annotations(project_id,start_date,end_date);
 CREATE INDEX IF NOT EXISTS idx_calendar_item_dates ON calendar_item_dates(project_id,calendar_date,entity_type);
+CREATE INDEX IF NOT EXISTS idx_comments_entity ON entity_comments(project_id,entity_type,entity_id,created_at);
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(project_id,user_id,read_at,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_entity_requirements_entity ON entity_requirements(project_id,entity_type,entity_id);
+CREATE INDEX IF NOT EXISTS idx_planner_holidays_date ON planner_holidays(project_id,holiday_date);
+CREATE INDEX IF NOT EXISTS idx_planner_absences_date ON planner_absences(project_id,absence_date,user_id);
