@@ -1,8 +1,22 @@
-# PLC Commissioning Hub V11.0.0
+# PLC Commissioning Hub V12.0.0
 
 Samodzielna aplikacja WWW do zarządzania uruchomieniem PLC, zespołem i kilkoma projektami. Działa na Node.js 24 oraz SQLite, bez zewnętrznych usług i bez zależności npm.
 
-## Najważniejsze zmiany V11
+## Najważniejsze zmiany V12
+
+V12 dodaje operacyjną warstwę koordynacji pracy, zachowując konfigurację Railway oraz automatyczną migrację istniejącej bazy:
+
+- nowe **Centrum operacyjne** z kolejką triage dla pozycji po terminie, zbliżających się, zablokowanych i nieprzypisanych;
+- zbiorcze przypisywanie odpowiedzialnych, priorytetów i deadline’ów z kolejki triage;
+- raport jakości danych wskazujący brak właściciela, terminu, kategorii, następnego kroku lub uszkodzone powiązanie;
+- jawne zależności pomiędzy zadaniami, blokada cykli, lista zablokowanych zadań i automatycznie wyliczana ścieżka krytyczna;
+- przekazania zmian z listą powiązanych elementów i obowiązkowym potwierdzeniem odbioru przez kolejną zmianę;
+- konfigurowalne reguły automatyzacji dla deadline’ów, przypomnień, blokad i braku odpowiedzialnego;
+- szablony uruchomieniowe kopiujące kompletną grupę funkcyjną, jej elementy, podkategorie i punkty Statusu na wybrany sterownik;
+- prywatne i zespołowe zapisane widoki filtrów, grupowania oraz sortowania w Statusie, Zadaniach, Otwartych punktach i Centrum operacyjnym;
+- backup projektu i schemat bazy w wersji `12.0`.
+
+## Poprzednie zmiany V11
 
 V11 usprawnia codzienną pracę z dużymi listami i planowaniem zespołu, zachowując dotychczasową konfigurację Railway:
 
@@ -251,9 +265,9 @@ Po redeployu trzeba zalogować się ponownie, ponieważ sesje są przechowywane 
 
 ## Aktualizacja istniejącej bazy
 
-V11 automatycznie migruje bazy ze starszych wydań, nie kasując rekordów. Migracja zachowuje funkcje V10 oraz dodaje projektową widoczność użytkowników na listach wyboru i nowe pola ręcznej korekty czasu oraz salda nadgodzin. Dotychczasowe powiązania celów pozostają zsynchronizowane z relacjami pozostałych modułów.
+V12 automatycznie migruje bazy ze starszych wydań, nie kasując rekordów. Migracja zachowuje funkcje V11 oraz dodaje zapisane widoki, zależności zadań, przekazania zmian, reguły automatyzacji i szablony uruchomieniowe. Dotychczasowe powiązania celów pozostają zsynchronizowane z relacjami pozostałych modułów.
 
-Przed wdrożeniem produkcyjnym zalecany jest snapshot Railway Volume lub kopia pliku `/app/data/plc-status.db`. Po uruchomieniu V11 można też używać kopii projektowych w **Konfiguracja → Backup projektu**.
+Przed wdrożeniem produkcyjnym zalecany jest snapshot Railway Volume lub kopia pliku `/app/data/plc-status.db`. Po uruchomieniu V12 można też używać kopii projektowych w **Konfiguracja → Backup projektu**.
 
 Jeśli w fazie koncepcyjnej potrzebny jest czysty start, usuń wyłącznie pliki:
 
@@ -265,7 +279,7 @@ Jeśli w fazie koncepcyjnej potrzebny jest czysty start, usuń wyłącznie pliki
 
 Następnie wykonaj redeploy. Nie usuwaj całego Volume, jeśli znajdują się na nim inne pliki.
 
-## Uprawnienia prototypowe V11
+## Uprawnienia prototypowe V12
 
 | Czynność | Administrator systemu | Administrator projektu | Manager projektu | Użytkownik |
 |---|:---:|:---:|:---:|:---:|
@@ -278,6 +292,10 @@ Następnie wykonaj redeploy. Nie usuwaj całego Volume, jeśli znajdują się na
 | Planner — zapotrzebowanie, święta i czas pracy | ✓ | ✓ | ✓ | — |
 | Informator — publikowanie i edycja | ✓ | ✓ | ✓ | — |
 | Kalendarz — adnotacje koordynacyjne | ✓ | ✓ | ✓ | — |
+| Triage — zmiany zbiorcze | ✓ | ✓ | ✓ | — |
+| Reguły automatyzacji i szablony uruchomieniowe | ✓ | ✓ | ✓ | podgląd |
+| Przekazania zmian — tworzenie i odbiór | ✓ | ✓ | ✓ | ✓ |
+| Zapisane widoki prywatne / zespołowe | oba | oba | oba | prywatne |
 | Dane robocze i zmiana sterownika | ✓ | ✓ | ✓ | ✓ |
 | Usuwanie danych innych osób | ✓ | ✓ | — | — |
 | Usuwanie własnej notatki | ✓ | ✓ | — | ✓ |
@@ -300,7 +318,7 @@ Kontrola zdrowia i wersji:
 curl http://localhost:8080/api/health
 ```
 
-Oczekiwany release: `11.0.0`.
+Oczekiwany release: `12.0.0`.
 
 ## Testy automatyczne
 
@@ -310,4 +328,4 @@ W Node.js 24 lub nowszym:
 npm test
 ```
 
-Testy obejmują tworzenie nowej bazy, migracje, kolejność konfiguracji, grupy funkcyjne, izolację i zabezpieczone usuwanie projektów, pełne identyfikatory hierarchii, zadania obszarowe, backup/restore V11, wymagania do spełnienia, projektową widoczność użytkowników, bezpieczne duplikowanie, komentarze i powiadomienia, skierowane potwierdzenia Informatora, zakresy notatek, wielodniowy Kalendarz, urlopy, święta, ręczne godziny od–do, korekty salda i narastające nadgodziny, udział i zapotrzebowanie w Plannerze, ważone zadania, wieloosobowy Status, trendy KPI, dwukierunkowe powiązania z celami i podsumowanie dnia.
+Testy obejmują tworzenie nowej bazy, migracje, kolejność konfiguracji, grupy funkcyjne, izolację i zabezpieczone usuwanie projektów, pełne identyfikatory hierarchii, zadania obszarowe, backup/restore V12, wymagania do spełnienia, projektową widoczność użytkowników, bezpieczne duplikowanie, komentarze i powiadomienia, skierowane potwierdzenia Informatora, zakresy notatek, wielodniowy Kalendarz, urlopy, święta, ręczne godziny od–do, korekty salda i narastające nadgodziny, udział i zapotrzebowanie w Plannerze, ważone zadania, wieloosobowy Status, trendy KPI, dwukierunkowe powiązania z celami, zapisane widoki, triage, jakość danych, zależności, przekazania zmian, automatyzacje, szablony uruchomieniowe i podsumowanie dnia.

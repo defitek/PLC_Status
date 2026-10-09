@@ -493,8 +493,8 @@ CREATE TABLE IF NOT EXISTS notifications (
   id INTEGER PRIMARY KEY,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL CHECK(kind IN ('assignment','announcement','comment')),
-  entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point','goal','announcement')),
+  kind TEXT NOT NULL CHECK(kind IN ('assignment','announcement','comment','handover','automation')),
+  entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point','goal','announcement','handover')),
   entity_id INTEGER NOT NULL,
   title TEXT NOT NULL,
   message TEXT NOT NULL DEFAULT '',
@@ -587,6 +587,95 @@ CREATE TABLE IF NOT EXISTS calendar_annotations (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS saved_views (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  module TEXT NOT NULL CHECK(module IN ('status','tasks','points','operations')),
+  name TEXT NOT NULL,
+  visibility TEXT NOT NULL DEFAULT 'personal' CHECK(visibility IN ('personal','team')),
+  config_json TEXT NOT NULL DEFAULT '{}',
+  is_default INTEGER NOT NULL DEFAULT 0,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(project_id,owner_user_id,module,name)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS task_dependencies (
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  prerequisite_task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  lag_days INTEGER NOT NULL DEFAULT 0,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(task_id,prerequisite_task_id),
+  CHECK(task_id!=prerequisite_task_id)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS shift_handovers (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  handover_date TEXT NOT NULL,
+  from_shift TEXT NOT NULL,
+  to_shift TEXT NOT NULL,
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','accepted')),
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  accepted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  accepted_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS shift_handover_items (
+  handover_id INTEGER NOT NULL REFERENCES shift_handovers(id) ON DELETE CASCADE,
+  entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point','goal','note')),
+  entity_id INTEGER NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(handover_id,entity_type,entity_id)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS automation_rules (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  trigger_type TEXT NOT NULL CHECK(trigger_type IN ('overdue','due_soon','reminder_due','unassigned','blocked')),
+  entity_types_json TEXT NOT NULL DEFAULT '[]',
+  days_offset INTEGER NOT NULL DEFAULT 0,
+  action_type TEXT NOT NULL CHECK(action_type IN ('notify_assignees','notify_managers','escalate_priority')),
+  target_priority TEXT NOT NULL DEFAULT 'High',
+  active INTEGER NOT NULL DEFAULT 1,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  last_run_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(project_id,name)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS automation_rule_hits (
+  rule_id INTEGER NOT NULL REFERENCES automation_rules(id) ON DELETE CASCADE,
+  entity_type TEXT NOT NULL,
+  entity_id INTEGER NOT NULL,
+  hit_key TEXT NOT NULL,
+  executed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(rule_id,entity_type,entity_id,hit_key)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS commissioning_templates (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL COLLATE NOCASE,
+  description TEXT NOT NULL DEFAULT '',
+  template_json TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(project_id,name)
+) STRICT;
+
 CREATE INDEX IF NOT EXISTS idx_status_controller_status ON status_items(controller_id,status);
 CREATE INDEX IF NOT EXISTS idx_controller_groups_project ON controller_groups(project_id,parent_id,sort_order);
 CREATE INDEX IF NOT EXISTS idx_function_groups_controller ON function_groups(controller_id,sort_order);
@@ -615,3 +704,8 @@ CREATE INDEX IF NOT EXISTS idx_entity_requirements_entity ON entity_requirements
 CREATE INDEX IF NOT EXISTS idx_planner_holidays_date ON planner_holidays(project_id,holiday_date);
 CREATE INDEX IF NOT EXISTS idx_planner_absences_date ON planner_absences(project_id,absence_date,user_id);
 CREATE INDEX IF NOT EXISTS idx_planner_time_adjustments_date ON planner_time_adjustments(project_id,plan_date,user_id);
+CREATE INDEX IF NOT EXISTS idx_saved_views_owner ON saved_views(project_id,module,visibility,owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_task_dependencies_task ON task_dependencies(project_id,task_id,prerequisite_task_id);
+CREATE INDEX IF NOT EXISTS idx_handovers_date ON shift_handovers(project_id,handover_date,status);
+CREATE INDEX IF NOT EXISTS idx_automation_rules_project ON automation_rules(project_id,active,trigger_type);
+CREATE INDEX IF NOT EXISTS idx_templates_project ON commissioning_templates(project_id,active,name);

@@ -1,7 +1,7 @@
 const state = {
   view: 'overview', controller: 'all', me: null, projects: [], controllerGroups: [], controllers: [], users: [],
   config: { categories: [], task_categories: [], function_groups: [], options: [], announcement_labels: [], settings: {} },
-  overview: null, announcements: [], notifications: [], mine: null, dashboard: {}, status: [], tasks: [], points: [], notes: [], goals: [], planner: null, calendar: null, history: [],
+  overview: null, announcements: [], notifications: [], mine: null, dashboard: {}, status: [], tasks: [], points: [], notes: [], goals: [], planner: null, calendar: null, history: [], savedViews: [], operations: null,
   dialog: null, dialogInitial: '', dirtyCloseAttempt: new WeakSet(), goalDraftLinks: [], goalPickerCollections: null, linkDraft: [], taskMode: 'board', taskShowCompleted: false, pointMode: 'list', trendPeriod: 'week',
   functionGroupController: '', functionPointGroup: null, functionPointDraft: [], quickStatusDraft: [],
   notesFrom: '', notesTo: '', notesWeek: '', draggingTask: false, plannerFrom: '', plannerDays: 14,
@@ -11,6 +11,7 @@ const state = {
   announcementLabelFilter: '', announcementImportanceFilter: '', liveSource: null, liveRefreshTimer: null,
   categorySelection: { status: null, task: null },
   functionListManager: null,
+  operationsTab: 'triage', triageSelection: new Set(), savedViewApplying: false, activeSavedView: {}, taskDependencyOptions: [],
   grouping: { status: 'category', tasks: '', notes: 'scope', history: 'hierarchy' },
   sort: { status: { key: '', direction: 1 }, tasks: { key: '', direction: 1 }, points: { key: '', direction: 1 } }
 };
@@ -31,6 +32,7 @@ const pageCopy = {
   overview: ['Overview', 'Liczbowy obraz gotowości całego projektu', ''],
   announcements: ['Informator', 'Wiadomości operacyjne, decyzje i komunikaty projektu', '+ Nowa wiadomość'],
   mine: ['Moje podsumowanie', 'Twoje zadania, odpowiedzialności, wzmianki i aktywność', ''],
+  operations: ['Centrum operacyjne', 'Triage, jakość danych, zależności, przekazania zmian i automatyzacje', ''],
   planner: ['Planner', 'Planowanie manpoweru, obszarów, zmian i transportu', ''],
   calendar: ['Kalendarz', 'Zintegrowany harmonogram projektu do 31 dni', '+ Adnotacja'],
   status: ['Status', 'Testy uruchomieniowe według kolejności projektu', '+ Dodaj test'],
@@ -290,6 +292,113 @@ function applyGroupedColumnVisibility(root, grouping, columns) {
   return visibleColumns.length - (grouping && visibleColumns.includes(grouping) ? 1 : 0);
 }
 
+function savedViewsToolbar(module) {
+  const rows = (state.savedViews || []).filter(item => item.module === module);
+  return `<div class="saved-view-bar" data-saved-view-module="${module}"><span class="saved-view-label">Widok</span><select data-saved-view-select><option value="">Bieżące ustawienia</option>${rows.map(item => `<option value="${item.id}"${Number(state.activeSavedView[module]) === Number(item.id) ? ' selected' : ''}>${item.visibility === 'team' ? 'Zespół · ' : 'Mój · '}${escapeHtml(item.name)}</option>`).join('')}</select><button type="button" class="mini" data-saved-view-save>Zapisz widok</button><button type="button" class="mini" data-saved-view-delete ${state.activeSavedView[module] ? '' : 'disabled'}>Usuń</button></div>`;
+}
+
+function captureSavedView(module, root) {
+  const selector = suffix => module === 'tasks' && root !== '#task-filter-bar' ? `${root} ${suffix}, #task-filter-bar ${suffix}` : `${root} ${suffix}`;
+  const config = {
+    grouping: state.grouping[module] || '',
+    sort: state.sort[module] ? { ...state.sort[module] } : null,
+    task_mode: module === 'tasks' ? state.taskMode : undefined,
+    show_completed: module === 'tasks' ? state.taskShowCompleted : undefined,
+    operations_tab: module === 'operations' ? state.operationsTab : undefined,
+    search: module === 'tasks' ? ($('#task-search')?.value || '') : '',
+    text: {}, filters: {}
+  };
+  $$(selector('[data-filter-text]')).forEach(input => { config.text[input.dataset.filterText] = input.value; });
+  $$(selector('[data-filter-kind][data-filter-key]')).forEach(widget => {
+    const key = widget.dataset.filterKey;
+    if (widget.dataset.filterKind === 'multi' || widget.dataset.filterKind === 'hierarchy') config.filters[key] = { kind: widget.dataset.filterKind, values: [...widget.querySelectorAll('input:checked')].map(input => input.value) };
+    else if (widget.dataset.filterKind === 'number') config.filters[key] = { kind: 'number', mode: widget.querySelector('[data-filter-mode]')?.value || 'between', min: widget.querySelector('[data-filter-min]')?.value || '', max: widget.querySelector('[data-filter-max]')?.value || '' };
+    else if (widget.dataset.filterKind === 'date') config.filters[key] = { kind: 'date', mode: widget.querySelector('[data-filter-mode]')?.value || 'from', date: widget.querySelector('[data-filter-date]')?.value || '' };
+  });
+  return config;
+}
+
+function restoreSavedViewControls(config, module, root, redraw) {
+  const selector = suffix => module === 'tasks' && root !== '#task-filter-bar' ? `${root} ${suffix}, #task-filter-bar ${suffix}` : `${root} ${suffix}`;
+  const groupSelect = module === 'status' ? $('#status-group') : module === 'tasks' ? $('#task-group') : null;
+  if (groupSelect && [...groupSelect.options].some(option => option.value === String(config.grouping || ''))) {
+    groupSelect.value = config.grouping || '';
+    state.grouping[module] = groupSelect.value;
+  }
+  if (config.sort && state.sort[module]) state.sort[module] = { key: config.sort.key || '', direction: Number(config.sort.direction) === -1 ? -1 : 1 };
+  if (module === 'tasks' && $('#task-search')) $('#task-search').value = config.search || '';
+  $$(selector('[data-filter-text]')).forEach(input => { input.value = config.text?.[input.dataset.filterText] || ''; });
+  $$(selector('[data-filter-kind][data-filter-key]')).forEach(widget => {
+    const saved = config.filters?.[widget.dataset.filterKey];
+    if (!saved) return;
+    if (['multi', 'hierarchy'].includes(widget.dataset.filterKind)) widget.querySelectorAll('input[type="checkbox"]').forEach(input => { input.checked = (saved.values || []).includes(input.value); });
+    if (widget.dataset.filterKind === 'number') {
+      if (widget.querySelector('[data-filter-mode]')) widget.querySelector('[data-filter-mode]').value = saved.mode || 'between';
+      if (widget.querySelector('[data-filter-min]')) widget.querySelector('[data-filter-min]').value = saved.min || '';
+      if (widget.querySelector('[data-filter-max]')) widget.querySelector('[data-filter-max]').value = saved.max || '';
+    }
+    if (widget.dataset.filterKind === 'date') {
+      if (widget.querySelector('[data-filter-mode]')) widget.querySelector('[data-filter-mode]').value = saved.mode || 'from';
+      if (widget.querySelector('[data-filter-date]')) widget.querySelector('[data-filter-date]').value = saved.date || '';
+    }
+  });
+  updateFilterSummaries(root);
+  if (module === 'tasks' && root !== '#task-filter-bar') updateFilterSummaries('#task-filter-bar');
+  redraw();
+}
+
+function bindSavedViews(module, root, redraw) {
+  const bar = document.querySelector(`[data-saved-view-module="${module}"]`);
+  if (!bar) return;
+  const select = bar.querySelector('[data-saved-view-select]');
+  select.addEventListener('change', () => {
+    const view = (state.savedViews || []).find(item => item.id === Number(select.value));
+    state.activeSavedView[module] = view?.id || null;
+    bar.querySelector('[data-saved-view-delete]').disabled = !view;
+    if (!view) return;
+    if (module === 'operations' && view.config?.operations_tab) {
+      state.operationsTab = view.config.operations_tab;
+      renderOperations();
+      return;
+    }
+    if (module === 'tasks' && view.config?.task_mode && view.config.task_mode !== state.taskMode) {
+      state.taskMode = view.config.task_mode;
+      state.taskShowCompleted = Boolean(view.config.show_completed);
+      renderTasks();
+      queueMicrotask(() => restoreSavedViewControls(view.config, module, state.taskMode === 'list' ? '#task-list-panel' : '#task-filter-bar', drawTasks));
+      return;
+    }
+    const applyRoot = module === 'tasks' && state.taskMode === 'list' ? '#task-list-panel' : root;
+    restoreSavedViewControls(view.config || {}, module, applyRoot, redraw);
+  });
+  bar.querySelector('[data-saved-view-save]').addEventListener('click', async () => {
+    const manager = ['system_admin', 'project_admin', 'moderator'].includes(state.me.role);
+    const result = await uiForm({ title: 'Zapisz widok', description: 'Zapisz filtry, grupowanie i sortowanie, aby wracać do nich jednym kliknięciem.', submitLabel: 'Zapisz widok', fields: [
+      { name: 'name', label: 'Nazwa widoku', required: true },
+      { name: 'visibility', label: 'Dostępność', type: 'select', options: manager ? [{ value: 'personal', label: 'Tylko dla mnie' }, { value: 'team', label: 'Dla całego zespołu' }] : [{ value: 'personal', label: 'Tylko dla mnie' }] },
+      { name: 'is_default', label: 'Ustaw jako mój domyślny widok', type: 'checkbox' }
+    ] });
+    if (!result) return;
+    try {
+      const configRoot = module === 'tasks' && state.taskMode === 'list' ? '#task-list-panel' : root;
+      const saved = await api('/api/saved-views', { method: 'POST', body: JSON.stringify({ module, name: result.name, visibility: result.visibility, is_default: result.is_default ? 1 : 0, config: captureSavedView(module, configRoot) }) });
+      state.savedViews = await api('/api/saved-views'); state.activeSavedView[module] = saved.id; toast('Widok został zapisany'); render();
+    } catch (error) { toast(error.message, true); }
+  });
+  bar.querySelector('[data-saved-view-delete]').addEventListener('click', async () => {
+    const id = Number(select.value); if (!id) return;
+    if (!await uiConfirm('Usuń zapisany widok', 'Usunięcie nie zmieni danych projektu.', 'Usuń', true)) return;
+    try { await api(`/api/saved-views/${id}`, { method: 'DELETE' }); state.savedViews = await api('/api/saved-views'); state.activeSavedView[module] = null; toast('Widok został usunięty'); render(); }
+    catch (error) { toast(error.message, true); }
+  });
+  const preferred = (state.savedViews || []).find(item => item.module === module && item.is_default && Number(item.owner_user_id) === Number(state.me.id));
+  if (!state.activeSavedView[module] && preferred) {
+    state.activeSavedView[module] = preferred.id;
+    select.value = String(preferred.id);
+    queueMicrotask(() => select.dispatchEvent(new Event('change')));
+  }
+}
+
 async function initialize() {
   try {
     state.me = await api('/api/me');
@@ -433,6 +542,7 @@ function openProjectDialog(mandatory = false) {
       state.me = await api('/api/select-project', { method: 'POST', body: JSON.stringify({ project_id: Number(button.dataset.projectId) }) });
       state.projects = state.me.projects || [];
       state.controller = 'all';
+      state.activeSavedView = {};
       updateIdentity();
       dialog.close();
       await loadData();
@@ -578,10 +688,10 @@ async function loadData(silent = false) {
   const calendarParams = new URLSearchParams({ controller: state.controller, from: state.calendarFrom, to: state.calendarTo, only_mine: state.calendarOnlyMine ? '1' : '0', category: state.calendarCategory });
   state.calendarTypes.forEach(type => calendarParams.append('type', type));
   state.calendarPriorities.forEach(priority => calendarParams.append('priority', priority));
-  [state.controllerGroups, state.controllers, state.users, state.config, state.overview, state.announcements, state.notifications, state.mine, state.dashboard, state.status, state.tasks, state.points, state.notes, state.goals, state.planner, state.calendar, state.history] = await Promise.all([
+  [state.controllerGroups, state.controllers, state.users, state.config, state.overview, state.announcements, state.notifications, state.mine, state.dashboard, state.status, state.tasks, state.points, state.notes, state.goals, state.planner, state.calendar, state.history, state.savedViews, state.operations] = await Promise.all([
     api('/api/controller-groups'), api('/api/controllers'), api('/api/users'), api('/api/config'), api('/api/overview' + query), api('/api/announcements'), api('/api/notifications'), api('/api/my-summary'),
     api('/api/dashboard' + query), api('/api/status' + query), api('/api/tasks' + query), api('/api/open-points' + query),
-    api('/api/daily-notes' + notesQuery), api('/api/goals' + query), api('/api/planner' + plannerQuery), api('/api/calendar?' + calendarParams), api('/api/history?limit=200')
+    api('/api/daily-notes' + notesQuery), api('/api/goals' + query), api('/api/planner' + plannerQuery), api('/api/calendar?' + calendarParams), api('/api/history?limit=200'), api('/api/saved-views'), api('/api/operations')
   ]);
   if (!state.controllers.some(item => item.code === state.functionGroupController)) {
     state.functionGroupController = state.controller !== 'all' && state.controllers.some(item => item.code === state.controller)
@@ -652,6 +762,7 @@ function updateCounts() {
   $('#n-goals').textContent = state.goals.filter(item => item.status !== 'Done').length;
   $('#n-points').textContent = state.points.filter(item => item.status !== 'Closed').length;
   $('#n-notes').textContent = state.notes.length;
+  $('#n-operations').textContent = state.operations?.triage?.length || 0;
 }
 
 let notificationPollTimer;
@@ -707,6 +818,13 @@ async function openNotification(item) {
     }
   } catch (error) { toast(error.message, true); }
   $('#notifications-dialog').close();
+  if (item.entity_type === 'handover') {
+    try { state.operations = await api('/api/operations'); } catch (error) { toast(error.message, true); }
+    state.operationsTab = 'handovers';
+    setView('operations');
+    queueMicrotask(() => document.querySelector(`[data-handover-id="${Number(item.entity_id)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+    return;
+  }
   try {
     if (item.entity_type === 'announcement') state.announcements = await api('/api/announcements');
     else {
@@ -761,7 +879,7 @@ function render() {
   $('#desc').textContent = copy[1];
   $('#add').textContent = copy[2];
   $('#add').hidden = !copy[2];
-  ({ overview: renderOverview, announcements: renderAnnouncements, mine: renderMine, planner: renderPlanner, calendar: renderCalendar, status: renderStatus, tasks: renderTasks, goals: renderGoals, points: renderPoints, notes: renderNotes, history: renderHistory, settings: renderSettings })[state.view]();
+  ({ overview: renderOverview, announcements: renderAnnouncements, mine: renderMine, operations: renderOperations, planner: renderPlanner, calendar: renderCalendar, status: renderStatus, tasks: renderTasks, goals: renderGoals, points: renderPoints, notes: renderNotes, history: renderHistory, settings: renderSettings })[state.view]();
 }
 
 function canManageAnnouncements() { return ['system_admin', 'project_admin', 'moderator'].includes(state.me.role); }
@@ -987,6 +1105,161 @@ function personalTaskRow(item) {
   const own = item.checklist.filter(entry => entry.owner_user_id === state.me.id);
   const time = taskTimeLabel(item);
   return `<button class="focus-row" data-jump="tasks" data-id="${item.id}"><span class="progress-value ${item.progress >= 100 ? 'done' : item.progress > 0 ? 'active' : ''}"><b>${item.progress || 0}%</b><i><u style="width:${item.progress || 0}%"></u></i></span><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(controllerLabel(item))} · ${escapeHtml(item.owner_name || 'Nieprzypisane')}${own.length ? ` · Twoje podzadania ${own.filter(entry => entry.done).length}/${own.length}` : ''}</small></span><time class="${time?.overdue ? 'danger-text' : ''}">${time ? escapeHtml(time.label) : 'Start w przyszłości'}</time></button>`;
+}
+
+const operationTypeNames = { status: 'Status', task: 'Zadanie', point: 'Otwarty punkt', goal: 'Cel', note: 'Dziennik' };
+const triageSignalNames = { overdue: 'Po terminie', due_soon: 'Termin blisko', reminder_due: 'Przypomnienie', unassigned: 'Bez właściciela', blocked: 'Blokada', dependency: 'Zależność' };
+
+function operationJump(type, id) {
+  jumpTo(type, id);
+}
+
+async function reloadOperations() {
+  state.operations = await api('/api/operations');
+  $('#n-operations').textContent = state.operations?.triage?.length || 0;
+  if (state.view === 'operations') renderOperations();
+}
+
+function renderOperations() {
+  const data = state.operations;
+  if (!data) { $('#content').innerHTML = '<div class="loading">Ładowanie centrum operacyjnego…</div>'; reloadOperations().catch(error => toast(error.message, true)); return; }
+  const tabs = [
+    ['triage', 'Triage', data.triage?.length || 0], ['quality', 'Jakość danych', data.quality?.length || 0],
+    ['dependencies', 'Zależności', data.dependencies?.blocked_tasks?.length || 0], ['handovers', 'Przekazania zmian', data.handovers?.filter(item => item.status !== 'accepted').length || 0],
+    ['automations', 'Automatyzacje', data.automation_rules?.filter(item => item.active).length || 0], ['templates', 'Szablony uruchomieniowe', data.commissioning_templates?.length || 0]
+  ];
+  $('#content').innerHTML = `${savedViewsToolbar('operations')}<section class="operations-shell"><nav class="operations-tabs">${tabs.map(([key, label, count]) => `<button type="button" data-operations-tab="${key}" class="${state.operationsTab === key ? 'active' : ''}"><span>${escapeHtml(label)}</span><b>${count}</b></button>`).join('')}</nav><div id="operations-content"></div></section>`;
+  $$('[data-operations-tab]').forEach(button => button.addEventListener('click', () => { state.operationsTab = button.dataset.operationsTab; renderOperations(); }));
+  bindSavedViews('operations', '.operations-shell', renderOperations);
+  ({ triage: renderTriage, quality: renderDataQuality, dependencies: renderDependencies, handovers: renderHandovers, automations: renderAutomations, templates: renderCommissioningTemplates })[state.operationsTab]?.();
+}
+
+function renderTriage() {
+  const data = state.operations;
+  const rows = data.triage || [];
+  const counts = data.triage_counts || {};
+  const root = $('#operations-content');
+  root.innerHTML = `<section class="operation-view"><header class="operation-head"><div><h2>Kolejka triage</h2><p>Najpilniejsze pozycje ze wszystkich modułów, ustawione według ryzyka.</p></div>${data.can_coordinate ? '<div class="operation-actions"><button class="secondary" data-triage-action="owner">Przypisz</button><button class="secondary" data-triage-action="priority">Priorytet</button><button class="secondary" data-triage-action="due">Termin</button></div>' : ''}</header><div class="signal-strip">${Object.entries(triageSignalNames).map(([key, label]) => `<span><b>${counts[key] || 0}</b>${label}</span>`).join('')}</div><div class="operation-list triage-list">${rows.map(item => `<article class="operation-row" data-operation-jump="${item.entity_type}:${item.entity_id}">${data.can_coordinate ? `<input type="checkbox" data-triage-select="${item.entity_type}:${item.entity_id}" ${state.triageSelection.has(`${item.entity_type}:${item.entity_id}`) ? 'checked' : ''} aria-label="Wybierz ${escapeHtml(item.title)}">` : ''}<span class="type-dot ${item.entity_type}"></span><span class="operation-primary"><b>${escapeHtml(item.scope_label || 'Cały projekt')} · ${escapeHtml(item.title)}</b><small>${escapeHtml(operationTypeNames[item.entity_type])} · ${escapeHtml(item.owner_name || 'Nieprzypisane')}</small></span><span class="operation-signals">${item.signals.map(signal => `<em class="signal ${signal}">${escapeHtml(triageSignalNames[signal] || signal)}</em>`).join('')}</span><span class="operation-date">${badge(item.priority)}<small>${item.due_date ? `Termin ${displayDate(item.due_date)}` : item.reminder_date ? `Przypomnienie ${displayDate(item.reminder_date)}` : 'Bez terminu'}</small></span></article>`).join('') || '<div class="empty">Brak pozycji wymagających triage.</div>'}</div></section>`;
+  $$('[data-triage-select]').forEach(input => input.addEventListener('click', event => event.stopPropagation()));
+  $$('[data-triage-select]').forEach(input => input.addEventListener('change', () => { if (input.checked) state.triageSelection.add(input.dataset.triageSelect); else state.triageSelection.delete(input.dataset.triageSelect); }));
+  $$('[data-operation-jump]').forEach(row => row.addEventListener('click', event => { if (event.target.matches('input')) return; const [type, id] = row.dataset.operationJump.split(':'); operationJump(type, Number(id)); }));
+  $$('[data-triage-action]').forEach(button => button.addEventListener('click', () => runTriageBatch(button.dataset.triageAction)));
+}
+
+async function runTriageBatch(action) {
+  const items = [...state.triageSelection].map(key => { const [entity_type, id] = key.split(':'); return { entity_type, entity_id: Number(id) }; });
+  if (!items.length) return toast('Zaznacz pozycje do zmiany', true);
+  let result; let patch;
+  if (action === 'owner') {
+    result = await uiForm({ title: 'Zbiorcze przypisanie', description: `Wybrano ${items.length} pozycji. Cele zostaną pominięte, ponieważ nie mają pola odpowiedzialnego.`, submitLabel: 'Przypisz', fields: [{ name: 'owner_user_id', label: 'Osoba odpowiedzialna', type: 'select', options: [{ value: '', label: 'Usuń przypisanie' }, ...assignableUsers().map(user => ({ value: user.id, label: user.display_name }))] }] });
+    if (!result) return; patch = { owner_user_id: Number(result.owner_user_id) || null };
+  } else if (action === 'priority') {
+    result = await uiForm({ title: 'Zbiorcza zmiana priorytetu', description: `Wybrano ${items.length} pozycji.`, submitLabel: 'Zmień priorytet', fields: [{ name: 'priority', label: 'Priorytet', type: 'select', options: ['Low', 'Medium', 'High', 'Critical'] }] });
+    if (!result) return; patch = { priority: result.priority };
+  } else {
+    result = await uiForm({ title: 'Zbiorczy termin', description: 'Punkty statusu nie mają deadline’u i zostaną pominięte.', submitLabel: 'Ustaw termin', fields: [{ name: 'due_date', label: 'Deadline', type: 'date', required: true }] });
+    if (!result) return; patch = { due_date: result.due_date };
+  }
+  try { const saved = await api('/api/triage/batch', { method: 'PATCH', body: JSON.stringify({ items, patch }) }); state.triageSelection.clear(); toast(`Zaktualizowano ${saved.updated} pozycji`); await loadData(true); }
+  catch (error) { toast(error.message, true); }
+}
+
+function renderDataQuality() {
+  const data = state.operations; const rows = data.quality || []; const counts = data.quality_counts || {};
+  $('#operations-content').innerHTML = `<section class="operation-view"><header class="operation-head"><div><h2>Raport jakości danych</h2><p>Braki utrudniające planowanie, raportowanie i automatyzację projektu.</p></div><button type="button" class="secondary" id="quality-refresh">Odśwież raport</button></header><div class="signal-strip quality"><span class="high"><b>${counts.high || 0}</b>Wysoki wpływ</span><span class="medium"><b>${counts.medium || 0}</b>Średni wpływ</span><span class="low"><b>${counts.low || 0}</b>Niski wpływ</span><span><b>${rows.length}</b>Łącznie</span></div><div class="operation-list">${rows.map(item => `<button type="button" class="operation-row quality-row" data-operation-jump="${item.entity_type}:${item.entity_id}"><span class="quality-level ${item.severity}"></span><span class="operation-primary"><b>${escapeHtml(item.scope_label || 'Cały projekt')} · ${escapeHtml(item.title)}</b><small>${escapeHtml(operationTypeNames[item.entity_type] || item.entity_type)}</small></span><span class="quality-message">${escapeHtml(item.message)}</span><span>→</span></button>`).join('') || '<div class="empty success-empty">Dane operacyjne są kompletne.</div>'}</div></section>`;
+  $('#quality-refresh').addEventListener('click', () => reloadOperations().catch(error => toast(error.message, true)));
+  $$('[data-operation-jump]').forEach(row => row.addEventListener('click', () => { const [type, id] = row.dataset.operationJump.split(':'); operationJump(type, Number(id)); }));
+}
+
+function renderDependencies() {
+  const data = state.operations.dependencies || { critical_path: [], blocked_tasks: [] };
+  $('#operations-content').innerHTML = `<section class="operation-view"><header class="operation-head"><div><h2>Zależności i ścieżka krytyczna</h2><p>Szacowanie wykorzystuje planowany start i deadline; brak zakresu dat oznacza 1 dzień.</p></div><span class="operation-summary">${data.edges || 0} zależności · ${data.total_days || 0} dni ścieżki</span></header>${data.cycle_count ? `<div class="operation-alert">Wykryto ${data.cycle_count} zadań w cyklu zależności. Edycja nowych cykli jest zablokowana.</div>` : ''}<div class="dependency-layout"><section><h3>Ścieżka krytyczna</h3><ol class="critical-path">${(data.critical_path || []).map((item, index) => `<li><button type="button" data-operation-jump="task:${item.entity_id}"><span>${index + 1}</span><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.scope_label)} · ${item.duration_days} dni</small></span><em>Σ ${item.cumulative_days} dni</em></button></li>`).join('') || '<li class="empty">Dodaj zależności do zadań, aby wyznaczyć ścieżkę.</li>'}</ol></section><section><h3>Zadania zablokowane</h3><div class="blocked-list">${(data.blocked_tasks || []).map(item => `<button type="button" data-operation-jump="task:${item.entity_id}"><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.scope_label)}</small><span>Blokuje: ${item.blocked_by.map(blocker => escapeHtml(blocker.title)).join(', ')}</span></button>`).join('') || '<div class="empty success-empty">Żadne zadanie nie jest blokowane przez zależności.</div>'}</div></section></div></section>`;
+  $$('[data-operation-jump]').forEach(row => row.addEventListener('click', () => { const [type, id] = row.dataset.operationJump.split(':'); operationJump(type, Number(id)); }));
+}
+
+function renderHandovers() {
+  const rows = state.operations.handovers || [];
+  $('#operations-content').innerHTML = `<section class="operation-view"><header class="operation-head"><div><h2>Przekazania zmian</h2><p>Krótka, potwierdzana lista kontekstu dla kolejnej zmiany.</p></div><button type="button" class="primary" id="handover-add">+ Nowe przekazanie</button></header><div class="handover-list">${rows.map(item => `<article class="handover-card ${item.status}" data-handover-id="${item.id}"><header><span><b>${escapeHtml(item.from_shift)} → ${escapeHtml(item.to_shift)}</b><small>${displayDate(item.handover_date)}</small></span>${item.status === 'accepted' ? '<span class="badge green">Odebrane</span>' : '<span class="badge amber">Oczekuje</span>'}</header><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary).replace(/\n/g, '<br>')}</p><div class="handover-links">${(item.items || []).map(link => `<button type="button" data-operation-jump="${link.entity_type}:${link.entity_id}" ${link.missing ? 'disabled' : ''}><span class="type-dot ${link.entity_type}"></span><span><b>${escapeHtml(link.title)}</b><small>${escapeHtml(link.scope_label)} · ${escapeHtml(link.status || '')}</small></span></button>`).join('') || '<small>Bez powiązanych elementów.</small>'}</div><footer><span>Przekazał: <b>${escapeHtml(item.created_by_name || 'System')}</b>${item.accepted_by_name ? ` · odebrał: <b>${escapeHtml(item.accepted_by_name)}</b>` : ''}</span><div>${item.can_edit ? `<button type="button" class="mini" data-handover-edit="${item.id}">Edytuj</button><button type="button" class="mini danger-text" data-handover-delete="${item.id}">Usuń</button>` : ''}${item.status !== 'accepted' ? `<button type="button" class="primary" data-handover-accept="${item.id}">Potwierdź odbiór</button>` : ''}</div></footer></article>`).join('') || '<div class="empty">Nie utworzono jeszcze przekazania zmiany.</div>'}</div></section>`;
+  $('#handover-add').addEventListener('click', () => openHandoverEditor());
+  $$('[data-handover-edit]').forEach(button => button.addEventListener('click', () => openHandoverEditor(rows.find(item => item.id === Number(button.dataset.handoverEdit)))));
+  $$('[data-handover-accept]').forEach(button => button.addEventListener('click', async () => { try { await api(`/api/handovers/${button.dataset.handoverAccept}/accept`, { method: 'POST' }); toast('Przekazanie zostało odebrane'); await reloadOperations(); } catch (error) { toast(error.message, true); } }));
+  $$('[data-handover-delete]').forEach(button => button.addEventListener('click', async () => { if (!await uiConfirm('Usuń przekazanie', 'Powiązana praca projektu pozostanie bez zmian.', 'Usuń', true)) return; try { await api(`/api/handovers/${button.dataset.handoverDelete}`, { method: 'DELETE' }); await reloadOperations(); toast('Przekazanie usunięte'); } catch (error) { toast(error.message, true); } }));
+  $$('[data-operation-jump]').forEach(button => button.addEventListener('click', () => { const [type, id] = button.dataset.operationJump.split(':'); operationJump(type, Number(id)); }));
+}
+
+async function openHandoverEditor(existing = null) {
+  const result = await uiForm({ title: existing ? 'Edytuj przekazanie zmiany' : 'Nowe przekazanie zmiany', description: 'Po uzupełnieniu podsumowania wybierzesz elementy projektu wymagające uwagi.', submitLabel: 'Wybierz elementy', fields: [
+    { name: 'handover_date', label: 'Data przekazania', type: 'date', value: existing?.handover_date || today(), required: true },
+    { name: 'from_shift', label: 'Zmiana przekazująca', type: 'select', value: existing?.from_shift || options('shift')[0] || 'Dzień', options: options('shift') },
+    { name: 'to_shift', label: 'Zmiana odbierająca', type: 'select', value: existing?.to_shift || options('shift')[1] || options('shift')[0] || 'Noc', options: options('shift') },
+    { name: 'title', label: 'Tytuł', value: existing?.title || '', required: true, full: true },
+    { name: 'summary', label: 'Najważniejszy kontekst i następne kroki', type: 'textarea', value: existing?.summary || '', required: true, full: true, rows: 6 }
+  ] });
+  if (!result) return;
+  openEntitySelection({ mode: 'handover', allowed: ['status', 'task', 'point', 'goal', 'note'], initial: existing?.items || [], onApply: async items => {
+    const endpoint = existing ? `/api/handovers/${existing.id}` : '/api/handovers';
+    await api(endpoint, { method: existing ? 'PATCH' : 'POST', body: JSON.stringify({ ...result, items }) });
+    toast('Przekazanie zmiany zostało zapisane'); await reloadOperations();
+  } });
+}
+
+function renderAutomations() {
+  const rows = state.operations.automation_rules || [];
+  $('#operations-content').innerHTML = `<section class="operation-view"><header class="operation-head"><div><h2>Reguły automatyzacji</h2><p>Powiadomienia i eskalacja priorytetu bez ręcznego pilnowania list.</p></div>${state.operations.can_coordinate ? '<div class="operation-actions"><button type="button" class="secondary" id="automation-run">Uruchom teraz</button><button type="button" class="primary" id="automation-add">+ Reguła</button></div>' : ''}</header><div class="automation-list">${rows.map(item => `<article class="automation-row ${item.active ? 'active' : 'inactive'}"><span class="automation-state"></span><span><b>${escapeHtml(item.name)}</b><small>${item.entity_types.map(type => operationTypeNames[type]).join(', ')} · ostatnio: ${item.last_run_at ? displayDateTime(item.last_run_at) : 'jeszcze nie uruchomiono'}</small></span><span>${escapeHtml(triageSignalNames[item.trigger_type] || item.trigger_type)} → ${escapeHtml(item.action_type === 'notify_assignees' ? 'powiadom odpowiedzialnych' : item.action_type === 'notify_managers' ? 'powiadom managerów' : `ustaw ${item.target_priority}`)}</span>${state.operations.can_coordinate ? `<button type="button" class="mini" data-automation-edit="${item.id}">Edytuj</button><button type="button" class="mini danger-text" data-automation-delete="${item.id}">Usuń</button>` : ''}</article>`).join('') || '<div class="empty">Brak reguł automatyzacji.</div>'}</div></section>`;
+  $('#automation-add')?.addEventListener('click', () => openAutomationEditor());
+  $('#automation-run')?.addEventListener('click', async () => { try { const result = await api('/api/automation-rules/run', { method: 'POST' }); toast(`Wykonano ${result.executed} nowych działań`); await loadData(true); } catch (error) { toast(error.message, true); } });
+  $$('[data-automation-edit]').forEach(button => button.addEventListener('click', () => openAutomationEditor(rows.find(item => item.id === Number(button.dataset.automationEdit)))));
+  $$('[data-automation-delete]').forEach(button => button.addEventListener('click', async () => { if (!await uiConfirm('Usuń regułę', 'Dotychczasowe zmiany i powiadomienia pozostaną w historii.', 'Usuń', true)) return; try { await api(`/api/automation-rules/${button.dataset.automationDelete}`, { method: 'DELETE' }); await reloadOperations(); } catch (error) { toast(error.message, true); } }));
+}
+
+async function openAutomationEditor(existing = null) {
+  const enabled = new Set(existing?.entity_types || ['task', 'point']);
+  const result = await uiForm({ title: existing ? 'Edytuj regułę' : 'Nowa reguła automatyzacji', submitLabel: 'Zapisz regułę', fields: [
+    { name: 'name', label: 'Nazwa', value: existing?.name || '', required: true, full: true },
+    { name: 'trigger_type', label: 'Warunek', type: 'select', value: existing?.trigger_type || 'overdue', options: [{ value: 'overdue', label: 'Przekroczony deadline' }, { value: 'due_soon', label: 'Deadline w ciągu N dni' }, { value: 'reminder_due', label: 'Nadszedł termin przypomnienia' }, { value: 'unassigned', label: 'Brak odpowiedzialnego' }, { value: 'blocked', label: 'Element zablokowany' }] },
+    { name: 'days_offset', label: 'Liczba dni dla „termin blisko”', type: 'number', value: existing?.days_offset ?? 3 },
+    { name: 'action_type', label: 'Działanie', type: 'select', value: existing?.action_type || 'notify_assignees', options: [{ value: 'notify_assignees', label: 'Powiadom odpowiedzialnych' }, { value: 'notify_managers', label: 'Powiadom managerów' }, { value: 'escalate_priority', label: 'Podnieś priorytet' }] },
+    { name: 'target_priority', label: 'Priorytet po eskalacji', type: 'select', value: existing?.target_priority || 'High', options: ['Low', 'Medium', 'High', 'Critical'] },
+    ...['status', 'task', 'point', 'goal'].map(type => ({ name: `type_${type}`, label: operationTypeNames[type], type: 'checkbox', value: enabled.has(type) })),
+    { name: 'active', label: 'Reguła aktywna', type: 'checkbox', value: existing ? Boolean(existing.active) : true }
+  ] });
+  if (!result) return;
+  const entity_types = ['status', 'task', 'point', 'goal'].filter(type => result[`type_${type}`]);
+  try { await api(existing ? `/api/automation-rules/${existing.id}` : '/api/automation-rules', { method: existing ? 'PATCH' : 'POST', body: JSON.stringify({ ...result, entity_types, active: result.active ? 1 : 0 }) }); toast('Reguła została zapisana'); await reloadOperations(); }
+  catch (error) { toast(error.message, true); }
+}
+
+function renderCommissioningTemplates() {
+  const rows = state.operations.commissioning_templates || [];
+  $('#operations-content').innerHTML = `<section class="operation-view"><header class="operation-head"><div><h2>Szablony uruchomieniowe</h2><p>Powtarzalne grupy funkcyjne wraz z elementami, podkategoriami i kompletem punktów statusu.</p></div>${state.operations.can_coordinate ? '<button type="button" class="primary" id="template-add">+ Utwórz z grupy</button>' : ''}</header><div class="template-grid">${rows.map(item => `<article class="template-card"><header><span><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.description || 'Szablon bez opisu')}</small></span><span class="badge ${item.active ? 'green' : 'gray'}">${item.active ? 'Aktywny' : 'Nieaktywny'}</span></header><div><span><b>${item.check_count}</b> punktów</span><span><b>${item.element_count}</b> elementów</span><span><b>${item.group_subcategory_count}</b> podkategorii</span></div>${state.operations.can_coordinate ? `<footer><button type="button" class="secondary" data-template-apply="${item.id}">Użyj szablonu</button><button type="button" class="mini" data-template-edit="${item.id}">Edytuj / odśwież</button><button type="button" class="mini danger-text" data-template-delete="${item.id}">Usuń</button></footer>` : ''}</article>`).join('') || '<div class="empty">Brak szablonów. Utwórz pierwszy z istniejącej grupy funkcyjnej.</div>'}</div></section>`;
+  $('#template-add')?.addEventListener('click', () => openTemplateEditor());
+  $$('[data-template-edit]').forEach(button => button.addEventListener('click', () => openTemplateEditor(rows.find(item => item.id === Number(button.dataset.templateEdit)))));
+  $$('[data-template-apply]').forEach(button => button.addEventListener('click', () => applyCommissioningTemplate(rows.find(item => item.id === Number(button.dataset.templateApply)))));
+  $$('[data-template-delete]').forEach(button => button.addEventListener('click', async () => { if (!await uiConfirm('Usuń szablon', 'Utworzone wcześniej grupy i punkty statusu pozostaną bez zmian.', 'Usuń', true)) return; try { await api(`/api/commissioning-templates/${button.dataset.templateDelete}`, { method: 'DELETE' }); await reloadOperations(); } catch (error) { toast(error.message, true); } }));
+}
+
+async function openTemplateEditor(existing = null) {
+  const groups = (state.config.function_groups || []).filter(group => group.check_count > 0);
+  const result = await uiForm({ title: existing ? 'Edytuj szablon uruchomieniowy' : 'Utwórz szablon z grupy', description: 'Wybór grupy źródłowej zapisuje aktualny komplet jej elementów, podkategorii i punktów.', submitLabel: 'Zapisz szablon', fields: [
+    { name: 'name', label: 'Nazwa szablonu', value: existing?.name || '', required: true, full: true },
+    { name: 'description', label: 'Opis zastosowania', type: 'textarea', value: existing?.description || '', full: true },
+    { name: 'source_function_group_id', label: existing ? 'Odśwież zawartość z grupy (opcjonalnie)' : 'Grupa źródłowa', type: 'select', value: '', options: [{ value: '', label: existing ? 'Zachowaj obecną zawartość' : 'Wybierz grupę' }, ...groups.map(group => ({ value: group.id, label: `${controllerLabel(group.controller)} · ${group.name} · ${group.check_count} pkt.` }))] },
+    { name: 'active', label: 'Szablon aktywny', type: 'checkbox', value: existing ? Boolean(existing.active) : true }
+  ] });
+  if (!result) return;
+  try { await api(existing ? `/api/commissioning-templates/${existing.id}` : '/api/commissioning-templates', { method: existing ? 'PATCH' : 'POST', body: JSON.stringify({ ...result, source_function_group_id: Number(result.source_function_group_id) || null, active: result.active ? 1 : 0 }) }); toast('Szablon został zapisany'); await reloadOperations(); }
+  catch (error) { toast(error.message, true); }
+}
+
+async function applyCommissioningTemplate(template) {
+  if (!template) return;
+  const result = await uiForm({ title: `Użyj szablonu „${template.name}”`, description: `Powstanie nowa grupa funkcyjna oraz ${template.check_count} punktów kontrolnych.`, submitLabel: 'Utwórz komplet statusu', fields: [
+    { name: 'controller', label: 'Sterownik docelowy', type: 'select', options: state.controllers.map(item => ({ value: item.code, label: item.display_name || item.code })) },
+    { name: 'group_name', label: 'Nazwa nowej grupy funkcyjnej', value: template.template?.source?.name || '', required: true }
+  ] });
+  if (!result) return;
+  try { const created = await api(`/api/commissioning-templates/${template.id}/apply`, { method: 'POST', body: JSON.stringify(result) }); toast(`Utworzono grupę i ${created.statuses_created} punktów statusu`); await loadData(true); }
+  catch (error) { toast(error.message, true); }
 }
 
 function canCoordinate() { return ['moderator', 'project_admin', 'system_admin'].includes(state.me.role); }
@@ -1450,12 +1723,13 @@ function renderStatus() {
     <article class="metric-card"><header><span>Postęp</span><span>${d.progress || 0}%</span></header><strong>${d.done || 0}/${d.total || 0}</strong><div class="progress"><i style="width:${d.progress || 0}%"></i></div></article>
     <article class="metric-card"><header><span>W trakcie</span></header><strong>${d.in_progress || 0}</strong></article>
     <article class="metric-card"><header><span>Zablokowane / NOK</span></header><strong>${d.blocked || 0}</strong></article>
-  </div><div class="panel" id="status-panel"><div class="toolbar"><strong>Lista statusowa</strong><button id="quick-status-edit" class="secondary">Szybka edycja</button><button type="button" class="mini" data-clear-filters>Wyczyść filtry</button><label>Grupuj <select id="status-group"><option value="function_group_name">Grupa funkcyjna</option><option value="function_group_subcategory_name">Podkategoria grupy</option><option value="category">Kategoria</option><option value="subcategory">Podkategoria statusu</option><option value="status">Status</option><option value="">Bez grupowania</option></select></label></div>
+  </div>${savedViewsToolbar('status')}<div class="panel" id="status-panel"><div class="toolbar"><strong>Lista statusowa</strong><button id="quick-status-edit" class="secondary">Szybka edycja</button><button type="button" class="mini" data-clear-filters>Wyczyść filtry</button><label>Grupuj <select id="status-group"><option value="function_group_name">Grupa funkcyjna</option><option value="function_group_subcategory_name">Podkategoria grupy</option><option value="category">Kategoria</option><option value="subcategory">Podkategoria statusu</option><option value="status">Status</option><option value="">Bez grupowania</option></select></label></div>
   <div class="tablewrap"><table><thead><tr>${columns.map(column => `<th class="sortable" data-column="${column.key}" data-sort="${column.key}" data-label="${column.label}">${column.label}${sortMarker('status', column.key)}</th>`).join('')}</tr>${tableFilterRow(columns)}</thead><tbody id="status-body"></tbody></table></div></div>`;
   $('#status-group').value = state.grouping.status;
   $('#quick-status-edit').addEventListener('click', openQuickStatusEditor);
   $('#status-group').addEventListener('change', event => { state.grouping.status = event.target.value; drawStatusRows(); });
   bindTableFilters('#status-panel', drawStatusRows);
+  bindSavedViews('status', '#status-panel', drawStatusRows);
   $$('#status-panel th[data-sort]').forEach(th => th.addEventListener('click', () => updateSort('status', th.dataset.sort)));
   drawStatusRows();
 }
@@ -1613,15 +1887,16 @@ async function saveBulkStatus(event) {
 function taskCard(item) {
   const time = taskTimeLabel(item);
   const allChecks = [...(item.checklist || []), ...(item.scope_checklist || [])];
-  return `<article class="task-card compact" draggable="true" data-task-id="${item.id}"><div class="task-card-head"><h3>${escapeHtml(item.title)}</h3><span class="progress-value ${item.progress >= 100 ? 'done' : item.progress > 0 ? 'active' : ''}"><b>${item.progress || 0}%</b><i><u style="width:${item.progress || 0}%"></u></i></span></div><p>${escapeHtml(controllerLabel(item))} · ${escapeHtml(item.function_group_name || item.other_object || (item.scope_is_group ? 'zadanie obszarowe' : 'bez grupy'))}${item.function_group_element_name ? ` → ${escapeHtml(item.function_group_element_name)}` : ''}</p><div class="cardmeta"><span>${escapeHtml(item.owner_name || 'Nieprzypisane')}</span><span>${item.due_date ? displayDate(item.due_date) : 'bez deadline’u'}</span></div>${time ? `<span class="time-chip ${time.overdue ? 'overdue' : ''}">${escapeHtml(time.label)}</span>` : ''}<div class="checkbar"><i style="width:${item.progress || 0}%"></i></div><div class="task-card-foot"><button type="button" class="task-check-count" data-checklist-task="${item.id}">${allChecks.filter(entry => entry.done).length}/${allChecks.length} punktów kontroli</button><span>${escapeHtml(item.category || 'Bez kategorii')} · utworzył ${escapeHtml(item.created_by_name || 'dane historyczne')}</span></div></article>`;
+  return `<article class="task-card compact" draggable="true" data-task-id="${item.id}"><div class="task-card-head"><h3>${escapeHtml(item.title)}</h3><span class="progress-value ${item.progress >= 100 ? 'done' : item.progress > 0 ? 'active' : ''}"><b>${item.progress || 0}%</b><i><u style="width:${item.progress || 0}%"></u></i></span></div><p>${escapeHtml(controllerLabel(item))} · ${escapeHtml(item.function_group_name || item.other_object || (item.scope_is_group ? 'zadanie obszarowe' : 'bez grupy'))}${item.function_group_element_name ? ` → ${escapeHtml(item.function_group_element_name)}` : ''}</p><div class="cardmeta"><span>${escapeHtml(item.owner_name || 'Nieprzypisane')}</span><span>${item.due_date ? displayDate(item.due_date) : 'bez deadline’u'}</span></div>${item.blocked_by_dependencies ? `<span class="dependency-warning">Zablokowane przez ${item.blocked_by_dependencies} ${item.blocked_by_dependencies === 1 ? 'zadanie' : 'zadania'}</span>` : ''}${time ? `<span class="time-chip ${time.overdue ? 'overdue' : ''}">${escapeHtml(time.label)}</span>` : ''}<div class="checkbar"><i style="width:${item.progress || 0}%"></i></div><div class="task-card-foot"><button type="button" class="task-check-count" data-checklist-task="${item.id}">${allChecks.filter(entry => entry.done).length}/${allChecks.length} punktów kontroli</button><span>${escapeHtml(item.category || 'Bez kategorii')} · utworzył ${escapeHtml(item.created_by_name || 'dane historyczne')}</span></div></article>`;
 }
 
 function renderTasks() {
-  $('#content').innerHTML = `<div class="panel"><div class="toolbar" id="task-filter-bar"><strong>Zadania</strong><button id="task-board-mode" class="secondary ${state.taskMode === 'board' ? 'active-toggle' : ''}">Tablica</button><button id="task-list-mode" class="secondary ${state.taskMode === 'list' ? 'active-toggle' : ''}">Lista</button><input id="task-search" placeholder="Szukaj we wszystkich polach">${multiFilterControl('toolbar_category', taskCategories(), 'Wszystkie kategorie')}${multiFilterControl('toolbar_requirement', (state.config.requirements || []).map(item => item.name), 'Każde zapotrzebowanie')}${state.taskMode === 'list' ? `<label class="toggle-line compact-toggle"><input type="checkbox" id="task-show-completed" ${state.taskShowCompleted ? 'checked' : ''}> Pokaż ukończone</label>` : ''}</div></div><div id="task-content"></div>`;
+  $('#content').innerHTML = `${savedViewsToolbar('tasks')}<div class="panel"><div class="toolbar" id="task-filter-bar"><strong>Zadania</strong><button id="task-board-mode" class="secondary ${state.taskMode === 'board' ? 'active-toggle' : ''}">Tablica</button><button id="task-list-mode" class="secondary ${state.taskMode === 'list' ? 'active-toggle' : ''}">Lista</button><input id="task-search" placeholder="Szukaj we wszystkich polach">${multiFilterControl('toolbar_category', taskCategories(), 'Wszystkie kategorie')}${multiFilterControl('toolbar_requirement', (state.config.requirements || []).map(item => item.name), 'Każde zapotrzebowanie')}${state.taskMode === 'list' ? `<label class="toggle-line compact-toggle"><input type="checkbox" id="task-show-completed" ${state.taskShowCompleted ? 'checked' : ''}> Pokaż ukończone</label>` : ''}</div></div><div id="task-content"></div>`;
   $('#task-board-mode').addEventListener('click', () => { state.taskMode = 'board'; renderTasks(); });
   $('#task-list-mode').addEventListener('click', () => { state.taskMode = 'list'; renderTasks(); });
   $('#task-search').addEventListener('input', drawTasks);
   bindTableFilters('#task-filter-bar', drawTasks);
+  bindSavedViews('tasks', '#task-filter-bar', drawTasks);
   $('#task-show-completed')?.addEventListener('change', event => { state.taskShowCompleted = event.target.checked; drawTasks(); });
   drawTasks();
 }
@@ -1731,10 +2006,11 @@ function renderGoals() {
 }
 
 function renderPoints() {
-  $('#content').innerHTML = `<div class="panel"><div class="toolbar"><strong>Otwarte punkty</strong><button id="point-list-mode" class="secondary ${state.pointMode === 'list' ? 'active-toggle' : ''}">Pełna lista</button><button id="point-reminder-mode" class="secondary ${state.pointMode === 'reminders' ? 'active-toggle' : ''}">Przypomnienia</button></div></div><div id="point-content"></div>`;
+  $('#content').innerHTML = `${savedViewsToolbar('points')}<div class="panel"><div class="toolbar"><strong>Otwarte punkty</strong><button id="point-list-mode" class="secondary ${state.pointMode === 'list' ? 'active-toggle' : ''}">Pełna lista</button><button id="point-reminder-mode" class="secondary ${state.pointMode === 'reminders' ? 'active-toggle' : ''}">Przypomnienia</button></div></div><div id="point-content"></div>`;
   $('#point-list-mode').addEventListener('click', () => { state.pointMode = 'list'; renderPoints(); });
   $('#point-reminder-mode').addEventListener('click', () => { state.pointMode = 'reminders'; renderPoints(); });
   if (state.pointMode === 'reminders') drawReminderView(); else drawPointList();
+  if (state.pointMode === 'reminders') bindSavedViews('points', '#point-content', drawReminderView);
 }
 
 function drawPointList() {
@@ -1746,6 +2022,7 @@ function drawPointList() {
   ];
   $('#point-content').innerHTML = `<div class="panel" id="points-panel"><div class="toolbar"><strong>Lista punktów</strong><input data-filter-text="_all" placeholder="Szukaj we wszystkich informacjach"><button type="button" class="mini" data-clear-filters>Wyczyść filtry</button></div><div class="tablewrap"><table><thead><tr>${columns.map(column => `<th class="sortable" data-column="${column.key}" data-sort="${column.key}" data-label="${column.label}">${column.label}${sortMarker('points', column.key)}</th>`).join('')}</tr>${tableFilterRow(columns)}</thead><tbody id="points-body"></tbody></table></div></div>`;
   bindTableFilters('#points-panel', drawPointRows);
+  bindSavedViews('points', '#points-panel', drawPointRows);
   $$('#points-panel th[data-sort]').forEach(th => th.addEventListener('click', () => updateSort('points', th.dataset.sort)));
   drawPointRows();
 }
@@ -1912,6 +2189,8 @@ function renderSettings() {
     ...(systemAdmin ? [['projects', 'Projekty systemu', 'Globalne projekty, dostęp i bezpieczne usuwanie', state.projects.length, '▦']] : []),
     ['hierarchy', 'Hierarchia obszarów / sterowników', 'Projekt → obszar → podobszar → sterownik', state.controllerGroups.length + state.controllers.length, '⌘'],
     ['function_groups', 'Grupy funkcyjne i punkty statusu', 'Stacje, roboty, elementy oraz szablony kontroli', state.config.function_groups.length, '⚙'],
+    ['ops_templates', 'Szablony uruchomieniowe', 'Powtarzalne komplety grup, elementów i punktów statusu', state.operations?.commissioning_templates?.length || 0, '▧'],
+    ['ops_automations', 'Reguły automatyzacji', 'Powiadomienia i eskalacje według terminów oraz blokad', state.operations?.automation_rules?.length || 0, '⌁'],
     ['status_categories', 'Kategorie statusu', 'Kategorie i podkategorie w ustalonej kolejności', state.config.categories.length, '▤'],
     ['task_categories', 'Kategorie zadań', 'Niezależny słownik dla modułu Zadania', state.config.task_categories.length, '✓'],
     ['users', 'Użytkownicy projektu', 'Role, dostęp, Planner i przypisane obszary', state.users.length, '♙'],
@@ -1923,7 +2202,12 @@ function renderSettings() {
     ...(admin ? [['backup', 'Backup projektu', 'Pobieranie i odtwarzanie kompletnego projektu', '', '⇄'], ['exports', 'Szablony eksportu', 'Predefiniowane raporty statusu do Excel', (state.config.export_templates || []).length, '↗']] : [])
   ];
   $('#content').innerHTML = `<section class="settings-home"><header><div><span class="eyebrow">Ustawienia projektu</span><h2>Wybierz obszar konfiguracji</h2><p>Każda grupa ustawień otwiera się w osobnym, trwałym oknie. Zapis nie zamyka edytowanego widoku.</p></div><span class="settings-role">${escapeHtml(roleName(state.me.role))}</span></header><div class="settings-launchers">${launchers.map(([key, title, description, count, icon]) => `<button type="button" class="settings-launcher" data-config-panel="${key}"><span class="settings-launcher-icon">${icon}</span><span><b>${escapeHtml(title)}</b><small>${escapeHtml(description)}</small></span>${count !== '' ? `<em>${count}</em>` : ''}<i>→</i></button>`).join('')}</div></section>`;
-  $$('[data-config-panel]').forEach(button => button.addEventListener('click', () => openConfigPanel(button.dataset.configPanel)));
+  $$('[data-config-panel]').forEach(button => button.addEventListener('click', () => {
+    if (button.dataset.configPanel === 'ops_templates' || button.dataset.configPanel === 'ops_automations') {
+      state.operationsTab = button.dataset.configPanel === 'ops_templates' ? 'templates' : 'automations'; setView('operations'); return;
+    }
+    openConfigPanel(button.dataset.configPanel);
+  }));
   if ($('#config-full-dialog').open && state.configPanel) refreshConfigPanel();
 }
 
@@ -2424,7 +2708,7 @@ const formDefinitions = {
   ] },
   tasks: { endpoint: '/api/tasks', title: 'zadanie', fields: [
     ['hierarchy_target', 'Zakres w hierarchii projektu', 'hierarchy-target'], ['title', 'Tytuł', 'wide-text'], ['description', 'Opis', 'textarea'], ['info_link', 'Dodatkowe informacje / link', 'wide-text'],
-    ['direct_assignee_user_ids', 'Odpowiedzialni', 'users'], ['checklist', 'Lista kontrolna', 'checklist'], ['scope_checklist', 'Kontrola sterowników w zakresie', 'scope-checklist'],
+    ['direct_assignee_user_ids', 'Odpowiedzialni', 'users'], ['dependency_task_ids', 'Zależności — zadania wymagane wcześniej', 'task-dependencies'], ['checklist', 'Lista kontrolna', 'checklist'], ['scope_checklist', 'Kontrola sterowników w zakresie', 'scope-checklist'],
     ['function_group_id', 'Grupa funkcyjna', 'function-group'], ['function_group_element_id', 'Element grupy funkcyjnej', 'function-element'], ['other_object', 'Inne (gdy nie dotyczy grupy)'],
     ['status', 'Status', 'select', ['To do', 'In progress', 'Done']], ['priority', 'Priorytet', 'select', ['Low', 'Medium', 'High', 'Critical']],
     ['start_date', 'Planowany start', 'date'], ['due_date', 'Deadline', 'date'], ['category', 'Kategoria zadania', 'category', 'task'], ['subcategory', 'Podkategoria zadania', 'subcategory', 'task'], ['requirement_ids', 'Dodatkowe zapotrzebowanie', 'requirements'],
@@ -2465,6 +2749,10 @@ async function openRecord(type, record = null, prefill = null, duplicateSource =
       const [status, task, point] = await Promise.all([api('/api/status?controller=all'), api('/api/tasks?controller=all'), api('/api/open-points?controller=all')]);
       state.goalPickerCollections = { status, task, point };
     } catch { state.goalPickerCollections = { status: state.status, task: state.tasks, point: state.points }; }
+  }
+  if (type === 'tasks') {
+    try { state.taskDependencyOptions = await api('/api/tasks?controller=all'); }
+    catch { state.taskDependencyOptions = state.tasks; }
   }
   state.dialog = { type, record, prefill, duplicateSource, auditLoaded: false };
   state.goalDraftLinks = source?.links ? source.links.map(link => ({ entity_type: link.entity_type, entity_id: Number(link.entity_id) })) : [];
@@ -2587,6 +2875,7 @@ function fieldHtml([name, label, type = 'text', extra], record, formType = '') {
   if (type === 'multi-links') return multiLinksField(extra);
   if (type === 'mentions') return mentionsField(record);
   if (type === 'requirements') return requirementsField(record, name, label);
+  if (type === 'task-dependencies') return taskDependenciesField(record);
   if (type === 'checklist') return checklistField(record);
   if (type === 'scope-checklist') return scopeChecklistField(record);
   if (type === 'goal-links') return goalLinksField();
@@ -2649,6 +2938,14 @@ function requirementsField(record, name = 'requirement_ids', label = 'Dodatkowe 
   const items = state.config.requirements || [];
   const selectedNames = items.filter(item => selected.has(item.id)).map(item => item.name);
   return `<div class="field full requirement-field"><label>${escapeHtml(label)}</label><details class="multi-user-select" data-empty-label="Brak dodatkowych wymagań"><summary>${selectedNames.length ? `${selectedNames.length} · ${escapeHtml(selectedNames.join(', '))}` : 'Brak dodatkowych wymagań'}</summary><div class="mentions requirement-picks">${items.map(item => `<label class="mention" title="${escapeHtml(item.description || '')}"><input type="checkbox" name="${name}" value="${item.id}" ${selected.has(item.id) ? 'checked' : ''}><span><b>${escapeHtml(item.name)}</b>${item.description ? `<small>${escapeHtml(item.description)}</small>` : ''}</span></label>`).join('') || '<span class="form-hint">Lista jest pusta. Dodaj wymagania w Konfiguracji.</span>'}</div></details></div>`;
+}
+
+function taskDependenciesField(record) {
+  const selected = new Set((record?.dependency_task_ids || []).map(Number));
+  const tasks = (state.taskDependencyOptions.length ? state.taskDependencyOptions : state.tasks).filter(item => Number(item.id) !== Number(record?.id));
+  const selectedNames = tasks.filter(item => selected.has(Number(item.id))).map(item => item.title);
+  const rows = [...tasks].sort((a, b) => controllerHierarchyOrder(a) - controllerHierarchyOrder(b) || String(a.title).localeCompare(String(b.title), 'pl', { numeric: true }));
+  return `<div class="field full task-dependency-field"><label>Zależności — zadania wymagane wcześniej</label><details class="multi-user-select" data-empty-label="Brak zależności"><summary>${selectedNames.length ? `${selectedNames.length} · ${escapeHtml(selectedNames.join(', '))}` : 'Brak zależności'}</summary><div class="dependency-picks">${rows.map(item => `<label class="mention"><input type="checkbox" name="dependency_task_ids" value="${item.id}" ${selected.has(Number(item.id)) ? 'checked' : ''}><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(controllerLabel(item) || 'Cały projekt')} · ${escapeHtml(item.status)}</small></span></label>`).join('') || '<span class="form-hint">Brak innych zadań w projekcie.</span>'}</div></details></div>`;
 }
 
 function multiLinksField(allowedTypes) {
@@ -2855,14 +3152,15 @@ function selectionCollections() {
 async function openEntitySelection(context) {
   const labels = { status: 'Status', task: 'Zadania', point: 'Otwarte punkty', goal: 'Cele', note: 'Dziennik' };
   state.selectionContext = context;
-  state.selectionDraft = [];
+  state.selectionDraft = [...new Map((context.initial || []).map(item => [`${item.entity_type}:${Number(item.entity_id)}`, { entity_type: item.entity_type, entity_id: Number(item.entity_id) }])).values()];
   $('#entity-selection-search').value = '';
   $('#entity-selection-type').innerHTML = `<option value="all">Wszystkie typy</option>${context.allowed.map(type => `<option value="${type}">${labels[type]}</option>`).join('')}`;
-  $('#entity-selection-title').textContent = context.mode === 'planner' ? 'Przypisz pracę pracownikowi' : 'Dodaj istniejące elementy do dnia';
+  $('#entity-selection-title').textContent = context.mode === 'planner' ? 'Przypisz pracę pracownikowi' : context.mode === 'handover' ? 'Elementy przekazania zmiany' : 'Dodaj istniejące elementy do dnia';
   const user = context.userId ? state.users.find(item => item.id === context.userId) : null;
   $('#entity-selection-description').textContent = context.mode === 'planner'
     ? `${user?.display_name || 'Pracownik'} · ${displayDate(context.date)} · wybór przypisze osobę i planowany start.`
-    : `${displayDate(context.date)} · wybrane elementy pojawią się w tym dniu bez zmiany ich terminów.`;
+    : context.mode === 'handover' ? 'Wybierz tematy, które następna zmiana ma przejąć lub znać.'
+      : `${displayDate(context.date)} · wybrane elementy pojawią się w tym dniu bez zmiany ich terminów.`;
   $('#entity-selection-dialog').showModal();
   $('#entity-selection-content').innerHTML = '<div class="loading">Ładowanie elementów całego projektu…</div>';
   try {
@@ -2912,11 +3210,14 @@ async function applyEntitySelection() {
   button.disabled = true;
   try {
     if (context.mode === 'planner') await api('/api/planner/assign-work', { method: 'POST', body: JSON.stringify({ user_id: context.userId, plan_date: context.date, items: state.selectionDraft }) });
+    else if (context.mode === 'handover') await context.onApply(state.selectionDraft.map(item => ({ ...item })));
     else await api('/api/calendar/items', { method: 'POST', body: JSON.stringify({ calendar_date: context.date, items: state.selectionDraft }) });
     const count = state.selectionDraft.length;
     closeEntitySelection();
-    toast(`${count} elementów zostało ${context.mode === 'planner' ? 'przypisanych' : 'dodanych do kalendarza'}`);
-    await loadData();
+    if (context.mode !== 'handover') {
+      toast(`${count} elementów zostało ${context.mode === 'planner' ? 'przypisanych' : 'dodanych do kalendarza'}`);
+      await loadData();
+    }
   } catch (error) { toast(error.message, true); }
   finally { button.disabled = false; }
 }
@@ -2978,7 +3279,7 @@ function fieldLabel(field) { return ({
   due_date: 'Deadline', reminder_date: 'Przypomnienie', start_date: 'Planowany start', note_date: 'Data wpisu', checked_on: 'Data sprawdzenia', checked_by: 'Sprawdził',
   current_note: 'Aktualna notatka', environment: 'Środowisko', criticality: 'Krytyczność', evidence_link: 'Dowód / link', info_link: 'Dodatkowe informacje / link',
   impact: 'Wpływ', waiting_for: 'Oczekiwanie na', next_action: 'Następny krok', shift: 'Zmiana', type: 'Typ wpisu', content: 'Treść', author: 'Autor', comment: 'Dodany komentarz',
-  linked_entity_id: 'Powiązany element', linked_entity_type: 'Typ powiązania', checklist: 'Lista kontrolna / podzadania', scope_checklist: 'Kontrola sterowników w zakresie', links: 'Powiązania', requirement_ids: 'Dodatkowe zapotrzebowanie'
+  linked_entity_id: 'Powiązany element', linked_entity_type: 'Typ powiązania', checklist: 'Lista kontrolna / podzadania', scope_checklist: 'Kontrola sterowników w zakresie', links: 'Powiązania', requirement_ids: 'Dodatkowe zapotrzebowanie', dependency_task_ids: 'Zależności zadania'
 })[field] || field.replaceAll('_', ' '); }
 
 function auditUserName(id) { return state.users.find(user => user.id === Number(id))?.display_name || 'Nieprzypisane'; }
@@ -2995,6 +3296,7 @@ function formatAuditValue(field, value) {
   if (field === 'function_group_subcategory_id') return state.config.function_groups.flatMap(item => item.subcategories || []).find(item => item.id === Number(value))?.name || 'Bez podkategorii';
   if (field === 'links') return (value || []).map(auditLinkName).join(', ') || '—';
   if (field === 'requirement_ids') return (value || []).map(id => (state.config.requirements || []).find(item => item.id === Number(id))?.name || `Usunięte wymaganie`).join(', ') || '—';
+  if (field === 'dependency_task_ids') return (value || []).map(id => (state.taskDependencyOptions.length ? state.taskDependencyOptions : state.tasks).find(item => item.id === Number(id))?.title || 'Usunięte zadanie').join(', ') || '—';
   if (['due_date', 'reminder_date', 'start_date', 'note_date', 'checked_on'].includes(field)) return displayDate(String(value).slice(0, 10));
   if (Array.isArray(value)) return value.map(item => typeof item === 'object' ? Object.values(item).filter(part => typeof part !== 'object' && part !== null).join(' · ') : String(item)).join(', ') || '—';
   if (typeof value === 'object') return Object.entries(value).map(([key, item]) => `${fieldLabel(key)}: ${String(item ?? '—')}`).join('; ');
@@ -3039,6 +3341,7 @@ async function saveRecord(event) {
   const input = Object.fromEntries(formData);
   input.mentioned_user_ids = formData.getAll('mentioned_user_ids').map(Number);
   input.direct_assignee_user_ids = formData.getAll('direct_assignee_user_ids').map(Number);
+  input.dependency_task_ids = formData.getAll('dependency_task_ids').map(Number);
   input.responsible_user_ids = formData.getAll('responsible_user_ids').map(Number);
   input.requirement_ids = formData.getAll('requirement_ids').map(Number);
   input.scope_group_ids = formData.getAll('scope_group_ids').map(Number);

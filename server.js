@@ -83,6 +83,43 @@ async function handleProjectApi(request, response, url, user) {
   if (method === 'GET' && path === '/api/audit') return json(response, 200, repository.audit(url.searchParams.get('type'), Number(url.searchParams.get('id'))));
   if (method === 'GET' && path === '/api/history') return json(response, 200, repository.history({ types: url.searchParams.getAll('type'), limit: url.searchParams.get('limit') }));
   if (method === 'GET' && path === '/api/daily-summary') return json(response, 200, repository.dailySummary(url.searchParams.get('from'), url.searchParams.get('to'), user));
+  if (method === 'GET' && path === '/api/saved-views') return json(response, 200, repository.savedViews(user));
+  if (method === 'POST' && path === '/api/saved-views') return json(response, 201, repository.saveSavedView(null, await readJson(request), user));
+  let savedViewId = numericId(path, '/api/saved-views');
+  if (savedViewId !== null) {
+    if (method === 'PATCH') return json(response, 200, repository.saveSavedView(savedViewId, await readJson(request), user));
+    if (method === 'DELETE') { repository.deleteSavedView(savedViewId, user); response.writeHead(204); return response.end(); }
+  }
+  if (method === 'GET' && path === '/api/operations') return json(response, 200, repository.operations(user));
+  if (method === 'PATCH' && path === '/api/triage/batch') { requireRole(user, 'moderator'); return json(response, 200, repository.triageBatch(await readJson(request), user)); }
+  if (method === 'GET' && path === '/api/handovers') return json(response, 200, repository.handovers(user));
+  if (method === 'POST' && path === '/api/handovers') return json(response, 201, repository.saveHandover(null, await readJson(request), user));
+  const handoverAccept = path.match(/^\/api\/handovers\/(\d+)\/accept$/);
+  if (handoverAccept && method === 'POST') return json(response, 200, repository.acceptHandover(Number(handoverAccept[1]), user));
+  const handoverId = numericId(path, '/api/handovers');
+  if (handoverId !== null) {
+    if (method === 'PATCH') return json(response, 200, repository.saveHandover(handoverId, await readJson(request), user));
+    if (method === 'DELETE') { repository.deleteHandover(handoverId, user); response.writeHead(204); return response.end(); }
+  }
+  if (method === 'GET' && path === '/api/automation-rules') return json(response, 200, repository.automationRules());
+  if (method === 'POST' && path === '/api/automation-rules') { requireRole(user, 'moderator'); return json(response, 201, repository.saveAutomationRule(null, await readJson(request), user)); }
+  if (method === 'POST' && path === '/api/automation-rules/run') { requireRole(user, 'moderator'); return json(response, 200, repository.runAutomations(user)); }
+  const automationRuleId = numericId(path, '/api/automation-rules');
+  if (automationRuleId !== null) {
+    requireRole(user, 'moderator');
+    if (method === 'PATCH') return json(response, 200, repository.saveAutomationRule(automationRuleId, await readJson(request), user));
+    if (method === 'DELETE') { repository.deleteAutomationRule(automationRuleId); response.writeHead(204); return response.end(); }
+  }
+  if (method === 'GET' && path === '/api/commissioning-templates') return json(response, 200, repository.commissioningTemplates());
+  if (method === 'POST' && path === '/api/commissioning-templates') { requireRole(user, 'moderator'); return json(response, 201, repository.saveCommissioningTemplate(null, await readJson(request), user)); }
+  const templateApply = path.match(/^\/api\/commissioning-templates\/(\d+)\/apply$/);
+  if (templateApply && method === 'POST') { requireRole(user, 'moderator'); return json(response, 201, repository.applyCommissioningTemplate(Number(templateApply[1]), await readJson(request), user)); }
+  const commissioningTemplateId = numericId(path, '/api/commissioning-templates');
+  if (commissioningTemplateId !== null) {
+    requireRole(user, 'moderator');
+    if (method === 'PATCH') return json(response, 200, repository.saveCommissioningTemplate(commissioningTemplateId, await readJson(request), user));
+    if (method === 'DELETE') { repository.deleteCommissioningTemplate(commissioningTemplateId); response.writeHead(204); return response.end(); }
+  }
   if (method === 'GET' && path === '/api/planner') return json(response, 200, repository.planner(url.searchParams.get('from'), url.searchParams.get('to'), user));
   if (method === 'PUT' && path === '/api/planner/day') { requireRole(user, 'moderator'); return json(response, 200, repository.savePlannerDay(await readJson(request), user)); }
   if (method === 'POST' && path === '/api/planner/move') { requireRole(user, 'moderator'); return json(response, 200, repository.movePlannerEntry(await readJson(request), user)); }
@@ -268,7 +305,7 @@ async function handleProjectApi(request, response, url, user) {
 
 async function handleApi(request, response, url) {
   const method = request.method || 'GET'; const path = url.pathname;
-  if (method === 'GET' && path === '/api/health') return json(response, 200, { status: 'ok', version: 11, release: '11.0.0' });
+  if (method === 'GET' && path === '/api/health') return json(response, 200, { status: 'ok', version: 12, release: '12.0.0' });
   if (method === 'POST' && path === '/api/login') {
     const input = await readJson(request); const account = repository.authenticate(input.username);
     if (!account || !verifyPassword(input.password || '', account.password_hash)) return json(response, 401, { error: 'Nieprawidłowy login lub hasło' });
@@ -333,6 +370,20 @@ export const server = createServer(async (request, response) => {
     return json(response, statusCode, { error: statusCode === 500 ? `Nieoczekiwany błąd serwera: ${error.message}` : error.message });
   }
 });
-if (process.argv[1] === fileURLToPath(import.meta.url)) server.listen(port, '0.0.0.0', () => console.log(`PLC Commissioning Hub V11.0.0 running on port ${port}`));
-function shutdown() { server.close(() => { repository.close(); process.exit(0); }); }
+let automationTimer = null;
+let automationStartupTimer = null;
+function runScheduledAutomations() {
+  for (const projectId of repository.activeProjectIds()) {
+    try {
+      const result = repository.withProject(projectId, () => repository.runAutomations());
+      if (result.executed) broadcastProjectChange(projectId, { method: 'AUTOMATION', path: '/api/automation-rules/run', at: new Date().toISOString(), client_id: '', user_id: null });
+    } catch (error) { console.error(`Automation failed for project ${projectId}:`, error); }
+  }
+}
+if (process.argv[1] === fileURLToPath(import.meta.url)) server.listen(port, '0.0.0.0', () => {
+  console.log(`PLC Commissioning Hub V12.0.0 running on port ${port}`);
+  automationStartupTimer = setTimeout(runScheduledAutomations, 5000); automationStartupTimer.unref();
+  automationTimer = setInterval(runScheduledAutomations, 5 * 60 * 1000); automationTimer.unref();
+});
+function shutdown() { clearTimeout(automationStartupTimer); clearInterval(automationTimer); server.close(() => { repository.close(); process.exit(0); }); }
 process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);
