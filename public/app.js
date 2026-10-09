@@ -577,7 +577,46 @@ function bindShell() {
     if (!event.target.closest('#context-menu')) $('#context-menu').classList.add('hidden');
     document.querySelectorAll('details.table-filter-menu[open]').forEach(menu => { if (!menu.contains(event.target)) menu.open = false; });
   });
+  installDropdownLayers();
   installDialogOutsideClose();
+}
+
+function installDropdownLayers() {
+  const selector = 'details.table-filter-menu,details.multi-user-select,details.transfer-scope-picker';
+  const closeMenus = () => document.querySelectorAll(`${selector.split(',').map(part => `${part}[open]`).join(',')}`).forEach(menu => { menu.open = false; });
+  document.addEventListener('toggle', event => {
+    const menu = event.target;
+    if (!(menu instanceof HTMLDetailsElement) || !menu.matches(selector)) return;
+    const panel = menu.querySelector(':scope > div');
+    if (!panel || !('showPopover' in panel)) return;
+    if (!menu.open) { if (panel.matches(':popover-open')) panel.hidePopover(); return; }
+    document.querySelectorAll(selector).forEach(other => { if (other !== menu) other.open = false; });
+    panel.classList.add('dropdown-layer');
+    panel.setAttribute('popover', 'manual');
+    panel.showPopover();
+    const anchor = menu.querySelector('summary').getBoundingClientRect();
+    const width = Math.min(innerWidth - 16, Math.max(230, Math.min(420, anchor.width)));
+    const below = innerHeight - anchor.bottom - 12;
+    const above = anchor.top - 12;
+    const useBelow = below >= Math.min(260, panel.scrollHeight) || below >= above;
+    panel.style.setProperty('--dropdown-width', `${width}px`);
+    panel.style.setProperty('--dropdown-max-height', `${Math.max(40, Math.min(310, useBelow ? below : above))}px`);
+    panel.style.setProperty('--dropdown-left', `${Math.max(8, Math.min(innerWidth - width - 8, anchor.left))}px`);
+    panel.style.setProperty('--dropdown-top', `${useBelow ? anchor.bottom + 4 : Math.max(8, anchor.top - panel.getBoundingClientRect().height - 4)}px`);
+  }, true);
+  document.addEventListener('pointerdown', event => {
+    document.querySelectorAll(selector).forEach(menu => { if (menu.open && !menu.contains(event.target)) menu.open = false; });
+  }, true);
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && document.querySelector('.dropdown-layer:popover-open')) {
+      event.preventDefault(); closeMenus();
+    }
+  }, true);
+  document.addEventListener('close', event => {
+    if (event.target instanceof HTMLDialogElement) event.target.querySelectorAll(selector).forEach(menu => { menu.open = false; });
+  }, true);
+  document.addEventListener('scroll', event => { if (!event.target.closest?.('.dropdown-layer')) closeMenus(); }, true);
+  window.addEventListener('resize', closeMenus);
 }
 
 function fillScopeSelect(select, selected = 'all') {
