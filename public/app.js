@@ -434,14 +434,39 @@ function updateIdentity() {
   $('#reviews-nav').hidden = !state.me.current_project || !canCoordinate();
 }
 
+const navigationMedia = matchMedia('(max-width: 1024px)');
+
+function updateNavigationToggle() {
+  const mobile = navigationMedia.matches;
+  const expanded = mobile ? document.body.classList.contains('nav-open') : !document.body.classList.contains('sidebar-collapsed');
+  const label = expanded ? 'Zminimalizuj menu' : 'Rozwiń menu';
+  const toggle = $('#mobile-menu');
+  toggle.setAttribute('aria-expanded', String(expanded));
+  toggle.setAttribute('aria-label', label);
+  toggle.title = label;
+}
+
 function bindShell() {
-  if (!matchMedia('(max-width: 900px)').matches && localStorage.getItem('sidebar-expanded') !== '1') document.body.classList.add('sidebar-collapsed');
-  $$('#nav button').forEach(button => button.addEventListener('click', () => setView(button.dataset.view)));
-  $('#mobile-menu').addEventListener('click', () => {
-    if (matchMedia('(max-width: 900px)').matches) document.body.classList.toggle('nav-open');
-    else { document.body.classList.toggle('sidebar-collapsed'); localStorage.setItem('sidebar-expanded', document.body.classList.contains('sidebar-collapsed') ? '0' : '1'); }
+  if (navigationMedia.matches) document.body.classList.remove('sidebar-collapsed');
+  else document.body.classList.toggle('sidebar-collapsed', localStorage.getItem('sidebar-expanded') !== '1');
+  $$('#nav button').forEach(button => {
+    const label = button.querySelector('span:nth-child(2)')?.textContent.trim() || '';
+    button.title = label;
+    button.setAttribute('aria-label', label);
+    button.addEventListener('click', () => setView(button.dataset.view));
   });
-  $('#sidebar-backdrop').addEventListener('click', () => document.body.classList.remove('nav-open'));
+  $('#mobile-menu').addEventListener('click', () => {
+    if (navigationMedia.matches) document.body.classList.toggle('nav-open');
+    else { document.body.classList.toggle('sidebar-collapsed'); localStorage.setItem('sidebar-expanded', document.body.classList.contains('sidebar-collapsed') ? '0' : '1'); }
+    updateNavigationToggle();
+  });
+  $('#sidebar-backdrop').addEventListener('click', () => { document.body.classList.remove('nav-open'); updateNavigationToggle(); });
+  navigationMedia.addEventListener('change', event => {
+    document.body.classList.remove('nav-open');
+    document.body.classList.toggle('sidebar-collapsed', !event.matches && localStorage.getItem('sidebar-expanded') !== '1');
+    updateNavigationToggle();
+  });
+  updateNavigationToggle();
   $('#controller').addEventListener('change', async event => { state.controller = event.target.value; await loadData(); });
   $('#add').addEventListener('click', () => state.view === 'calendar' ? openCalendarAnnotation() : state.view === 'notes' ? openStatusTransferEditor() : openRecord(state.view));
   $('#close').addEventListener('click', () => $('#modal').close());
@@ -901,6 +926,7 @@ function setView(view) {
   if (view === 'announcements' && state.view !== 'announcements') { state.announcementLabelFilter = ''; state.announcementImportanceFilter = ''; }
   state.view = view;
   document.body.classList.remove('nav-open');
+  updateNavigationToggle();
   $$('#nav button').forEach(button => button.classList.toggle('active', button.dataset.view === view));
   render();
 }
