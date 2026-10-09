@@ -628,6 +628,8 @@ test('V9 supports requirements, guarded duplication, comments, pushes, calendar 
         start_date: '2026-10-08', due_date: '2026-10-11', reminder_date: '2026-10-09', requirement_ids: [requirement.id]
       }, admin);
       assert.deepEqual(point.requirement_ids, [requirement.id]);
+      const pointWithoutReminder = repository.savePoint(point.id, { ...point, controller: controller.code, reminder_date: null }, admin);
+      assert.equal(pointWithoutReminder.reminder_date, null);
       assert.equal(repository.calendar({ from: '2026-10-08', to: '2026-10-11', types: ['task'], only_mine: false }, admin).events.some(item => item.entity_id === task.id && item.start_date === '2026-10-08' && item.end_date === '2026-10-10'), true);
       const undated = repository.saveTask(null, { controller: controller.code, title: 'Bez dat V9' }, admin);
       assert.equal(repository.calendar({ from: '2026-10-01', to: '2026-10-31', types: ['task'], only_mine: false }, admin).events.some(item => item.entity_id === undated.id), false);

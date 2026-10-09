@@ -2069,7 +2069,11 @@ function inlineStatusBadge(type, item) {
 }
 
 function inlineTaskField(field, item, content, className = '') {
-  return `<button type="button" class="inline-task-edit ${className}" data-inline-task-field="${field}" data-id="${item.id}" title="Kliknij, aby szybko zmienić wartość">${content}</button>`;
+  return inlineEntityField('tasks', field, item, content, className);
+}
+
+function inlineEntityField(type, field, item, content, className = '') {
+  return `<button type="button" class="inline-task-edit ${className}" data-inline-entity-field="${field}" data-inline-entity-type="${type}" data-id="${item.id}" title="Kliknij, aby szybko zmienić wartość">${content}</button>`;
 }
 
 function positionInlinePopover(root, button) {
@@ -2079,13 +2083,40 @@ function positionInlinePopover(root, button) {
   root.style.top = `${anchor.bottom + bounds.height + 4 <= innerHeight - 8 ? anchor.bottom + 4 : Math.max(8, anchor.top - bounds.height - 4)}px`;
 }
 
-function taskQuickEditorContent(field, item) {
-  if (['start_date', 'due_date'].includes(field)) {
+const inlineEditDefinitions = {
+  tasks: { endpoint: '/api/tasks', fields: {
+    start_date: { label: 'Start', kind: 'date' }, due_date: { label: 'Deadline', kind: 'date' },
+    direct_assignee_user_ids: { label: 'Odpowiedzialni', kind: 'users' }, requirement_ids: { label: 'Zapotrzebowanie', kind: 'requirements' },
+    priority: { label: 'Priorytet', kind: 'select', values: ['Low', 'Medium', 'High', 'Critical'] }
+  } },
+  points: { endpoint: '/api/open-points', fields: {
+    status: { label: 'Status', kind: 'select', values: ['Open', 'Waiting', 'In progress', 'Closed'] },
+    waiting_for: { label: 'Oczekiwanie na', kind: 'select', values: () => options('waiting_for'), blank: '— brak —' },
+    owner_user_id: { label: 'Odpowiedzialny', kind: 'user' }, requirement_ids: { label: 'Zapotrzebowanie', kind: 'requirements' },
+    due_date: { label: 'Deadline', kind: 'date' }, reminder_date: { label: 'Przypomnienie', kind: 'date' }
+  } },
+  status: { endpoint: '/api/status', fields: {
+    criticality: { label: 'Krytyczność', kind: 'select', values: ['Low', 'Medium', 'High', 'Critical'] },
+    responsible_user_ids: { label: 'Odpowiedzialni', kind: 'users' }, requirement_ids: { label: 'Zapotrzebowanie', kind: 'requirements' }
+  } }
+};
+
+function inlineEditorContent(definition, field, item) {
+  if (definition.kind === 'date') {
     return `<input type="date" data-inline-task-value value="${escapeHtml(item[field] || '')}"><div class="inline-task-date-actions"><button type="button" data-inline-task-today>Dzisiaj</button><button type="button" data-inline-task-clear>Wyczyść</button></div>`;
   }
-  if (field === 'priority') return `<select data-inline-task-value>${selectOptions(['Low', 'Medium', 'High', 'Critical'], item.priority, null)}</select>`;
-  if (field === 'direct_assignee_user_ids') {
-    const selected = new Set((item.direct_assignee_user_ids || []).map(Number));
+  if (definition.kind === 'select') {
+    const configured = typeof definition.values === 'function' ? definition.values() : definition.values;
+    const values = [...configured];
+    if (item[field] && !values.some(value => String(typeof value === 'object' ? value.value : value) === String(item[field]))) values.unshift(item[field]);
+    return `<select data-inline-task-value>${selectOptions(values, item[field], definition.blank ?? null)}</select>`;
+  }
+  if (definition.kind === 'user') {
+    const users = assignableUsers([item[field]]);
+    return `<select data-inline-task-value>${selectOptions(users.map(user => ({ value: user.id, label: user.display_name })), item[field], 'Nieprzypisane')}</select>`;
+  }
+  if (definition.kind === 'users') {
+    const selected = new Set((item[field] || []).map(Number));
     const users = assignableUsers([...selected]);
     return `<div class="inline-task-choices">${users.map(user => `<label><input type="checkbox" data-inline-task-choice value="${user.id}" ${selected.has(Number(user.id)) ? 'checked' : ''}><span>${escapeHtml(user.display_name)}</span></label>`).join('') || '<span class="form-hint">Brak osób możliwych do przypisania.</span>'}</div>`;
   }
@@ -2094,17 +2125,19 @@ function taskQuickEditorContent(field, item) {
   return `<div class="inline-task-choices">${requirements.map(requirement => `<label title="${escapeHtml(requirement.description || '')}"><input type="checkbox" data-inline-task-choice value="${requirement.id}" ${selected.has(Number(requirement.id)) ? 'checked' : ''}><span><b>${escapeHtml(requirement.name)}</b>${requirement.description ? `<small>${escapeHtml(requirement.description)}</small>` : ''}</span></label>`).join('') || '<span class="form-hint">Lista zapotrzebowania jest pusta.</span>'}</div>`;
 }
 
-function bindInlineTaskEditors() {
-  const labels = { start_date: 'Start', due_date: 'Deadline', direct_assignee_user_ids: 'Odpowiedzialni', requirement_ids: 'Zapotrzebowanie', priority: 'Priorytet' };
-  $$('[data-inline-task-field]').forEach(button => button.addEventListener('click', event => {
+function bindInlineEntityEditors() {
+  $$('[data-inline-entity-field]').forEach(button => button.addEventListener('click', event => {
     event.preventDefault(); event.stopPropagation();
     document.querySelectorAll('.inline-status-popover,.inline-task-popover').forEach(popover => popover.remove());
-    const field = button.dataset.inlineTaskField;
-    const item = entity('tasks', Number(button.dataset.id));
-    if (!item || !labels[field]) return;
+    const type = button.dataset.inlineEntityType;
+    const field = button.dataset.inlineEntityField;
+    const config = inlineEditDefinitions[type];
+    const definition = config?.fields[field];
+    const item = entity(type, Number(button.dataset.id));
+    if (!item || !definition) return;
     const root = document.createElement('div');
     root.className = 'inline-task-popover';
-    root.innerHTML = `<header><strong>${labels[field]}</strong><button type="button" class="cancel" title="Anuluj">×</button></header><div class="inline-task-control">${taskQuickEditorContent(field, item)}</div><footer><button type="button" class="confirm">Zapisz</button></footer>`;
+    root.innerHTML = `<header><strong>${definition.label}</strong><button type="button" class="cancel" title="Anuluj">×</button></header><div class="inline-task-control">${inlineEditorContent(definition, field, item)}</div><footer><button type="button" class="confirm">Zapisz</button></footer>`;
     document.body.append(root);
     positionInlinePopover(root, button);
     const dateInput = root.querySelector('input[type="date"]');
@@ -2115,13 +2148,14 @@ function bindInlineTaskEditors() {
     root.querySelector('.cancel').addEventListener('click', close);
     root.querySelector('.confirm').addEventListener('click', async event => {
       const next = { ...item };
-      if (['start_date', 'due_date'].includes(field)) next[field] = root.querySelector('[data-inline-task-value]').value || null;
-      else if (field === 'priority') next.priority = root.querySelector('[data-inline-task-value]').value;
+      if (definition.kind === 'date') next[field] = root.querySelector('[data-inline-task-value]').value || null;
+      else if (definition.kind === 'select') next[field] = root.querySelector('[data-inline-task-value]').value;
+      else if (definition.kind === 'user') next[field] = Number(root.querySelector('[data-inline-task-value]').value) || null;
       else next[field] = [...root.querySelectorAll('[data-inline-task-choice]:checked')].map(input => Number(input.value));
       event.currentTarget.disabled = true;
       try {
-        await api(`/api/tasks/${item.id}`, { method: 'PATCH', body: JSON.stringify(next) });
-        close(); toast(`${labels[field]} — zapisano zmianę`); await loadData(true);
+        await api(`${config.endpoint}/${item.id}`, { method: 'PATCH', body: JSON.stringify(next) });
+        close(); toast(`${definition.label} — zapisano zmianę`); await loadData(true);
       } catch (error) { event.currentTarget.disabled = false; toast(error.message, true); }
     });
     outside = outsideEvent => { if (!root.contains(outsideEvent.target) && !button.contains(outsideEvent.target)) close(); };
@@ -2186,17 +2220,18 @@ function drawStatusRows() {
     const completed = items.filter(item => ['Done', 'N/A'].includes(item.status)).length;
     const progress = items.length ? Math.round(completed * 100 / items.length) : 0;
     if (grouping) html += `<tr class="group-row ${collapsed ? 'collapsed' : ''}" data-status-group="${escapeHtml(group)}"><td colspan="${visibleCount}"><button type="button" class="group-toggle" aria-expanded="${collapsed ? 'false' : 'true'}"><span>${collapsed ? '▸' : '▾'}</span><b>${escapeHtml(group)}</b><small>${items.length} pozycji</small><span class="group-progress"><i><u style="width:${progress}%"></u></i><b>${progress}%</b></span></button></td></tr>`;
-    if (!collapsed) html += items.map(item => `<tr data-id="${item.id}"><td data-column="function_group_name">${escapeHtml(item.function_group_name || '—')}</td><td data-column="function_detail" class="maincell">${escapeHtml(item.function_detail || '—')}<span class="sub">${escapeHtml(item.current_note || '')}</span></td><td data-column="function_group_subcategory_name">${escapeHtml(item.function_group_subcategory_name || '—')}</td><td data-column="function_group_element_name">${escapeHtml(item.function_group_element_name || '—')}</td><td data-column="controller">${escapeHtml(controllerLabel(item))}</td><td data-column="category">${escapeHtml(item.category)}</td><td data-column="subcategory">${escapeHtml(item.subcategory || '—')}</td><td data-column="status">${inlineStatusBadge('status', item)}</td><td data-column="related_work_progress"><span class="status-related"><b>${item.related_work_progress}%</b><small class="sub">${item.related_work_done}/${item.related_work_total}</small><span class="progress"><i style="width:${item.related_work_progress}%"></i></span></span></td><td data-column="criticality">${badge(item.criticality)}</td><td data-column="responsible_name">${escapeHtml(item.responsible_name || '—')}</td><td data-column="requirement_names">${escapeHtml(item.requirement_names || '—')}</td><td data-column="updated_at">${displayDate((item.updated_at || '').slice(0, 10))}</td></tr>`).join('');
+    if (!collapsed) html += items.map(item => `<tr data-id="${item.id}"><td data-column="function_group_name">${escapeHtml(item.function_group_name || '—')}</td><td data-column="function_detail" class="maincell">${escapeHtml(item.function_detail || '—')}<span class="sub">${escapeHtml(item.current_note || '')}</span></td><td data-column="function_group_subcategory_name">${escapeHtml(item.function_group_subcategory_name || '—')}</td><td data-column="function_group_element_name">${escapeHtml(item.function_group_element_name || '—')}</td><td data-column="controller">${escapeHtml(controllerLabel(item))}</td><td data-column="category">${escapeHtml(item.category)}</td><td data-column="subcategory">${escapeHtml(item.subcategory || '—')}</td><td data-column="status">${inlineStatusBadge('status', item)}</td><td data-column="related_work_progress"><span class="status-related"><b>${item.related_work_progress}%</b><small class="sub">${item.related_work_done}/${item.related_work_total}</small><span class="progress"><i style="width:${item.related_work_progress}%"></i></span></span></td><td data-column="criticality">${inlineEntityField('status', 'criticality', item, badge(item.criticality), 'priority')}</td><td data-column="responsible_name">${inlineEntityField('status', 'responsible_user_ids', item, escapeHtml(item.responsible_name || '—'), 'textual')}</td><td data-column="requirement_names">${inlineEntityField('status', 'requirement_ids', item, escapeHtml(item.requirement_names || '—'), 'textual')}</td><td data-column="updated_at">${displayDate((item.updated_at || '').slice(0, 10))}</td></tr>`).join('');
   }
   $('#status-body').innerHTML = html || `<tr><td colspan="${visibleCount}" class="empty">Brak wyników</td></tr>`;
   applyGroupedColumnVisibility('#status-panel', grouping, columns);
   $$('#status-body [data-status-group]').forEach(row => row.addEventListener('click', () => { const key = row.dataset.statusGroup; if (state.collapsedStatusGroups.has(key)) state.collapsedStatusGroups.delete(key); else state.collapsedStatusGroups.add(key); drawStatusRows(); }));
   $$('#status-body tr[data-id]').forEach(row => {
     const item = state.status.find(entry => entry.id === Number(row.dataset.id));
-    row.addEventListener('click', event => { if (!event.target.closest('[data-inline-status]')) openRecord('status', item); });
+    row.addEventListener('click', event => { if (!event.target.closest('[data-inline-status],[data-inline-entity-field]')) openRecord('status', item); });
     row.addEventListener('contextmenu', event => showStatusContext(event, item));
   });
   bindInlineStatusEditors();
+  bindInlineEntityEditors();
 }
 
 function showStatusContext(event, item) {
@@ -2423,11 +2458,11 @@ function drawTaskListRows() {
   $$('[data-task-group]').forEach(row => row.querySelector('button').addEventListener('click', () => { const key = row.dataset.taskGroup; if (state.collapsedTaskGroups.has(key)) state.collapsedTaskGroups.delete(key); else state.collapsedTaskGroups.add(key); drawTaskListRows(); }));
   $$('#task-list-body tr[data-id]').forEach(row => {
     const item = state.tasks.find(value => value.id === Number(row.dataset.id));
-    row.addEventListener('click', event => { if (!event.target.closest('[data-inline-status],[data-inline-task-field]')) openRecord('tasks', item); });
+    row.addEventListener('click', event => { if (!event.target.closest('[data-inline-status],[data-inline-entity-field]')) openRecord('tasks', item); });
     row.addEventListener('contextmenu', event => showEntityContext(event, 'tasks', item));
   });
   bindInlineStatusEditors();
-  bindInlineTaskEditors();
+  bindInlineEntityEditors();
 }
 
 function entity(type, id) {
@@ -2487,12 +2522,13 @@ function drawPointList() {
 function drawPointRows() {
   const search = ($('#point-search')?.value || '').trim().toLowerCase();
   const rows = sortRows(filterRows(state.points, '#points-panel').filter(item => !search || JSON.stringify(item).toLowerCase().includes(search)), state.sort.points);
-  $('#points-body').innerHTML = rows.map(item => `<tr data-id="${item.id}"><td data-column="title" class="maincell">${escapeHtml(item.title)}<span class="sub">${escapeHtml(item.description)}</span><span class="sub">Utworzył: ${escapeHtml(item.created_by_name || 'dane historyczne')} · ${displayDate((item.created_at || '').slice(0, 10))}</span></td><td data-column="controller">${escapeHtml(controllerLabel(item))}</td><td data-column="category">${escapeHtml(item.category || '—')}</td><td data-column="subcategory">${escapeHtml(item.subcategory || '—')}</td><td data-column="status">${badge(item.status)}</td><td data-column="waiting_for">${escapeHtml(item.waiting_for || '—')}</td><td data-column="owner_name">${escapeHtml(item.owner_name || '—')}</td><td data-column="requirement_names">${escapeHtml(item.requirement_names || '—')}</td><td data-column="due_date">${displayDate(item.due_date)}</td><td data-column="reminder_date">${displayDate(item.reminder_date)}</td></tr>`).join('') || '<tr><td colspan="10" class="empty">Brak wyników</td></tr>';
+  $('#points-body').innerHTML = rows.map(item => `<tr data-id="${item.id}"><td data-column="title" class="maincell">${escapeHtml(item.title)}<span class="sub">${escapeHtml(item.description)}</span><span class="sub">Utworzył: ${escapeHtml(item.created_by_name || 'dane historyczne')} · ${displayDate((item.created_at || '').slice(0, 10))}</span></td><td data-column="controller">${escapeHtml(controllerLabel(item))}</td><td data-column="category">${escapeHtml(item.category || '—')}</td><td data-column="subcategory">${escapeHtml(item.subcategory || '—')}</td><td data-column="status">${inlineEntityField('points', 'status', item, badge(item.status), 'priority')}</td><td data-column="waiting_for">${inlineEntityField('points', 'waiting_for', item, escapeHtml(item.waiting_for || '—'), 'textual')}</td><td data-column="owner_name">${inlineEntityField('points', 'owner_user_id', item, escapeHtml(item.owner_name || '—'), 'textual')}</td><td data-column="requirement_names">${inlineEntityField('points', 'requirement_ids', item, escapeHtml(item.requirement_names || '—'), 'textual')}</td><td data-column="due_date">${inlineEntityField('points', 'due_date', item, displayDate(item.due_date), 'date')}</td><td data-column="reminder_date">${inlineEntityField('points', 'reminder_date', item, displayDate(item.reminder_date), 'date')}</td></tr>`).join('') || '<tr><td colspan="10" class="empty">Brak wyników</td></tr>';
   $$('#points-body tr[data-id]').forEach(row => {
     const item = state.points.find(value => value.id === Number(row.dataset.id));
-    row.addEventListener('click', () => openRecord('points', item));
+    row.addEventListener('click', event => { if (!event.target.closest('[data-inline-entity-field]')) openRecord('points', item); });
     row.addEventListener('contextmenu', event => showEntityContext(event, 'points', item));
   });
+  bindInlineEntityEditors();
 }
 
 function showEntityContext(event, type, item) {

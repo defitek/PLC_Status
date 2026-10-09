@@ -4499,7 +4499,8 @@ function createRepository(db, defaultProjectId) {
         project_id: activeProjectId(), controller_id: controller(input.controller).id, title: clean(input.title), description: clean(input.description),
         impact: clean(input.impact), priority: clean(input.priority) || 'Medium', owner_user_id: ownerId, owner: userName(ownerId),
         status: clean(input.status) || 'Open', waiting_for: clean(input.waiting_for), next_action: clean(input.next_action),
-        start_date: nullableDate(input.start_date), due_date: nullableDate(input.due_date), reminder_date: nullableDate(input.reminder_date) || (!id ? defaultReminder.toISOString().slice(0, 10) : before.reminder_date),
+        start_date: nullableDate(input.start_date), due_date: nullableDate(input.due_date),
+        reminder_date: id ? (Object.hasOwn(input, 'reminder_date') ? nullableDate(input.reminder_date) : before.reminder_date) : nullableDate(input.reminder_date) || defaultReminder.toISOString().slice(0, 10),
         category: clean(input.category), subcategory: clean(input.subcategory), info_link: clean(input.info_link),
         linked_entity_type: clean(input.linked_entity_type), linked_entity_id: asId(input.linked_entity_id), linked_test_id: null
       };
