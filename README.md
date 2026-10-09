@@ -1,8 +1,23 @@
-# PLC Commissioning Hub V10.0.0
+# PLC Commissioning Hub V11.0.0
 
 Samodzielna aplikacja WWW do zarządzania uruchomieniem PLC, zespołem i kilkoma projektami. Działa na Node.js 24 oraz SQLite, bez zewnętrznych usług i bez zależności npm.
 
-## Najważniejsze zmiany V10
+## Najważniejsze zmiany V11
+
+V11 usprawnia codzienną pracę z dużymi listami i planowaniem zespołu, zachowując dotychczasową konfigurację Railway:
+
+- projektowe ustawienie widoczności użytkownika na listach wyboru; nowe konta są domyślnie widoczne;
+- wielokrotny wybór we wszystkich słownikowych filtrach Statusu, Zadań i Otwartych punktów;
+- hierarchiczny filtr PLC, w którym wybór obszaru obejmuje wszystkie sterowniki potomne;
+- zakresowe filtrowanie postępu oraz dat Start/Deadline;
+- automatyczne ukrywanie kolumny, po której aktualnie pogrupowano tabelę;
+- ręczne godziny pracy od–do oraz korekta narastającego salda nadgodzin bez mnożnika i z mnożnikiem;
+- kopiowanie dnia Plannera razem z urlopem lub wolnym i import świąt w formacie `DD.MM.RRRR Nazwa święta`;
+- czytelny edytor pełnej listy elementów i podkategorii grup funkcyjnych;
+- uporządkowany dwupanelowy edytor kategorii oraz kompaktowy wybór zakresu podsumowania;
+- schemat bazy oraz backup projektu w wersji `11.0`.
+
+## Poprzednie zmiany V10
 
 V10 rozwija współpracę wielu użytkowników i porządkuje interfejs operacyjny, zachowując dotychczasową konfigurację Railway. Najważniejsze zmiany:
 
@@ -236,9 +251,9 @@ Po redeployu trzeba zalogować się ponownie, ponieważ sesje są przechowywane 
 
 ## Aktualizacja istniejącej bazy
 
-V10 automatycznie migruje bazy ze starszych wydań, nie kasując rekordów. Migracja zachowuje funkcje V9 oraz dodaje zakres hierarchiczny notatek, etykiety Informatora i ręczne korekty czasu pracy. Dotychczasowe powiązania celów pozostają zsynchronizowane z relacjami pozostałych modułów.
+V11 automatycznie migruje bazy ze starszych wydań, nie kasując rekordów. Migracja zachowuje funkcje V10 oraz dodaje projektową widoczność użytkowników na listach wyboru i nowe pola ręcznej korekty czasu oraz salda nadgodzin. Dotychczasowe powiązania celów pozostają zsynchronizowane z relacjami pozostałych modułów.
 
-Przed wdrożeniem produkcyjnym zalecany jest snapshot Railway Volume lub kopia pliku `/app/data/plc-status.db`. Po uruchomieniu V10 można też używać kopii projektowych w **Konfiguracja → Backup projektu**.
+Przed wdrożeniem produkcyjnym zalecany jest snapshot Railway Volume lub kopia pliku `/app/data/plc-status.db`. Po uruchomieniu V11 można też używać kopii projektowych w **Konfiguracja → Backup projektu**.
 
 Jeśli w fazie koncepcyjnej potrzebny jest czysty start, usuń wyłącznie pliki:
 
@@ -250,7 +265,7 @@ Jeśli w fazie koncepcyjnej potrzebny jest czysty start, usuń wyłącznie pliki
 
 Następnie wykonaj redeploy. Nie usuwaj całego Volume, jeśli znajdują się na nim inne pliki.
 
-## Uprawnienia prototypowe V10
+## Uprawnienia prototypowe V11
 
 | Czynność | Administrator systemu | Administrator projektu | Manager projektu | Użytkownik |
 |---|:---:|:---:|:---:|:---:|
@@ -285,7 +300,7 @@ Kontrola zdrowia i wersji:
 curl http://localhost:8080/api/health
 ```
 
-Oczekiwany release: `10.0.0`.
+Oczekiwany release: `11.0.0`.
 
 ## Testy automatyczne
 
@@ -295,4 +310,4 @@ W Node.js 24 lub nowszym:
 npm test
 ```
 
-Testy obejmują tworzenie nowej bazy, migracje, kolejność konfiguracji, grupy funkcyjne, izolację i zabezpieczone usuwanie projektów, pełne identyfikatory hierarchii, zadania obszarowe, backup/restore V10, wymagania do spełnienia, bezpieczne duplikowanie, komentarze i powiadomienia, skierowane potwierdzenia Informatora, zakresy notatek, wielodniowy Kalendarz, urlopy, święta, ręczne korekty godzin, narastające nadgodziny, udział i zapotrzebowanie w Plannerze, ważone zadania, wieloosobowy Status, trendy KPI, dwukierunkowe powiązania z celami i podsumowanie dnia.
+Testy obejmują tworzenie nowej bazy, migracje, kolejność konfiguracji, grupy funkcyjne, izolację i zabezpieczone usuwanie projektów, pełne identyfikatory hierarchii, zadania obszarowe, backup/restore V11, wymagania do spełnienia, projektową widoczność użytkowników, bezpieczne duplikowanie, komentarze i powiadomienia, skierowane potwierdzenia Informatora, zakresy notatek, wielodniowy Kalendarz, urlopy, święta, ręczne godziny od–do, korekty salda i narastające nadgodziny, udział i zapotrzebowanie w Plannerze, ważone zadania, wieloosobowy Status, trendy KPI, dwukierunkowe powiązania z celami i podsumowanie dnia.

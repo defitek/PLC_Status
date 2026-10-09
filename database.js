@@ -18,6 +18,8 @@ const AUDIT_IGNORED = new Set(['updated_at']);
 
 const clean = value => typeof value === 'string' ? value.trim() : '';
 const nullableDate = value => /^\d{4}-\d{2}-\d{2}$/.test(clean(value)) ? clean(value) : null;
+const nullableTime = value => /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(clean(value)) ? clean(value) : null;
+const nullableNumber = value => value === '' || value === null || value === undefined || !Number.isFinite(Number(value)) ? null : Number(value);
 const asId = value => Number(value) > 0 ? Number(value) : null;
 const appError = (message, statusCode = 400) => Object.assign(new Error(message), { statusCode });
 const hashPassword = password => {
@@ -49,6 +51,7 @@ export function openDatabase(databasePath) {
   migrateToV8(db);
   migrateToV9(db);
   migrateToV10(db);
+  migrateToV11(db);
   db.exec('CREATE INDEX IF NOT EXISTS idx_status_function_group ON status_items(function_group_id,function_group_check_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_status_project ON status_items(project_id,controller_id,status)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_task_scope_group ON tasks(project_id,controller_group_id,status)');
@@ -68,7 +71,7 @@ export function openDatabase(databasePath) {
   backfillV7(db);
   if (String(process.env.SEED_DEMO_DATA || 'true').toLowerCase() !== 'false') { seedV5Demo(db); seedV8Demo(db); }
   seedMigrationAudit(db);
-  db.prepare("INSERT INTO app_meta(key,value) VALUES('schema_version','10.0') ON CONFLICT(key) DO UPDATE SET value='10.0'").run();
+  db.prepare("INSERT INTO app_meta(key,value) VALUES('schema_version','11.0') ON CONFLICT(key) DO UPDATE SET value='11.0'").run();
   return createRepository(db);
 }
 
@@ -277,6 +280,15 @@ function migrateToV10(db) {
     setting.run(project.id, 'planner_sunday_holiday_multiplier', '2');
     setting.run(project.id, 'planner_time_off_debit', '8');
   }
+}
+
+function migrateToV11(db) {
+  ensureColumn(db, 'project_memberships', 'assignable', 'INTEGER NOT NULL DEFAULT 1');
+  ensureColumn(db, 'planner_time_adjustments', 'work_start_time', 'TEXT');
+  ensureColumn(db, 'planner_time_adjustments', 'work_end_time', 'TEXT');
+  ensureColumn(db, 'planner_time_adjustments', 'overtime_raw_balance_override', 'REAL');
+  ensureColumn(db, 'planner_time_adjustments', 'overtime_weighted_balance_override', 'REAL');
+  db.exec('UPDATE project_memberships SET assignable=1 WHERE assignable IS NULL');
 }
 
 function canonicalControllerPart(value) {
@@ -1488,9 +1500,9 @@ function createRepository(db) {
     const project = one('SELECT * FROM projects WHERE id=?', projectId);
     const tables = Object.fromEntries(projectBackupTables.map(([table, condition]) => [table, all(`SELECT * FROM ${table} WHERE ${condition}`, projectId)]));
     return {
-      format: 'plc-commissioning-hub-project-backup', version: 10,
+      format: 'plc-commissioning-hub-project-backup', version: 11,
       generated_at: new Date().toISOString(), project,
-      users: all(`SELECT u.id,u.username,u.display_name,u.system_role,u.theme,u.active,u.sort_order,u.created_at,pm.role project_role,pm.active project_active
+      users: all(`SELECT u.id,u.username,u.display_name,u.system_role,u.theme,u.active,u.sort_order,u.created_at,pm.role project_role,pm.active project_active,pm.assignable
         FROM users u JOIN project_memberships pm ON pm.user_id=u.id WHERE pm.project_id=? ORDER BY u.id`, projectId),
       memberships: all('SELECT * FROM project_memberships WHERE project_id=? ORDER BY user_id', projectId), tables
     };
@@ -1519,7 +1531,7 @@ function createRepository(db) {
   }
 
   function restoreProjectBackup(payload) {
-    if (!payload || payload.format !== 'plc-commissioning-hub-project-backup' || ![4, 5, 6, 7, 8, 9, 10].includes(Number(payload.version)) || !payload.tables) throw appError('Nieprawidłowy lub nieobsługiwany plik backupu');
+    if (!payload || payload.format !== 'plc-commissioning-hub-project-backup' || ![4, 5, 6, 7, 8, 9, 10, 11].includes(Number(payload.version)) || !payload.tables) throw appError('Nieprawidłowy lub nieobsługiwany plik backupu');
     const projectId = activeProjectId();
     const currentProject = one('SELECT * FROM projects WHERE id=?', projectId);
     if (!currentProject || clean(payload.project?.code).toLowerCase() !== clean(currentProject.code).toLowerCase()) throw appError(`Backup dotyczy innego projektu (${payload.project?.code || 'brak kodu'})`);
@@ -1533,10 +1545,10 @@ function createRepository(db) {
       for (const table of projectRestoreOrder) insertBackupRows(table, payload.tables[table], projectId);
       for (const membership of Array.isArray(payload.memberships) ? payload.memberships : []) {
         if (!one('SELECT 1 FROM users WHERE id=?', membership.user_id)) continue;
-        db.prepare(`INSERT INTO project_memberships(project_id,user_id,role,active,planner_enabled,summary_area_source,created_at) VALUES(?,?,?,?,?,?,?)
-          ON CONFLICT(project_id,user_id) DO UPDATE SET role=excluded.role,active=excluded.active,planner_enabled=excluded.planner_enabled,summary_area_source=excluded.summary_area_source`).run(
+        db.prepare(`INSERT INTO project_memberships(project_id,user_id,role,active,planner_enabled,assignable,summary_area_source,created_at) VALUES(?,?,?,?,?,?,?,?)
+          ON CONFLICT(project_id,user_id) DO UPDATE SET role=excluded.role,active=excluded.active,planner_enabled=excluded.planner_enabled,assignable=excluded.assignable,summary_area_source=excluded.summary_area_source`).run(
           projectId, membership.user_id, membership.role, membership.active, Number(membership.planner_enabled ?? 1) ? 1 : 0,
-          membership.summary_area_source === 'planner' ? 'planner' : 'configuration', membership.created_at || new Date().toISOString()
+          Number(membership.assignable ?? 1) ? 1 : 0, membership.summary_area_source === 'planner' ? 'planner' : 'configuration', membership.created_at || new Date().toISOString()
         );
       }
       db.prepare(`INSERT OR IGNORE INTO task_assignees(project_id,task_id,user_id,assigned_directly)
@@ -1716,11 +1728,29 @@ function createRepository(db) {
         }) : []
       };
     });
-    const timeDetails = canManageRequirements ? plannerTimeCalculation(range, projectUsers, entries, absences, holidays, timeAdjustments) : null;
+    let timeDetails = null;
+    if (canManageRequirements) {
+      const historicalStarts = [
+        one('SELECT MIN(plan_date) value FROM planner_entries WHERE project_id=?', activeProjectId())?.value,
+        one('SELECT MIN(absence_date) value FROM planner_absences WHERE project_id=?', activeProjectId())?.value,
+        one('SELECT MIN(plan_date) value FROM planner_time_adjustments WHERE project_id=?', activeProjectId())?.value
+      ].filter(Boolean).sort();
+      const calculationFrom = historicalStarts[0] && historicalStarts[0] < range.from ? historicalStarts[0] : range.from;
+      const calculationRange = safeDateRange(calculationFrom, range.to, 7305);
+      const calculationEntries = calculationFrom === range.from ? entries : all(`SELECT * FROM planner_entries
+        WHERE project_id=? AND plan_date BETWEEN ? AND ? ORDER BY plan_date,user_id,id`, activeProjectId(), calculationFrom, range.to);
+      const calculationAbsences = calculationFrom === range.from ? absences : all(`SELECT * FROM planner_absences
+        WHERE project_id=? AND absence_date BETWEEN ? AND ? ORDER BY absence_date,user_id`, activeProjectId(), calculationFrom, range.to);
+      const calculationHolidays = calculationFrom === range.from ? holidays : all(`SELECT * FROM planner_holidays
+        WHERE project_id=? AND holiday_date BETWEEN ? AND ? ORDER BY holiday_date`, activeProjectId(), calculationFrom, range.to);
+      const calculationAdjustments = calculationFrom === range.from ? timeAdjustments : all(`SELECT * FROM planner_time_adjustments
+        WHERE project_id=? AND plan_date BETWEEN ? AND ? ORDER BY plan_date,user_id`, activeProjectId(), calculationFrom, range.to);
+      timeDetails = plannerTimeCalculation(calculationRange, projectUsers, calculationEntries, calculationAbsences, calculationHolidays, calculationAdjustments, range);
+    }
     return { ...range, users, available_today_users, entries, absences, holidays, time_adjustments: canManageRequirements ? timeAdjustments : [], work, summary, area_summary, area_day_summary, shift_summary, mode_summary, areas: hierarchy.groups, requirements, time_details: timeDetails, can_manage_requirements: canManageRequirements, can_manage_time: canManageRequirements };
   }
 
-  function plannerTimeCalculation(range, users, entries, absences, holidays, adjustments = []) {
+  function plannerTimeCalculation(range, users, entries, absences, holidays, adjustments = [], visibleRange = range) {
     const settingNumber = (key, fallback) => {
       const value = Number(one('SELECT value FROM settings WHERE project_id=? AND key=?', activeProjectId(), key)?.value);
       return Number.isFinite(value) ? value : fallback;
@@ -1744,7 +1774,7 @@ function createRepository(db) {
     const days = Array.from({ length: range.days }, (_, index) => {
       const date = new Date(`${range.from}T12:00:00Z`); date.setUTCDate(date.getUTCDate() + index); return date.toISOString().slice(0, 10);
     });
-    const details = [];
+    const allDetails = [];
     for (const user of users) for (const date of days) {
       const absence = absenceMap.get(`${user.id}:${date}`);
       const adjustment = adjustmentMap.get(`${user.id}:${date}`) || {};
@@ -1753,9 +1783,9 @@ function createRepository(db) {
       const holiday = holidayDates.has(date);
       const isSaturday = weekday === 6;
       const isSunday = weekday === 0;
-      let actual = 0; let credited = 0; let overtimeRaw = 0; let overtimeWeighted = 0; let balance = 0; let label = '';
+      let actual = 0; let credited = 0; let overtimeRaw = 0; let overtimeWeighted = 0; let label = '';
       if (absence?.absence_type === 'time_off') {
-        overtimeRaw = -timeOffDebit; overtimeWeighted = -timeOffDebit; balance = -timeOffDebit; label = 'Wolne z nadgodzin';
+        overtimeRaw = -timeOffDebit; overtimeWeighted = -timeOffDebit; label = 'Wolne z nadgodzin';
       } else if (absence?.absence_type === 'vacation') {
         credited = !isSaturday && !isSunday && !holiday ? baseHours : 0; label = 'Urlop';
       } else if (dayEntries.length) {
@@ -1767,7 +1797,18 @@ function createRepository(db) {
         }
       }
       const actualAdjustment = Number(adjustment.actual_hours_adjustment || 0);
-      actual = Math.max(0, actual + actualAdjustment);
+      const manualStart = nullableTime(adjustment.work_start_time);
+      const manualEnd = nullableTime(adjustment.work_end_time);
+      if (!absence && manualStart && manualEnd) {
+        const [startHour, startMinute] = manualStart.split(':').map(Number);
+        const [endHour, endMinute] = manualEnd.split(':').map(Number);
+        let workedMinutes = (endHour * 60 + endMinute) - (startHour * 60 + startMinute);
+        if (workedMinutes < 0) workedMinutes += 24 * 60;
+        actual = workedMinutes / 60;
+        label = `Ręcznie ${manualStart}–${manualEnd}`;
+      } else {
+        actual = Math.max(0, actual + actualAdjustment);
+      }
       if (!absence && actual > 0) {
         if (!label) label = 'Korekta';
         if (isSunday || holiday) { overtimeRaw = actual; overtimeWeighted = actual * sundayHolidayMultiplier; }
@@ -1776,16 +1817,30 @@ function createRepository(db) {
       }
       overtimeRaw += Number(adjustment.overtime_raw_adjustment || 0);
       overtimeWeighted += Number(adjustment.overtime_weighted_adjustment || 0);
-      balance = overtimeWeighted;
-      details.push({ user_id: user.id, display_name: user.display_name, date, label, actual_hours: actual, credited_hours: credited, overtime_raw: overtimeRaw, overtime_weighted: overtimeWeighted, overtime_balance: balance, actual_hours_adjustment: actualAdjustment, overtime_raw_adjustment: Number(adjustment.overtime_raw_adjustment || 0), overtime_weighted_adjustment: Number(adjustment.overtime_weighted_adjustment || 0), adjustment_note: adjustment.note || '', is_holiday: holiday ? 1 : 0, is_weekend: isSaturday || isSunday ? 1 : 0, absence_type: absence?.absence_type || '' });
+      allDetails.push({
+        user_id: user.id, display_name: user.display_name, date, label,
+        actual_hours: actual, credited_hours: credited, overtime_raw: overtimeRaw, overtime_weighted: overtimeWeighted,
+        actual_hours_adjustment: actualAdjustment,
+        overtime_raw_adjustment: Number(adjustment.overtime_raw_adjustment || 0),
+        overtime_weighted_adjustment: Number(adjustment.overtime_weighted_adjustment || 0),
+        work_start_time: manualStart || '', work_end_time: manualEnd || '',
+        overtime_raw_balance_override: nullableNumber(adjustment.overtime_raw_balance_override),
+        overtime_weighted_balance_override: nullableNumber(adjustment.overtime_weighted_balance_override),
+        adjustment_note: adjustment.note || '', is_holiday: holiday ? 1 : 0,
+        is_weekend: isSaturday || isSunday ? 1 : 0, absence_type: absence?.absence_type || ''
+      });
     }
     for (const user of users) {
       let raw = 0; let weighted = 0;
-      details.filter(item => item.user_id === user.id).sort((left, right) => left.date.localeCompare(right.date)).forEach(item => {
+      allDetails.filter(item => item.user_id === user.id).sort((left, right) => left.date.localeCompare(right.date)).forEach(item => {
         raw += Number(item.overtime_raw || 0); weighted += Number(item.overtime_weighted || 0);
+        if (item.overtime_raw_balance_override !== null) raw = item.overtime_raw_balance_override;
+        if (item.overtime_weighted_balance_override !== null) weighted = item.overtime_weighted_balance_override;
         item.overtime_raw_cumulative = raw; item.overtime_weighted_cumulative = weighted;
+        item.overtime_balance = weighted;
       });
     }
+    const details = allDetails.filter(item => item.date >= visibleRange.from && item.date <= visibleRange.to);
     const userSummary = users.map(user => {
       const rows = details.filter(item => item.user_id === user.id);
       const weekly = new Map();
@@ -1799,7 +1854,8 @@ function createRepository(db) {
         credited_hours: rows.reduce((sum, row) => sum + row.credited_hours, 0),
         overtime_raw: rows.reduce((sum, row) => sum + row.overtime_raw, 0),
         overtime_weighted: rows.reduce((sum, row) => sum + row.overtime_weighted, 0),
-        overtime_balance: rows.reduce((sum, row) => sum + row.overtime_balance, 0),
+        overtime_raw_balance: rows.at(-1)?.overtime_raw_cumulative || 0,
+        overtime_balance: rows.at(-1)?.overtime_weighted_cumulative || 0,
         overloaded_weeks: [...weekly.entries()].filter(([, hours]) => hours > 48).map(([week, hours]) => ({ week, hours }))
       };
     });
@@ -1819,15 +1875,25 @@ function createRepository(db) {
       db.prepare('DELETE FROM planner_absences WHERE project_id=? AND user_id=? AND absence_date=?').run(activeProjectId(), userId, planDate);
       if (absenceType) db.prepare(`INSERT INTO planner_absences(project_id,user_id,absence_date,absence_type,note,created_by)
         VALUES(?,?,?,?,?,?)`).run(activeProjectId(), userId, planDate, absenceType, clean(input.absence_note), currentUser.id);
-      if (['actual_hours_adjustment', 'overtime_raw_adjustment', 'overtime_weighted_adjustment', 'adjustment_note'].some(key => Object.hasOwn(input, key))) {
+      if (['actual_hours_adjustment', 'overtime_raw_adjustment', 'overtime_weighted_adjustment', 'work_start_time', 'work_end_time', 'overtime_raw_balance_override', 'overtime_weighted_balance_override', 'adjustment_note'].some(key => Object.hasOwn(input, key))) {
         const actualAdjustment = Number(input.actual_hours_adjustment || 0);
         const rawAdjustment = Number(input.overtime_raw_adjustment || 0);
         const weightedAdjustment = Number(input.overtime_weighted_adjustment || 0);
+        const rawStart = clean(input.work_start_time);
+        const rawEnd = clean(input.work_end_time);
+        if (Boolean(rawStart) !== Boolean(rawEnd)) throw appError('Podaj jednocześnie godzinę rozpoczęcia i zakończenia pracy');
+        const workStart = rawStart ? nullableTime(rawStart) : null;
+        const workEnd = rawEnd ? nullableTime(rawEnd) : null;
+        if ((rawStart && !workStart) || (rawEnd && !workEnd)) throw appError('Godziny pracy muszą mieć format HH:MM');
+        const rawBalance = nullableNumber(input.overtime_raw_balance_override);
+        const weightedBalance = nullableNumber(input.overtime_weighted_balance_override);
+        if (input.overtime_raw_balance_override !== '' && input.overtime_raw_balance_override !== null && input.overtime_raw_balance_override !== undefined && rawBalance === null) throw appError('Saldo nadgodzin musi być liczbą');
+        if (input.overtime_weighted_balance_override !== '' && input.overtime_weighted_balance_override !== null && input.overtime_weighted_balance_override !== undefined && weightedBalance === null) throw appError('Saldo nadgodzin z mnożnikiem musi być liczbą');
         const adjustmentNote = clean(input.adjustment_note);
         db.prepare('DELETE FROM planner_time_adjustments WHERE project_id=? AND user_id=? AND plan_date=?').run(activeProjectId(), userId, planDate);
-        if (actualAdjustment || rawAdjustment || weightedAdjustment || adjustmentNote) {
-          db.prepare(`INSERT INTO planner_time_adjustments(project_id,user_id,plan_date,actual_hours_adjustment,overtime_raw_adjustment,overtime_weighted_adjustment,note,updated_by)
-            VALUES(?,?,?,?,?,?,?,?)`).run(activeProjectId(), userId, planDate, actualAdjustment, rawAdjustment, weightedAdjustment, adjustmentNote, currentUser.id);
+        if (actualAdjustment || rawAdjustment || weightedAdjustment || workStart || workEnd || rawBalance !== null || weightedBalance !== null || adjustmentNote) {
+          db.prepare(`INSERT INTO planner_time_adjustments(project_id,user_id,plan_date,actual_hours_adjustment,overtime_raw_adjustment,overtime_weighted_adjustment,work_start_time,work_end_time,overtime_raw_balance_override,overtime_weighted_balance_override,note,updated_by)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(activeProjectId(), userId, planDate, actualAdjustment, rawAdjustment, weightedAdjustment, workStart, workEnd, rawBalance, weightedBalance, adjustmentNote, currentUser.id);
         }
       }
       db.exec('COMMIT');
@@ -2349,7 +2415,7 @@ function createRepository(db) {
     users() {
       return all(`SELECT u.id,u.username,u.display_name,u.system_role,u.theme,u.active,u.sort_order,u.created_at,
         pm.role project_role,COALESCE(pm.role,'user') role,COALESCE(pm.active,0) project_active,
-        COALESCE(pm.planner_enabled,0) planner_enabled,COALESCE(pm.summary_area_source,'configuration') summary_area_source
+        COALESCE(pm.planner_enabled,0) planner_enabled,COALESCE(pm.assignable,1) assignable,COALESCE(pm.summary_area_source,'configuration') summary_area_source
         FROM users u LEFT JOIN project_memberships pm ON pm.user_id=u.id AND pm.project_id=?
         ORDER BY u.sort_order,u.display_name`, activeProjectId()).map(user => ({
           ...user,
@@ -2364,13 +2430,13 @@ function createRepository(db) {
         if (Object.hasOwn(values, 'system_role')) fields.push('role');
         if (clean(input.password)) { values.password_hash = hashPassword(input.password); fields.push('password_hash'); }
         if (fields.length) db.prepare(`UPDATE users SET ${fields.map(field => `${field}=?`).join(',')} WHERE id=?`).run(...fields.map(field => values[field]), id);
-        if (['project_role', 'project_active', 'role', 'planner_enabled', 'summary_area_source'].some(field => Object.hasOwn(input, field))) {
+        if (['project_role', 'project_active', 'role', 'planner_enabled', 'assignable', 'summary_area_source'].some(field => Object.hasOwn(input, field))) {
           const current = one('SELECT * FROM project_memberships WHERE project_id=? AND user_id=?', activeProjectId(), id) || {};
           const summarySource = clean(input.summary_area_source || current.summary_area_source) === 'planner' ? 'planner' : 'configuration';
-          db.prepare(`INSERT INTO project_memberships(project_id,user_id,role,active,planner_enabled,summary_area_source) VALUES(?,?,?,?,?,?)
-            ON CONFLICT(project_id,user_id) DO UPDATE SET role=excluded.role,active=excluded.active,planner_enabled=excluded.planner_enabled,summary_area_source=excluded.summary_area_source`).run(
+          db.prepare(`INSERT INTO project_memberships(project_id,user_id,role,active,planner_enabled,assignable,summary_area_source) VALUES(?,?,?,?,?,?,?)
+            ON CONFLICT(project_id,user_id) DO UPDATE SET role=excluded.role,active=excluded.active,planner_enabled=excluded.planner_enabled,assignable=excluded.assignable,summary_area_source=excluded.summary_area_source`).run(
             activeProjectId(), id, clean(input.project_role || input.role || current.role) || 'user', Number(input.project_active ?? current.active ?? 1) ? 1 : 0,
-            Number(input.planner_enabled ?? current.planner_enabled ?? 1) ? 1 : 0, summarySource
+            Number(input.planner_enabled ?? current.planner_enabled ?? 1) ? 1 : 0, Number(input.assignable ?? current.assignable ?? 1) ? 1 : 0, summarySource
           );
         }
         return this.users().find(user => user.id === id);
@@ -2379,9 +2445,9 @@ function createRepository(db) {
       const nextOrder = one('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM users').value;
       const systemRole = clean(input.system_role) === 'system_admin' ? 'system_admin' : 'user';
       const userId = insertRecord('users', { username: clean(input.username), display_name: clean(input.display_name), password_hash: hashPassword(input.password), role: systemRole === 'system_admin' ? 'admin' : 'user', system_role: systemRole, active: 1, sort_order: nextOrder });
-      db.prepare('INSERT INTO project_memberships(project_id,user_id,role,active,planner_enabled,summary_area_source) VALUES(?,?,?,?,?,?)').run(
+      db.prepare('INSERT INTO project_memberships(project_id,user_id,role,active,planner_enabled,assignable,summary_area_source) VALUES(?,?,?,?,?,?,?)').run(
         activeProjectId(), userId, clean(input.project_role || input.role) || 'user', Number(input.project_active ?? 1) ? 1 : 0,
-        Number(input.planner_enabled ?? (systemRole === 'system_admin' ? 0 : 1)) ? 1 : 0, clean(input.summary_area_source) === 'planner' ? 'planner' : 'configuration'
+        Number(input.planner_enabled ?? (systemRole === 'system_admin' ? 0 : 1)) ? 1 : 0, Number(input.assignable ?? 1) ? 1 : 0, clean(input.summary_area_source) === 'planner' ? 'planner' : 'configuration'
       );
       return this.users().find(user => user.id === userId);
     },

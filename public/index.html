@@ -5,14 +5,14 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#172554">
   <title>PLC Commissioning Hub</title>
-  <link rel="stylesheet" href="/styles.css?v=10.0.0">
-  <script type="module" src="/app.js?v=10.0.0"></script>
+  <link rel="stylesheet" href="/styles.css?v=11.0.0">
+  <script type="module" src="/app.js?v=11.0.0"></script>
 </head>
 <body>
   <header class="topbar">
     <button id="mobile-menu" class="ghost mobile-menu" aria-label="Otwórz menu">☰</button>
     <div class="logo">PLC</div>
-    <div class="brand"><strong>Commissioning Hub</strong><span>Multi-project status & team workspace · V10.0</span></div>
+    <div class="brand"><strong>Commissioning Hub</strong><span>Multi-project status & team workspace · V11.0</span></div>
     <div id="top-news" class="top-news" aria-label="Najnowsze wiadomości projektu"></div>
     <div class="top-actions"><button id="notification-open" class="ghost notification-button" title="Powiadomienia">● <span>Powiadomienia</span><b id="notification-count">0</b></button><button id="daily-summary-open" class="ghost" title="Podsumowanie zmian">☀ Podsumowanie</button><button id="project-switch" class="ghost project-chip">Wybierz projekt</button><button id="theme-switch" class="ghost" title="Zmień wygląd">◐ Motyw</button><div class="userbox"><span id="me"></span><button id="password-change" class="ghost" title="Zmień hasło">Hasło</button><button id="logout" class="ghost">Wyloguj</button></div></div>
   </header>
@@ -126,7 +126,7 @@
   </dialog>
 
   <dialog id="planner-dialog" class="record-dialog">
-    <form id="planner-form"><header class="dialog-head"><div><h2 id="planner-dialog-title">Plan dnia</h2><p id="planner-dialog-description"></p></div><button type="button" class="x" id="planner-dialog-close">×</button></header><div class="planner-day-kind"><label class="field"><span>Rodzaj dnia</span><select id="planner-day-kind"><option value="work">Dzień pracy</option><option value="vacation">Urlop płatny</option><option value="time_off">Wolne z nadgodzin</option></select></label><label class="field"><span>Notatka nieobecności</span><input id="planner-absence-note" placeholder="Opcjonalnie"></label></div><section class="planner-adjustments"><strong>Korekty czasu</strong><div><label class="field"><span>Godziny dnia ±</span><input id="planner-actual-adjustment" type="number" step="0.25" value="0"></label><label class="field"><span>Nadgodziny bez mnożnika ±</span><input id="planner-raw-adjustment" type="number" step="0.25" value="0"></label><label class="field"><span>Nadgodziny z mnożnikiem ±</span><input id="planner-weighted-adjustment" type="number" step="0.25" value="0"></label><label class="field"><span>Powód korekty</span><input id="planner-adjustment-note"></label></div></section><div id="planner-entry-list" class="planner-entry-list"></div><button type="button" class="secondary" id="planner-entry-add">+ Dodaj obszar / transport</button><footer class="dialog-actions"><span></span><button type="button" class="secondary" id="planner-dialog-cancel">Anuluj</button><button class="primary">Zapisz plan dnia</button></footer></form>
+    <form id="planner-form"><header class="dialog-head"><div><h2 id="planner-dialog-title">Plan dnia</h2><p id="planner-dialog-description"></p></div><button type="button" class="x" id="planner-dialog-close">×</button></header><div class="planner-day-kind"><label class="field"><span>Rodzaj dnia</span><select id="planner-day-kind"><option value="work">Dzień pracy</option><option value="vacation">Urlop płatny</option><option value="time_off">Wolne z nadgodzin</option></select></label><label class="field"><span>Notatka nieobecności</span><input id="planner-absence-note" placeholder="Opcjonalnie"></label></div><section class="planner-adjustments"><strong>Ręczna korekta czasu i salda</strong><div><label class="field"><span>Praca od</span><input id="planner-work-start" type="time"></label><label class="field"><span>Praca do</span><input id="planner-work-end" type="time"></label><label class="field"><span>Saldo nadgodzin bez mnożnika po tym dniu</span><input id="planner-raw-balance" type="number" step="0.25" placeholder="Bez korekty salda"></label><label class="field"><span>Saldo nadgodzin z mnożnikiem po tym dniu</span><input id="planner-weighted-balance" type="number" step="0.25" placeholder="Bez korekty salda"></label><label class="field planner-adjustment-reason"><span>Powód korekty</span><input id="planner-adjustment-note" placeholder="Np. wypłata nadgodzin, koniec okresu rozliczeniowego"></label></div></section><div id="planner-entry-list" class="planner-entry-list"></div><button type="button" class="secondary" id="planner-entry-add">+ Dodaj obszar / transport</button><footer class="dialog-actions"><span></span><button type="button" class="secondary" id="planner-dialog-cancel">Anuluj</button><button class="primary">Zapisz plan dnia</button></footer></form>
   </dialog>
 
   <dialog id="planner-requirements-dialog" class="wide-dialog planner-requirements-dialog">
@@ -151,6 +151,13 @@
   <dialog id="config-full-dialog" class="wide-dialog">
     <header class="dialog-head"><div><h2 id="config-full-title">Pełna lista konfiguracji</h2><p>Edycja i kolejność w jednym, większym oknie.</p></div><button type="button" class="x" id="config-full-close">×</button></header>
     <div id="config-full-content" class="config-full-content"></div>
+  </dialog>
+
+  <dialog id="function-list-dialog" class="wide-dialog function-list-dialog">
+    <header class="dialog-head"><div><h2 id="function-list-title">Elementy grupy funkcyjnej</h2><p id="function-list-subtitle"></p></div><button type="button" class="x" id="function-list-close">×</button></header>
+    <form id="function-list-add-form" class="function-list-add"><label class="field"><span>Dodaj pozycje — każdy wiersz to osobny element</span><textarea id="function-list-add-value" rows="3" required></textarea></label><button class="primary">Dodaj do listy</button></form>
+    <div id="function-list-content" class="function-list-content"></div>
+    <footer class="dialog-actions"><span id="function-list-count"></span><span></span><button type="button" class="primary" id="function-list-done">Gotowe</button></footer>
   </dialog>
 
   <dialog id="entity-selection-dialog" class="wide-dialog">

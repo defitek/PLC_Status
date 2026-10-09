@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS project_memberships (
   role TEXT NOT NULL DEFAULT 'user' CHECK(role IN ('project_admin','moderator','user')),
   active INTEGER NOT NULL DEFAULT 1,
   planner_enabled INTEGER NOT NULL DEFAULT 1,
+  assignable INTEGER NOT NULL DEFAULT 1,
   summary_area_source TEXT NOT NULL DEFAULT 'configuration' CHECK(summary_area_source IN ('configuration','planner')),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY(project_id,user_id)
@@ -549,6 +550,10 @@ CREATE TABLE IF NOT EXISTS planner_time_adjustments (
   actual_hours_adjustment REAL NOT NULL DEFAULT 0,
   overtime_raw_adjustment REAL NOT NULL DEFAULT 0,
   overtime_weighted_adjustment REAL NOT NULL DEFAULT 0,
+  work_start_time TEXT,
+  work_end_time TEXT,
+  overtime_raw_balance_override REAL,
+  overtime_weighted_balance_override REAL,
   note TEXT NOT NULL DEFAULT '',
   updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

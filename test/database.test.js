@@ -307,7 +307,7 @@ test('V5 data remains compatible with planner, calendar, weighted teamwork, cano
       assert.throws(() => repository.dailySummary('2026-01-01', '2026-01-15'), /14 dni/);
 
       const backup = repository.projectBackup();
-      assert.equal(backup.version, 10);
+      assert.equal(backup.version, 11);
       assert.ok(Array.isArray(backup.tables.planner_entries));
       assert.ok(Array.isArray(backup.tables.task_assignees));
       assert.ok(Array.isArray(backup.tables.calendar_annotations));
@@ -466,7 +466,7 @@ test('V7 supports canonical hierarchy IDs, area tasks, goal links and configurab
       assert.ok(overview.overall.goals.total >= 1);
       assert.ok(Array.isArray(overview.status_breakdown));
       assert.ok(overview.trends.week.every(point => point.goals && Number.isFinite(point.goals.total)));
-      assert.equal(repository.projectBackup().version, 10);
+      assert.equal(repository.projectBackup().version, 11);
     });
   } finally {
     repository.close();
@@ -525,7 +525,7 @@ test('V8 supports announcements, aggregated KPI trends, unified Planner requirem
       assert.ok(Array.isArray(rootTrend.trends.day));
       assert.ok(Array.isArray(rootTrend.trends.week));
       assert.ok(Array.isArray(rootTrend.trends.month));
-      assert.equal(repository.projectBackup().version, 10);
+      assert.equal(repository.projectBackup().version, 11);
 
       repository.deleteAnnouncement(announcement.id);
       assert.equal(repository.announcements(admin).some(item => item.id === announcement.id), false);
@@ -629,7 +629,7 @@ test('V9 supports requirements, guarded duplication, comments, pushes, calendar 
       assert.equal(workerPlanner.requirements.length, 0);
       assert.equal(workerPlanner.time_details, null);
 
-      assert.equal(repository.projectBackup().version, 10);
+      assert.equal(repository.projectBackup().version, 11);
       assert.ok(Array.isArray(repository.projectBackup().tables.completion_requirements));
       assert.ok(Array.isArray(repository.projectBackup().tables.entity_comments));
       assert.ok(Array.isArray(repository.projectBackup().tables.planner_absences));
@@ -686,9 +686,44 @@ test('V10 supports live-safe edits, scoped notes, targeted news, passwords and P
       assert.ok(verifyPassword('worker-password-10', repository.authenticate('v10worker').password_hash));
 
       const backup = repository.projectBackup();
-      assert.equal(backup.version, 10);
+      assert.equal(backup.version, 11);
       assert.ok(Array.isArray(backup.tables.announcement_labels));
       assert.ok(Array.isArray(backup.tables.planner_time_adjustments));
+    });
+  } finally {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
+test('V11 supports assignment visibility and manual working-time balance overrides', () => {
+  const temporary = temporaryDatabase();
+  const repository = openDatabase(temporary.path);
+  try {
+    const account = repository.authenticate('admin');
+    const admin = repository.me(account.id);
+    repository.withProject(1, () => {
+      const worker = repository.saveUser(null, { username: 'v11worker', display_name: 'V11 Worker', password: 'secret123', project_role: 'user', planner_enabled: 1 });
+      assert.equal(worker.assignable, 1);
+      assert.equal(repository.saveUser(worker.id, { assignable: 0 }).assignable, 0);
+      assert.equal(repository.saveUser(worker.id, { assignable: 1 }).assignable, 1);
+
+      repository.savePlannerDay({
+        user_id: worker.id, plan_date: '2026-10-08', entries: [], work_start_time: '07:00', work_end_time: '16:00',
+        overtime_raw_balance_override: 5, overtime_weighted_balance_override: 7, adjustment_note: 'Otwarcie okresu'
+      }, admin);
+      repository.savePlannerDay({
+        user_id: worker.id, plan_date: '2026-10-09', entries: [], work_start_time: '07:00', work_end_time: '17:30'
+      }, admin);
+      const planner = repository.planner('2026-10-09', '2026-10-09', admin);
+      const detail = planner.time_details.details.find(item => item.user_id === worker.id);
+      assert.equal(detail.actual_hours, 10.5);
+      assert.equal(detail.overtime_raw, 2.5);
+      assert.equal(detail.overtime_weighted, 3.75);
+      assert.equal(detail.overtime_raw_cumulative, 7.5);
+      assert.equal(detail.overtime_weighted_cumulative, 10.75);
+      assert.equal(planner.time_details.users.find(item => item.user_id === worker.id).overtime_balance, 10.75);
+      assert.equal(repository.projectBackup().version, 11);
     });
   } finally {
     repository.close();
