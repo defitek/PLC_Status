@@ -70,6 +70,7 @@ export function openDatabase(databasePath) {
   migrateToV13(db);
   migrateToV14(db);
   syncProjectMemberships(db);
+  removeEmptyDuplicateControllerRoots(db);
   backfillV3(db);
   backfillFunctionGroups(db);
   backfillV4Links(db);
@@ -495,6 +496,32 @@ function rebuildProjectConfiguration(db) {
   } finally {
     db.exec('PRAGMA foreign_keys=ON');
   }
+}
+
+function removeEmptyDuplicateControllerRoots(db) {
+  // The old startup seeder created empty root copies because NULL bypasses UNIQUE.
+  // Never delete a group with children, assignments, or other linked records.
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
+  const references = tables.flatMap(({ name }) => db.prepare(`PRAGMA foreign_key_list("${name}")`).all()
+    .filter(key => key.table === 'controller_groups')
+    .map(key => ({ table: name, column: key.from })));
+  const roots = db.prepare('SELECT * FROM controller_groups WHERE parent_id IS NULL ORDER BY id').all();
+  const seen = new Set();
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const root of roots) {
+      const key = `${root.project_id}:${root.name.toLowerCase()}`;
+      if (!seen.has(key)) { seen.add(key); continue; }
+      if (root.description || references.some(ref => db.prepare(`SELECT 1 FROM "${ref.table}" WHERE "${ref.column}"=? LIMIT 1`).get(root.id))) continue;
+      const scoped = tables.some(({ name }) => {
+        const columns = columnNames(db, name);
+        return columns.has('scope_type') && columns.has('scope_id') && db.prepare(`SELECT 1 FROM "${name}" WHERE scope_type='group' AND scope_id=? LIMIT 1`).get(root.id);
+      });
+      if (scoped) continue;
+      db.prepare('DELETE FROM controller_groups WHERE id=?').run(root.id);
+    }
+    db.exec('COMMIT');
+  } catch (error) { db.exec('ROLLBACK'); throw error; }
 }
 
 function seedControllerHierarchy(db, projectId) {

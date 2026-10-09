@@ -127,6 +127,12 @@ test('configured controller order survives a database restart', () => {
     repository.reorder('controllers', reversed);
     const hierarchyBeforeRestart = repository.controllerGroups();
     repository.close();
+    const corrupted = new DatabaseSync(temporary.path);
+    const root = corrupted.prepare('SELECT * FROM controller_groups WHERE parent_id IS NULL ORDER BY id LIMIT 1').get();
+    const duplicate = corrupted.prepare('INSERT INTO controller_groups(project_id,parent_id,name,sort_order) VALUES(?,NULL,?,?)');
+    duplicate.run(root.project_id, root.name, root.sort_order);
+    duplicate.run(root.project_id, root.name, root.sort_order);
+    corrupted.close();
     repository = openDatabase(temporary.path);
     assert.deepEqual(repository.controllers().map(item => item.id), reversed);
     assert.deepEqual(repository.controllerGroups(), hierarchyBeforeRestart);
