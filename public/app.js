@@ -2068,10 +2068,72 @@ function inlineStatusBadge(type, item) {
   return `<button type="button" class="inline-status-badge" data-inline-status="${type}" data-id="${item.id}" title="Kliknij, aby szybko zmienić status">${badge(item.status)}</button>`;
 }
 
+function inlineTaskField(field, item, content, className = '') {
+  return `<button type="button" class="inline-task-edit ${className}" data-inline-task-field="${field}" data-id="${item.id}" title="Kliknij, aby szybko zmienić wartość">${content}</button>`;
+}
+
+function positionInlinePopover(root, button) {
+  const anchor = button.getBoundingClientRect();
+  const bounds = root.getBoundingClientRect();
+  root.style.left = `${Math.max(8, Math.min(innerWidth - bounds.width - 8, anchor.left))}px`;
+  root.style.top = `${anchor.bottom + bounds.height + 4 <= innerHeight - 8 ? anchor.bottom + 4 : Math.max(8, anchor.top - bounds.height - 4)}px`;
+}
+
+function taskQuickEditorContent(field, item) {
+  if (['start_date', 'due_date'].includes(field)) {
+    return `<input type="date" data-inline-task-value value="${escapeHtml(item[field] || '')}"><div class="inline-task-date-actions"><button type="button" data-inline-task-today>Dzisiaj</button><button type="button" data-inline-task-clear>Wyczyść</button></div>`;
+  }
+  if (field === 'priority') return `<select data-inline-task-value>${selectOptions(['Low', 'Medium', 'High', 'Critical'], item.priority, null)}</select>`;
+  if (field === 'direct_assignee_user_ids') {
+    const selected = new Set((item.direct_assignee_user_ids || []).map(Number));
+    const users = assignableUsers([...selected]);
+    return `<div class="inline-task-choices">${users.map(user => `<label><input type="checkbox" data-inline-task-choice value="${user.id}" ${selected.has(Number(user.id)) ? 'checked' : ''}><span>${escapeHtml(user.display_name)}</span></label>`).join('') || '<span class="form-hint">Brak osób możliwych do przypisania.</span>'}</div>`;
+  }
+  const selected = new Set((item.requirement_ids || []).map(Number));
+  const requirements = state.config.requirements || [];
+  return `<div class="inline-task-choices">${requirements.map(requirement => `<label title="${escapeHtml(requirement.description || '')}"><input type="checkbox" data-inline-task-choice value="${requirement.id}" ${selected.has(Number(requirement.id)) ? 'checked' : ''}><span><b>${escapeHtml(requirement.name)}</b>${requirement.description ? `<small>${escapeHtml(requirement.description)}</small>` : ''}</span></label>`).join('') || '<span class="form-hint">Lista zapotrzebowania jest pusta.</span>'}</div>`;
+}
+
+function bindInlineTaskEditors() {
+  const labels = { start_date: 'Start', due_date: 'Deadline', direct_assignee_user_ids: 'Odpowiedzialni', requirement_ids: 'Zapotrzebowanie', priority: 'Priorytet' };
+  $$('[data-inline-task-field]').forEach(button => button.addEventListener('click', event => {
+    event.preventDefault(); event.stopPropagation();
+    document.querySelectorAll('.inline-status-popover,.inline-task-popover').forEach(popover => popover.remove());
+    const field = button.dataset.inlineTaskField;
+    const item = entity('tasks', Number(button.dataset.id));
+    if (!item || !labels[field]) return;
+    const root = document.createElement('div');
+    root.className = 'inline-task-popover';
+    root.innerHTML = `<header><strong>${labels[field]}</strong><button type="button" class="cancel" title="Anuluj">×</button></header><div class="inline-task-control">${taskQuickEditorContent(field, item)}</div><footer><button type="button" class="confirm">Zapisz</button></footer>`;
+    document.body.append(root);
+    positionInlinePopover(root, button);
+    const dateInput = root.querySelector('input[type="date"]');
+    root.querySelector('[data-inline-task-today]')?.addEventListener('click', () => { dateInput.value = today(); });
+    root.querySelector('[data-inline-task-clear]')?.addEventListener('click', () => { dateInput.value = ''; });
+    let outside;
+    const close = () => { root.remove(); document.removeEventListener('pointerdown', outside, true); };
+    root.querySelector('.cancel').addEventListener('click', close);
+    root.querySelector('.confirm').addEventListener('click', async event => {
+      const next = { ...item };
+      if (['start_date', 'due_date'].includes(field)) next[field] = root.querySelector('[data-inline-task-value]').value || null;
+      else if (field === 'priority') next.priority = root.querySelector('[data-inline-task-value]').value;
+      else next[field] = [...root.querySelectorAll('[data-inline-task-choice]:checked')].map(input => Number(input.value));
+      event.currentTarget.disabled = true;
+      try {
+        await api(`/api/tasks/${item.id}`, { method: 'PATCH', body: JSON.stringify(next) });
+        close(); toast(`${labels[field]} — zapisano zmianę`); await loadData(true);
+      } catch (error) { event.currentTarget.disabled = false; toast(error.message, true); }
+    });
+    outside = outsideEvent => { if (!root.contains(outsideEvent.target) && !button.contains(outsideEvent.target)) close(); };
+    setTimeout(() => document.addEventListener('pointerdown', outside, true), 0);
+    root.querySelector('input,select')?.focus();
+  }));
+}
+
 function bindInlineStatusEditors() {
   $$('[data-inline-status]').forEach(button => button.addEventListener('click', event => {
     event.preventDefault(); event.stopPropagation();
-    document.querySelector('.inline-status-popover')?.remove();
+    document.querySelectorAll('.inline-status-popover,.inline-task-popover').forEach(popover => popover.remove());
     const type = button.dataset.inlineStatus; const item = entity(type, Number(button.dataset.id)); if (!item) return;
     const values = type === 'task' ? ['To do', 'In progress', 'Done'] : ['Not started', 'Ready to test', 'In progress', 'Blocked', 'NOK / Rework', 'Retest required', 'Done', 'N/A'];
     const root = document.createElement('div'); root.className = 'inline-status-popover';
@@ -2274,7 +2336,7 @@ function taskCard(item) {
 
 function renderTasks() {
   const listTools = state.taskMode === 'list' ? `<label>Grupuj <select id="task-group"><option value="">Bez grupowania</option><option value="function_group_name">Grupa funkcyjna</option><option value="function_group_element_name">Element grupy</option><option value="category">Kategoria</option><option value="subcategory">Podkategoria</option><option value="status">Status</option><option value="owner_name">Odpowiedzialny</option><option value="scope_label">Zakres hierarchii</option></select></label><button type="button" class="mini" id="task-collapse-all">Zwiń wszystkie</button><button type="button" class="mini" id="task-expand-all">Rozwiń wszystkie</button><button type="button" class="mini" id="task-table-clear">Wyczyść filtry tabeli</button><label class="toggle-line compact-toggle"><input type="checkbox" id="task-show-completed" ${state.taskShowCompleted ? 'checked' : ''}> Pokaż ukończone</label>` : '';
-  $('#content').innerHTML = `<div class="panel compact-data-panel"><div class="toolbar module-toolbar" id="task-filter-bar"><strong>Zadania</strong><button id="task-board-mode" class="secondary ${state.taskMode === 'board' ? 'active-toggle' : ''}">Tablica</button><button id="task-list-mode" class="secondary ${state.taskMode === 'list' ? 'active-toggle' : ''}">Lista</button><input id="task-search" placeholder="Szukaj we wszystkich polach">${multiFilterControl('toolbar_category', taskCategories(), 'Kategorie · wszystkie')}${multiFilterControl('toolbar_requirement', (state.config.requirements || []).map(item => item.name), 'Zapotrzebowanie · każde')}${listTools}${savedViewsToolbar('tasks')}</div></div><div id="task-content"></div>`;
+  $('#content').innerHTML = `<div class="panel compact-data-panel task-filter-panel"><div class="toolbar module-toolbar" id="task-filter-bar"><strong>Zadania</strong><button id="task-board-mode" class="secondary ${state.taskMode === 'board' ? 'active-toggle' : ''}">Tablica</button><button id="task-list-mode" class="secondary ${state.taskMode === 'list' ? 'active-toggle' : ''}">Lista</button><input id="task-search" placeholder="Szukaj we wszystkich polach">${multiFilterControl('toolbar_category', taskCategories(), 'Kategorie · wszystkie')}${multiFilterControl('toolbar_requirement', (state.config.requirements || []).map(item => item.name), 'Zapotrzebowanie · każde')}${listTools}${savedViewsToolbar('tasks')}</div></div><div id="task-content"></div>`;
   $('#task-board-mode').addEventListener('click', () => { state.taskMode = 'board'; renderTasks(); });
   $('#task-list-mode').addEventListener('click', () => { state.taskMode = 'list'; renderTasks(); });
   $('#task-search').addEventListener('input', drawTasks);
@@ -2354,17 +2416,18 @@ function drawTaskListRows() {
     const collapsed = grouping && state.collapsedTaskGroups.has(String(group));
     const progress = items.length ? Math.round(items.reduce((sum, item) => sum + Number(item.progress || 0), 0) / items.length) : 0;
     if (grouping) html += `<tr class="group-row ${collapsed ? 'collapsed' : ''}" data-task-group="${escapeHtml(group)}"><td colspan="${visibleCount}"><button type="button" class="group-toggle"><span>${collapsed ? '▸' : '▾'}</span><b>${escapeHtml(group)}</b><small>${items.length} pozycji</small><span class="group-progress"><i><u style="width:${progress}%"></u></i><b>${progress}%</b></span></button></td></tr>`;
-    if (!collapsed) html += items.map(item => { const time = taskTimeLabel(item); return `<tr data-id="${item.id}"><td data-column="title" class="maincell">${escapeHtml(item.title)}<span class="sub">${escapeHtml(item.description)}</span>${time ? `<span class="time-chip ${time.overdue ? 'overdue' : ''}">${escapeHtml(time.label)}</span>` : ''}</td><td data-column="scope_label">${escapeHtml(controllerLabel(item))}</td><td data-column="function_group_name">${escapeHtml(item.function_group_name || item.other_object || '—')}</td><td data-column="function_group_element_name">${escapeHtml(item.function_group_element_name || '—')}</td><td data-column="category">${escapeHtml(item.category || '—')}</td><td data-column="subcategory">${escapeHtml(item.subcategory || '—')}</td><td data-column="requirement_names">${escapeHtml(item.requirement_names || '—')}</td><td data-column="status">${inlineStatusBadge('task', item)}</td><td data-column="owner_name">${escapeHtml(item.owner_name || '—')}</td><td data-column="progress"><span class="table-progress"><i><u style="width:${item.progress || 0}%"></u></i><b>${item.progress || 0}%</b></span></td><td data-column="start_date">${displayDate(item.start_date)}</td><td data-column="due_date">${displayDate(item.due_date)}</td><td data-column="priority">${badge(item.priority)}</td></tr>`; }).join('');
+    if (!collapsed) html += items.map(item => { const time = taskTimeLabel(item); return `<tr data-id="${item.id}"><td data-column="title" class="maincell">${escapeHtml(item.title)}<span class="sub">${escapeHtml(item.description)}</span>${time ? `<span class="time-chip ${time.overdue ? 'overdue' : ''}">${escapeHtml(time.label)}</span>` : ''}</td><td data-column="scope_label">${escapeHtml(controllerLabel(item))}</td><td data-column="function_group_name">${escapeHtml(item.function_group_name || item.other_object || '—')}</td><td data-column="function_group_element_name">${escapeHtml(item.function_group_element_name || '—')}</td><td data-column="category">${escapeHtml(item.category || '—')}</td><td data-column="subcategory">${escapeHtml(item.subcategory || '—')}</td><td data-column="requirement_names">${inlineTaskField('requirement_ids', item, escapeHtml(item.requirement_names || '—'), 'textual')}</td><td data-column="status">${inlineStatusBadge('task', item)}</td><td data-column="owner_name">${inlineTaskField('direct_assignee_user_ids', item, escapeHtml(item.owner_name || '—'), 'textual')}</td><td data-column="progress"><span class="table-progress"><i><u style="width:${item.progress || 0}%"></u></i><b>${item.progress || 0}%</b></span></td><td data-column="start_date">${inlineTaskField('start_date', item, displayDate(item.start_date), 'date')}</td><td data-column="due_date">${inlineTaskField('due_date', item, displayDate(item.due_date), 'date')}</td><td data-column="priority">${inlineTaskField('priority', item, badge(item.priority), 'priority')}</td></tr>`; }).join('');
   }
   $('#task-list-body').innerHTML = html || `<tr><td colspan="${visibleCount}" class="empty">Brak wyników</td></tr>`;
   applyGroupedColumnVisibility('#task-list-panel', grouping, columns);
   $$('[data-task-group]').forEach(row => row.querySelector('button').addEventListener('click', () => { const key = row.dataset.taskGroup; if (state.collapsedTaskGroups.has(key)) state.collapsedTaskGroups.delete(key); else state.collapsedTaskGroups.add(key); drawTaskListRows(); }));
   $$('#task-list-body tr[data-id]').forEach(row => {
     const item = state.tasks.find(value => value.id === Number(row.dataset.id));
-    row.addEventListener('click', event => { if (!event.target.closest('[data-inline-status]')) openRecord('tasks', item); });
+    row.addEventListener('click', event => { if (!event.target.closest('[data-inline-status],[data-inline-task-field]')) openRecord('tasks', item); });
     row.addEventListener('contextmenu', event => showEntityContext(event, 'tasks', item));
   });
   bindInlineStatusEditors();
+  bindInlineTaskEditors();
 }
 
 function entity(type, id) {
