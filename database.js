@@ -55,14 +55,15 @@ export function openDatabase(databasePath) {
   migrateToV12(db);
   migrateToV13(db);
   migrateToV14(db);
+  const defaultProjectId = primaryProjectId(db);
   db.exec('CREATE INDEX IF NOT EXISTS idx_status_function_group ON status_items(function_group_id,function_group_check_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_status_project ON status_items(project_id,controller_id,status)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_task_scope_group ON tasks(project_id,controller_group_id,status)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_task_scope_checklist ON task_scope_checklist(task_id,sort_order)');
-  seedConfiguration(db, 1);
+  seedConfiguration(db, defaultProjectId);
   if (String(process.env.SEED_DEMO_DATA || 'true').toLowerCase() !== 'false') {
-    seedDemoData(db, hashPassword, process.env.DEMO_DATA_LIMIT || 100, { projectId: 1, variant: 'main' });
-    seedControllerHierarchy(db, 1);
+    if (defaultProjectId === 1) seedDemoData(db, hashPassword, process.env.DEMO_DATA_LIMIT || 100);
+    seedControllerHierarchy(db, defaultProjectId);
     seedSecondProject(db, hashPassword);
   }
   migrateToV12(db);
@@ -76,9 +77,9 @@ export function openDatabase(databasePath) {
   backfillV6(db);
   backfillV7(db);
   if (String(process.env.SEED_DEMO_DATA || 'true').toLowerCase() !== 'false') { seedV5Demo(db); seedV8Demo(db); }
-  seedMigrationAudit(db);
+  seedMigrationAudit(db, defaultProjectId);
   db.prepare("INSERT INTO app_meta(key,value) VALUES('schema_version','14.0') ON CONFLICT(key) DO UPDATE SET value='14.0'").run();
-  return createRepository(db);
+  return createRepository(db, defaultProjectId);
 }
 
 function columnNames(db, table) {
@@ -87,6 +88,14 @@ function columnNames(db, table) {
 
 function ensureColumn(db, table, name, definition) {
   if (!columnNames(db, table).has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+}
+
+function primaryProjectId(db) {
+  const project = db.prepare(`SELECT id FROM projects
+    ORDER BY CASE WHEN id=1 THEN 0 WHEN code='W371' COLLATE NOCASE THEN 1 ELSE 2 END,sort_order,id
+    LIMIT 1`).get();
+  if (!project) throw new Error('Brak projektu bazowego po migracji bazy danych');
+  return Number(project.id);
 }
 
 function migrateToV3(db) {
@@ -126,6 +135,7 @@ function migrateToV3(db) {
 function migrateToV4(db) {
   db.prepare(`INSERT OR IGNORE INTO projects(id,code,name,description,sort_order)
     VALUES(1,'W371','W371 · Commissioning','Dotychczasowy projekt PLC',0)`).run();
+  const defaultProjectId = primaryProjectId(db);
 
   const usersBefore = columnNames(db, 'users');
   ensureColumn(db, 'users', 'system_role', "TEXT NOT NULL DEFAULT 'user'");
@@ -155,19 +165,14 @@ function migrateToV4(db) {
   ];
   for (const addition of additions) ensureColumn(db, ...addition);
 
-  db.exec(`
-    UPDATE function_groups SET project_id=COALESCE((SELECT project_id FROM controllers WHERE id=function_groups.controller_id),1);
-    UPDATE status_items SET project_id=COALESCE((SELECT project_id FROM controllers WHERE id=status_items.controller_id),1);
-    UPDATE tasks SET project_id=COALESCE((SELECT project_id FROM controllers WHERE id=tasks.controller_id),1);
-    UPDATE open_points SET project_id=COALESCE((SELECT project_id FROM controllers WHERE id=open_points.controller_id),1);
-    UPDATE daily_notes SET project_id=COALESCE((SELECT project_id FROM controllers WHERE id=daily_notes.controller_id),1);
-    UPDATE goals SET project_id=COALESCE((SELECT project_id FROM controllers WHERE id=goals.controller_id),1);
-  `);
+  for (const table of ['function_groups', 'status_items', 'tasks', 'open_points', 'daily_notes', 'goals']) {
+    db.prepare(`UPDATE ${table} SET project_id=COALESCE((SELECT project_id FROM controllers WHERE id=${table}.controller_id),?)`).run(defaultProjectId);
+  }
 
   const users = db.prepare('SELECT id,role FROM users').all();
   const membership = db.prepare('INSERT OR IGNORE INTO project_memberships(project_id,user_id,role,active) VALUES(?,?,?,1)');
-  for (const user of users) membership.run(1, user.id, user.role === 'admin' ? 'project_admin' : user.role);
-  seedControllerHierarchy(db, 1);
+  for (const user of users) membership.run(defaultProjectId, user.id, user.role === 'admin' ? 'project_admin' : user.role);
+  seedControllerHierarchy(db, defaultProjectId);
 }
 
 function migrateToV5(db) {
@@ -694,15 +699,17 @@ function backfillV3(db) {
     UPDATE open_points SET linked_entity_type='point' WHERE linked_entity_type='points';
     UPDATE open_points SET linked_entity_type='note' WHERE linked_entity_type='notes';
   `);
-  const distinctTaskCategories = db.prepare("SELECT DISTINCT category FROM tasks WHERE category!=''").all();
-  const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order),-1) value FROM task_categories').get().value;
-  const add = db.prepare('INSERT OR IGNORE INTO task_categories(name,sort_order) VALUES(?,?)');
-  distinctTaskCategories.forEach((row, index) => add.run(row.category, maxOrder + index + 1));
+  const distinctTaskCategories = db.prepare("SELECT DISTINCT project_id,category FROM tasks WHERE category!=''").all();
+  const add = db.prepare('INSERT OR IGNORE INTO task_categories(project_id,name,sort_order) VALUES(?,?,?)');
+  for (const row of distinctTaskCategories) {
+    const nextOrder = db.prepare('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM task_categories WHERE project_id=?').get(row.project_id).value;
+    add.run(row.project_id, row.category, nextOrder);
+  }
 
-  const taskPairs = db.prepare("SELECT DISTINCT category,subcategory FROM tasks WHERE category!='' AND subcategory!=''").all();
+  const taskPairs = db.prepare("SELECT DISTINCT project_id,category,subcategory FROM tasks WHERE category!='' AND subcategory!=''").all();
   const addSubcategory = db.prepare('INSERT OR IGNORE INTO task_subcategories(category_id,name,sort_order) VALUES(?,?,?)');
   for (const pair of taskPairs) {
-    const category = db.prepare('SELECT id FROM task_categories WHERE name=? COLLATE NOCASE').get(pair.category);
+    const category = db.prepare('SELECT id FROM task_categories WHERE project_id=? AND name=? COLLATE NOCASE').get(pair.project_id, pair.category);
     if (!category) continue;
     const nextOrder = db.prepare('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM task_subcategories WHERE category_id=?').get(category.id).value;
     addSubcategory.run(category.id, pair.subcategory, nextOrder);
@@ -912,20 +919,20 @@ function seedV8Demo(db) {
   }
 }
 
-function seedMigrationAudit(db) {
+function seedMigrationAudit(db, defaultProjectId) {
   for (const [type, table] of Object.entries(TABLES)) {
     const rows = db.prepare(`SELECT * FROM ${table}`).all();
     const insertAudit = db.prepare('INSERT INTO audit_log(project_id,entity_type,entity_id,action,user_id,changes_json,snapshot_json) VALUES(?,?,?,?,?,?,?)');
     for (const row of rows) {
       const existing = db.prepare('SELECT 1 FROM audit_log WHERE entity_type=? AND entity_id=? LIMIT 1').get(type, row.id);
-      if (!existing) insertAudit.run(row.project_id || 1, type, row.id, 'migrate', null, JSON.stringify({ migrated: { from: null, to: 'V4' } }), JSON.stringify(row));
+      if (!existing) insertAudit.run(row.project_id || defaultProjectId, type, row.id, 'migrate', null, JSON.stringify({ migrated: { from: null, to: 'V4' } }), JSON.stringify(row));
     }
   }
 }
 
-function createRepository(db) {
+function createRepository(db, defaultProjectId) {
   const projectStorage = new AsyncLocalStorage();
-  const activeProjectId = () => Number(projectStorage.getStore()) || 1;
+  const activeProjectId = () => Number(projectStorage.getStore()) || defaultProjectId;
   const one = (sql, ...params) => db.prepare(sql).get(...params);
   const all = (sql, ...params) => db.prepare(sql).all(...params);
   const refreshControllerCodes = () => refreshControllerCodesForProject(db, activeProjectId());

@@ -140,6 +140,40 @@ test('configured controller order survives a database restart', () => {
   }
 });
 
+test('database reopens after project 1 was replaced on a persistent volume', () => {
+  const temporary = temporaryDatabase();
+  let repository = openDatabase(temporary.path);
+  try {
+    const original = repository.projects().find(project => project.id === 1);
+    const replacement = repository.projects().find(project => project.id !== 1);
+    assert.ok(original);
+    assert.ok(replacement);
+
+    repository.deleteProject(original.id, {
+      project_code: original.code,
+      confirmation: `USUŃ ${original.code}`
+    });
+    repository.saveProject(replacement.id, {
+      code: 'W371',
+      name: 'W371 po migracji',
+      description: 'Projekt zachowany na Railway Volume',
+      active: 1
+    });
+    repository.close();
+    repository = null;
+
+    repository = openDatabase(temporary.path);
+    const migrated = repository.projects().find(project => project.code === 'W371');
+    assert.equal(migrated.id, replacement.id);
+    assert.notEqual(migrated.id, 1);
+    const admin = repository.authenticate('admin');
+    assert.ok(repository.me(admin.id).projects.some(project => project.id === replacement.id));
+  } finally {
+    repository?.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
 test('V3.2 manages controller function groups, check templates and batch status editing', () => {
   const temporary = temporaryDatabase();
   let repository = openDatabase(temporary.path);
