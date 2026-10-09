@@ -2065,7 +2065,7 @@ function orderedGroups(module, grouping, rows) {
 }
 
 function inlineStatusBadge(type, item) {
-  return `<button type="button" class="inline-status-badge" data-inline-status="${type}" data-id="${item.id}" title="Kliknij, aby szybko zmienić status">${badge(item.status)}</button>`;
+  return inlineEntityField(type === 'task' ? 'tasks' : type, 'status', item, badge(item.status), 'priority');
 }
 
 function inlineTaskField(field, item, content, className = '') {
@@ -2073,7 +2073,7 @@ function inlineTaskField(field, item, content, className = '') {
 }
 
 function inlineEntityField(type, field, item, content, className = '') {
-  return `<button type="button" class="inline-task-edit ${className}" data-inline-entity-field="${field}" data-inline-entity-type="${type}" data-id="${item.id}" title="Kliknij, aby szybko zmienić wartość">${content}</button>`;
+  return `<button type="button" class="inline-edit-button ${className}" data-inline-entity-field="${field}" data-inline-entity-type="${type}" data-id="${item.id}" title="Kliknij, aby szybko zmienić wartość">${content}</button>`;
 }
 
 function positionInlinePopover(root, button) {
@@ -2085,6 +2085,7 @@ function positionInlinePopover(root, button) {
 
 const inlineEditDefinitions = {
   tasks: { endpoint: '/api/tasks', fields: {
+    status: { label: 'Status', kind: 'select', values: ['To do', 'In progress', 'Done'] },
     start_date: { label: 'Start', kind: 'date' }, due_date: { label: 'Deadline', kind: 'date' },
     direct_assignee_user_ids: { label: 'Odpowiedzialni', kind: 'users' }, requirement_ids: { label: 'Zapotrzebowanie', kind: 'requirements' },
     priority: { label: 'Priorytet', kind: 'select', values: ['Low', 'Medium', 'High', 'Critical'] }
@@ -2096,6 +2097,7 @@ const inlineEditDefinitions = {
     due_date: { label: 'Deadline', kind: 'date' }, reminder_date: { label: 'Przypomnienie', kind: 'date' }
   } },
   status: { endpoint: '/api/status', fields: {
+    status: { label: 'Status', kind: 'select', values: ['Not started', 'Ready to test', 'In progress', 'Blocked', 'NOK / Rework', 'Retest required', 'Done', 'N/A'] },
     criticality: { label: 'Krytyczność', kind: 'select', values: ['Low', 'Medium', 'High', 'Critical'] },
     responsible_user_ids: { label: 'Odpowiedzialni', kind: 'users' }, requirement_ids: { label: 'Zapotrzebowanie', kind: 'requirements' }
   } }
@@ -2103,32 +2105,32 @@ const inlineEditDefinitions = {
 
 function inlineEditorContent(definition, field, item) {
   if (definition.kind === 'date') {
-    return `<input type="date" data-inline-task-value value="${escapeHtml(item[field] || '')}"><div class="inline-task-date-actions"><button type="button" data-inline-task-today>Dzisiaj</button><button type="button" data-inline-task-clear>Wyczyść</button></div>`;
+    return `<input type="date" data-inline-edit-value value="${escapeHtml(item[field] || '')}"><div class="inline-edit-date-actions"><button type="button" data-inline-edit-today>Dzisiaj</button><button type="button" data-inline-edit-clear>Wyczyść</button></div>`;
   }
   if (definition.kind === 'select') {
     const configured = typeof definition.values === 'function' ? definition.values() : definition.values;
     const values = [...configured];
     if (item[field] && !values.some(value => String(typeof value === 'object' ? value.value : value) === String(item[field]))) values.unshift(item[field]);
-    return `<select data-inline-task-value>${selectOptions(values, item[field], definition.blank ?? null)}</select>`;
+    return `<select data-inline-edit-value>${selectOptions(values, item[field], definition.blank ?? null)}</select>`;
   }
   if (definition.kind === 'user') {
     const users = assignableUsers([item[field]]);
-    return `<select data-inline-task-value>${selectOptions(users.map(user => ({ value: user.id, label: user.display_name })), item[field], 'Nieprzypisane')}</select>`;
+    return `<select data-inline-edit-value>${selectOptions(users.map(user => ({ value: user.id, label: user.display_name })), item[field], 'Nieprzypisane')}</select>`;
   }
   if (definition.kind === 'users') {
     const selected = new Set((item[field] || []).map(Number));
     const users = assignableUsers([...selected]);
-    return `<div class="inline-task-choices">${users.map(user => `<label><input type="checkbox" data-inline-task-choice value="${user.id}" ${selected.has(Number(user.id)) ? 'checked' : ''}><span>${escapeHtml(user.display_name)}</span></label>`).join('') || '<span class="form-hint">Brak osób możliwych do przypisania.</span>'}</div>`;
+    return `<div class="inline-edit-choices">${users.map(user => `<label><input type="checkbox" data-inline-edit-choice value="${user.id}" ${selected.has(Number(user.id)) ? 'checked' : ''}><span>${escapeHtml(user.display_name)}</span></label>`).join('') || '<span class="form-hint">Brak osób możliwych do przypisania.</span>'}</div>`;
   }
   const selected = new Set((item.requirement_ids || []).map(Number));
   const requirements = state.config.requirements || [];
-  return `<div class="inline-task-choices">${requirements.map(requirement => `<label title="${escapeHtml(requirement.description || '')}"><input type="checkbox" data-inline-task-choice value="${requirement.id}" ${selected.has(Number(requirement.id)) ? 'checked' : ''}><span><b>${escapeHtml(requirement.name)}</b>${requirement.description ? `<small>${escapeHtml(requirement.description)}</small>` : ''}</span></label>`).join('') || '<span class="form-hint">Lista zapotrzebowania jest pusta.</span>'}</div>`;
+  return `<div class="inline-edit-choices">${requirements.map(requirement => `<label title="${escapeHtml(requirement.description || '')}"><input type="checkbox" data-inline-edit-choice value="${requirement.id}" ${selected.has(Number(requirement.id)) ? 'checked' : ''}><span><b>${escapeHtml(requirement.name)}</b>${requirement.description ? `<small>${escapeHtml(requirement.description)}</small>` : ''}</span></label>`).join('') || '<span class="form-hint">Lista zapotrzebowania jest pusta.</span>'}</div>`;
 }
 
 function bindInlineEntityEditors() {
   $$('[data-inline-entity-field]').forEach(button => button.addEventListener('click', event => {
     event.preventDefault(); event.stopPropagation();
-    document.querySelectorAll('.inline-status-popover,.inline-task-popover').forEach(popover => popover.remove());
+    document.querySelectorAll('.inline-edit-popover').forEach(popover => popover.remove());
     const type = button.dataset.inlineEntityType;
     const field = button.dataset.inlineEntityField;
     const config = inlineEditDefinitions[type];
@@ -2136,27 +2138,28 @@ function bindInlineEntityEditors() {
     const item = entity(type, Number(button.dataset.id));
     if (!item || !definition) return;
     const root = document.createElement('div');
-    root.className = 'inline-task-popover';
-    root.innerHTML = `<header><strong>${definition.label}</strong><button type="button" class="cancel" title="Anuluj">×</button></header><div class="inline-task-control">${inlineEditorContent(definition, field, item)}</div><footer><button type="button" class="confirm">Zapisz</button></footer>`;
+    root.className = 'inline-edit-popover';
+    root.innerHTML = `<header><strong>${definition.label}</strong><button type="button" class="cancel" title="Anuluj">×</button></header><div class="inline-edit-control">${inlineEditorContent(definition, field, item)}</div><footer><button type="button" class="confirm">Zapisz</button></footer>`;
     document.body.append(root);
     positionInlinePopover(root, button);
     const dateInput = root.querySelector('input[type="date"]');
-    root.querySelector('[data-inline-task-today]')?.addEventListener('click', () => { dateInput.value = today(); });
-    root.querySelector('[data-inline-task-clear]')?.addEventListener('click', () => { dateInput.value = ''; });
+    root.querySelector('[data-inline-edit-today]')?.addEventListener('click', () => { dateInput.value = today(); });
+    root.querySelector('[data-inline-edit-clear]')?.addEventListener('click', () => { dateInput.value = ''; });
     let outside;
     const close = () => { root.remove(); document.removeEventListener('pointerdown', outside, true); };
     root.querySelector('.cancel').addEventListener('click', close);
     root.querySelector('.confirm').addEventListener('click', async event => {
       const next = { ...item };
-      if (definition.kind === 'date') next[field] = root.querySelector('[data-inline-task-value]').value || null;
-      else if (definition.kind === 'select') next[field] = root.querySelector('[data-inline-task-value]').value;
-      else if (definition.kind === 'user') next[field] = Number(root.querySelector('[data-inline-task-value]').value) || null;
-      else next[field] = [...root.querySelectorAll('[data-inline-task-choice]:checked')].map(input => Number(input.value));
-      event.currentTarget.disabled = true;
+      if (definition.kind === 'date') next[field] = root.querySelector('[data-inline-edit-value]').value || null;
+      else if (definition.kind === 'select') next[field] = root.querySelector('[data-inline-edit-value]').value;
+      else if (definition.kind === 'user') next[field] = Number(root.querySelector('[data-inline-edit-value]').value) || null;
+      else next[field] = [...root.querySelectorAll('[data-inline-edit-choice]:checked')].map(input => Number(input.value));
+      const saveButton = event.currentTarget;
+      saveButton.disabled = true;
       try {
         await api(`${config.endpoint}/${item.id}`, { method: 'PATCH', body: JSON.stringify(next) });
         close(); toast(`${definition.label} — zapisano zmianę`); await loadData(true);
-      } catch (error) { event.currentTarget.disabled = false; toast(error.message, true); }
+      } catch (error) { saveButton.disabled = false; toast(error.message, true); }
     });
     outside = outsideEvent => { if (!root.contains(outsideEvent.target) && !button.contains(outsideEvent.target)) close(); };
     setTimeout(() => document.addEventListener('pointerdown', outside, true), 0);
@@ -2164,24 +2167,6 @@ function bindInlineEntityEditors() {
   }));
 }
 
-function bindInlineStatusEditors() {
-  $$('[data-inline-status]').forEach(button => button.addEventListener('click', event => {
-    event.preventDefault(); event.stopPropagation();
-    document.querySelectorAll('.inline-status-popover,.inline-task-popover').forEach(popover => popover.remove());
-    const type = button.dataset.inlineStatus; const item = entity(type, Number(button.dataset.id)); if (!item) return;
-    const values = type === 'task' ? ['To do', 'In progress', 'Done'] : ['Not started', 'Ready to test', 'In progress', 'Blocked', 'NOK / Rework', 'Retest required', 'Done', 'N/A'];
-    const root = document.createElement('div'); root.className = 'inline-status-popover';
-    root.innerHTML = `<select>${selectOptions(values, item.status, null)}</select><button type="button" class="confirm" title="Zapisz">✓</button><button type="button" class="cancel" title="Anuluj">×</button>`;
-    const rect = button.getBoundingClientRect(); root.style.left = `${Math.min(innerWidth - 250, Math.max(8, rect.left))}px`; root.style.top = `${Math.min(innerHeight - 60, rect.bottom + 4)}px`; document.body.append(root);
-    root.querySelector('.cancel').addEventListener('click', () => root.remove());
-    root.querySelector('.confirm').addEventListener('click', async () => {
-      try { await api(`/api/${type === 'task' ? 'tasks' : 'status'}/${item.id}`, { method: 'PATCH', body: JSON.stringify({ ...item, status: root.querySelector('select').value }) }); root.remove(); toast('Status został zaktualizowany'); await loadData(true); }
-      catch (error) { toast(error.message, true); }
-    });
-    const outside = outsideEvent => { if (!root.contains(outsideEvent.target) && outsideEvent.target !== button) { root.remove(); document.removeEventListener('pointerdown', outside, true); } };
-    setTimeout(() => document.addEventListener('pointerdown', outside, true), 0);
-  }));
-}
 
 function renderStatus() {
   const d = state.dashboard;
@@ -2227,10 +2212,9 @@ function drawStatusRows() {
   $$('#status-body [data-status-group]').forEach(row => row.addEventListener('click', () => { const key = row.dataset.statusGroup; if (state.collapsedStatusGroups.has(key)) state.collapsedStatusGroups.delete(key); else state.collapsedStatusGroups.add(key); drawStatusRows(); }));
   $$('#status-body tr[data-id]').forEach(row => {
     const item = state.status.find(entry => entry.id === Number(row.dataset.id));
-    row.addEventListener('click', event => { if (!event.target.closest('[data-inline-status],[data-inline-entity-field]')) openRecord('status', item); });
+    row.addEventListener('click', event => { if (!event.target.closest('[data-inline-entity-field]')) openRecord('status', item); });
     row.addEventListener('contextmenu', event => showStatusContext(event, item));
   });
-  bindInlineStatusEditors();
   bindInlineEntityEditors();
 }
 
@@ -2458,10 +2442,9 @@ function drawTaskListRows() {
   $$('[data-task-group]').forEach(row => row.querySelector('button').addEventListener('click', () => { const key = row.dataset.taskGroup; if (state.collapsedTaskGroups.has(key)) state.collapsedTaskGroups.delete(key); else state.collapsedTaskGroups.add(key); drawTaskListRows(); }));
   $$('#task-list-body tr[data-id]').forEach(row => {
     const item = state.tasks.find(value => value.id === Number(row.dataset.id));
-    row.addEventListener('click', event => { if (!event.target.closest('[data-inline-status],[data-inline-entity-field]')) openRecord('tasks', item); });
+    row.addEventListener('click', event => { if (!event.target.closest('[data-inline-entity-field]')) openRecord('tasks', item); });
     row.addEventListener('contextmenu', event => showEntityContext(event, 'tasks', item));
   });
-  bindInlineStatusEditors();
   bindInlineEntityEditors();
 }
 
