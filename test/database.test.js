@@ -125,8 +125,14 @@ test('configured controller order survives a database restart', () => {
       notes: repository.notes('all', null, null, repository.me(1)).length
     };
     repository.reorder('controllers', reversed);
+    const hierarchyBeforeRestart = repository.controllerGroups();
     repository.close();
     repository = openDatabase(temporary.path);
+    assert.deepEqual(repository.controllers().map(item => item.id), reversed);
+    assert.deepEqual(repository.controllerGroups(), hierarchyBeforeRestart);
+    repository.close();
+    repository = openDatabase(temporary.path);
+    assert.deepEqual(repository.controllerGroups(), hierarchyBeforeRestart);
     assert.deepEqual(repository.controllers().map(item => item.id), reversed);
     assert.deepEqual({
       status: repository.status('all', repository.me(1)).length,

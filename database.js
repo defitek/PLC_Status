@@ -503,10 +503,15 @@ function seedControllerHierarchy(db, projectId) {
   const updateController = db.prepare('UPDATE controllers SET group_id=? WHERE id=?');
   const rootOrders = new Map();
   for (const item of controllers) {
+    if (item.group_id) continue;
     const rootName = (item.code.match(/^[A-Za-z]+/)?.[0] || item.area || 'Inne').toUpperCase();
     if (!rootOrders.has(rootName)) rootOrders.set(rootName, rootOrders.size);
-    insert.run(projectId, null, rootName, rootOrders.get(rootName));
-    const root = db.prepare('SELECT id FROM controller_groups WHERE project_id=? AND parent_id IS NULL AND name=? COLLATE NOCASE').get(projectId, rootName);
+    let root = db.prepare('SELECT id FROM controller_groups WHERE project_id=? AND parent_id IS NULL AND name=? COLLATE NOCASE ORDER BY id LIMIT 1').get(projectId, rootName);
+    // SQLite UNIQUE constraints allow repeated NULL parent IDs.
+    if (!root) {
+      insert.run(projectId, null, rootName, rootOrders.get(rootName));
+      root = db.prepare('SELECT id FROM controller_groups WHERE project_id=? AND parent_id IS NULL AND name=? COLLATE NOCASE ORDER BY id LIMIT 1').get(projectId, rootName);
+    }
     const middleName = /^([A-Za-z]+\d{2})\d/.exec(item.code)?.[1] || '';
     let groupId = root.id;
     if (middleName && middleName !== item.code) {
