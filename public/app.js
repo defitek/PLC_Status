@@ -1,17 +1,18 @@
 const state = {
-  view: 'overview', controller: 'all', me: null, projects: [], controllerGroups: [], controllers: [], users: [],
+  view: 'mine', controller: 'all', me: null, projects: [], controllerGroups: [], controllers: [], users: [],
   config: { categories: [], task_categories: [], function_groups: [], options: [], announcement_labels: [], settings: {} },
-  overview: null, announcements: [], notifications: [], mine: null, dashboard: {}, status: [], tasks: [], points: [], notes: [], goals: [], planner: null, calendar: null, history: [], savedViews: [], operations: null,
+  overview: null, announcements: [], notifications: [], mine: null, dashboard: {}, status: [], tasks: [], points: [], notes: [], goals: [], planner: null, calendar: null, history: [], savedViews: [], operations: null, commissioning: null,
   dialog: null, dialogInitial: '', dirtyCloseAttempt: new WeakSet(), goalDraftLinks: [], goalPickerCollections: null, linkDraft: [], taskMode: 'board', taskShowCompleted: false, pointMode: 'list', trendPeriod: 'week',
   functionGroupController: '', functionPointGroup: null, functionPointDraft: [], quickStatusDraft: [],
   notesFrom: '', notesTo: '', notesWeek: '', draggingTask: false, plannerFrom: '', plannerDays: 14,
-  plannerCell: null, plannerClipboard: null, plannerDragEntry: null, calendarFrom: '', calendarTo: '', calendarMode: 'week', calendarTypes: ['task', 'point', 'status', 'goal', 'note', 'annotation'], calendarPriorities: ['Low', 'Medium', 'High', 'Critical'], calendarOnlyMine: false, calendarCategory: '',
+  plannerCell: null, plannerClipboard: null, plannerDragEntry: null, plannerDragDay: null, calendarFrom: '', calendarTo: '', calendarMode: 'week', calendarTypes: ['task', 'point', 'status', 'goal', 'note', 'annotation'], calendarPriorities: ['Low', 'Medium', 'High', 'Critical'], calendarOnlyMine: false, calendarCategory: '',
   kpiModules: ['status', 'tasks', 'points', 'goals'], globalTrendMode: 'combined', overviewDetailed: false, detailedKpiMode: 'combined', detailedKpiPeriod: 'week', linkPickerAllowed: [], linkPickerDraft: [], linkPickerCollections: null, actionResolve: null, actionDialogGeneration: 0, actionClosingGeneration: 0, configPanel: null, configScroll: 0, hierarchySelection: null, dailySummaryOpening: false,
   selectionContext: null, selectionDraft: [], selectionCollections: null, duplicateSource: null, checklistTask: null, notificationSeen: new Set(),
   announcementLabelFilter: '', announcementImportanceFilter: '', liveSource: null, liveRefreshTimer: null,
   categorySelection: { status: null, task: null },
   functionListManager: null,
   operationsTab: 'triage', triageSelection: new Set(), savedViewApplying: false, activeSavedView: {}, taskDependencyOptions: [],
+  commissioningTab: 'campaigns', collapsedStatusGroups: new Set(), statusTransfer: null,
   grouping: { status: 'category', tasks: '', notes: 'scope', history: 'hierarchy' },
   sort: { status: { key: '', direction: 1 }, tasks: { key: '', direction: 1 }, points: { key: '', direction: 1 } }
 };
@@ -32,14 +33,15 @@ const pageCopy = {
   overview: ['Overview', 'Liczbowy obraz gotowości całego projektu', ''],
   announcements: ['Informator', 'Wiadomości operacyjne, decyzje i komunikaty projektu', '+ Nowa wiadomość'],
   mine: ['Moje podsumowanie', 'Twoje zadania, odpowiedzialności, wzmianki i aktywność', ''],
-  operations: ['Centrum operacyjne', 'Triage, jakość danych, zależności, przekazania zmian i automatyzacje', ''],
+  operations: ['Centrum operacyjne', 'Triage, jakość danych, ryzyko, zależności, odprawy i automatyzacje', ''],
+  commissioning: ['Uruchomienie', 'Sesje testowe, wyniki, retesty i bramy gotowości', ''],
   planner: ['Planner', 'Planowanie manpoweru, obszarów, zmian i transportu', ''],
   calendar: ['Kalendarz', 'Zintegrowany harmonogram projektu do 31 dni', '+ Adnotacja'],
   status: ['Status', 'Testy uruchomieniowe według kolejności projektu', '+ Dodaj test'],
   tasks: ['Zadania', 'Plan pracy zespołu, checklisty i odpowiedzialności', '+ Nowe zadanie'],
   goals: ['Cele', 'Cele projektu łączące status, zadania i otwarte punkty', '+ Nowy cel'],
   points: ['Otwarte punkty', 'Problemy, oczekiwania i przypomnienia', '+ Nowy punkt'],
-  notes: ['Dzienne notatki', 'Historia zmianowa i powiązania z pracą zespołu', '+ Dodaj notatkę'],
+  notes: ['Przekazanie statusu', 'Wielosekcyjne przekazanie informacji dla projektu, obszarów i sterowników', '+ Nowe przekazanie'],
   history: ['Historia', 'Wszystkie zmiany w danych projektu z bezpośrednim przejściem', ''],
   settings: ['Konfiguracja', 'Kolejność, sterowniki, użytkownicy, kategorie i słowniki', '']
 };
@@ -185,7 +187,7 @@ function hierarchyFilterOptions() {
 
 function multiFilterControl(key, values, label = 'Wszystkie', kind = 'multi') {
   const items = values.map(item => typeof item === 'object' ? item : { value: item, label: item });
-  return `<details class="table-filter-menu" data-filter-kind="${kind}" data-filter-key="${escapeHtml(key)}"><summary data-filter-summary>${escapeHtml(label)}</summary><div class="table-filter-options"><button type="button" class="filter-clear" data-filter-clear>Wyczyść wybór</button>${items.map(item => `<label><input type="checkbox" value="${escapeHtml(item.value)}"> <span>${escapeHtml(item.label)}</span></label>`).join('') || '<span class="filter-empty">Brak wartości</span>'}</div></details>`;
+  return `<details class="table-filter-menu" data-filter-kind="${kind}" data-filter-key="${escapeHtml(key)}"><summary data-filter-summary>${escapeHtml(label)}</summary><div class="table-filter-options"><div class="filter-actions"><button type="button" class="filter-select-all" data-filter-select-all>Zaznacz wszystko</button><button type="button" class="filter-clear" data-filter-clear>Wyczyść</button></div>${items.map(item => `<label><input type="checkbox" value="${escapeHtml(item.value)}"> <span>${escapeHtml(item.label)}</span></label>`).join('') || '<span class="filter-empty">Brak wartości</span>'}</div></details>`;
 }
 
 function tableFilterRow(columns) {
@@ -193,7 +195,7 @@ function tableFilterRow(columns) {
     let control = '';
     if (column.filter !== false) {
       if (column.filter === 'hierarchy') control = multiFilterControl(column.key, hierarchyFilterOptions(), 'Cała hierarchia', 'hierarchy');
-      else if (column.filter === 'number') control = `<div class="range-filter number-filter" data-filter-kind="number" data-filter-key="${column.key}"><select data-filter-mode><option value="between">Od–do</option><option value="gte">Powyżej / równe</option><option value="lte">Poniżej / równe</option><option value="eq">Równe</option></select><input type="number" min="0" max="100" step="1" data-filter-min placeholder="Od"><input type="number" min="0" max="100" step="1" data-filter-max placeholder="Do"></div>`;
+      else if (column.filter === 'number') control = `<div class="range-filter number-filter" data-filter-kind="number" data-filter-key="${column.key}"><select data-filter-mode><option value="between">Od–do</option><option value="gt">Powyżej</option><option value="lt">Poniżej</option><option value="eq">Równe</option></select><input type="number" min="0" max="100" step="1" data-filter-min placeholder="Od"><input type="number" min="0" max="100" step="1" data-filter-max placeholder="Do"></div>`;
       else if (column.filter === 'date') control = `<div class="range-filter date-filter" data-filter-kind="date" data-filter-key="${column.key}"><select data-filter-mode><option value="from">Od daty (≥)</option><option value="to">Do daty (≤)</option><option value="on">Dokładnie</option></select><input type="date" data-filter-date></div>`;
       else if (column.values) control = multiFilterControl(column.key, column.values);
       else control = `<input data-filter-text="${column.key}" placeholder="Filtruj…">`;
@@ -255,8 +257,8 @@ function filterRows(rows, root) {
         const value = Number(row[key]); const min = Number(minInput); const max = Number(maxInput); const mode = widget.querySelector('[data-filter-mode]').value;
         if (!Number.isFinite(value)) return false;
         if (mode === 'between' && ((minInput !== '' && value < min) || (maxInput !== '' && value > max))) return false;
-        if (mode === 'gte' && minInput !== '' && value < min) return false;
-        if (mode === 'lte' && minInput !== '' && value > min) return false;
+        if (mode === 'gt' && minInput !== '' && value <= min) return false;
+        if (mode === 'lt' && minInput !== '' && value >= min) return false;
         if (mode === 'eq' && minInput !== '' && value !== min) return false;
       } else if (kind === 'date') {
         const target = widget.querySelector('[data-filter-date]').value;
@@ -279,9 +281,19 @@ function updateFilterSummaries(root) {
 }
 
 function bindTableFilters(root, redraw) {
+  $$(`${root} details.table-filter-menu`).forEach(menu => menu.addEventListener('toggle', () => {
+    if (!menu.open) return;
+    document.querySelectorAll('details.table-filter-menu[open]').forEach(other => { if (other !== menu) other.open = false; });
+    const rect = menu.querySelector('summary').getBoundingClientRect();
+    const width = Math.max(230, Math.min(330, rect.width));
+    menu.style.setProperty('--filter-popup-left', `${Math.max(8, Math.min(innerWidth - width - 8, rect.left))}px`);
+    menu.style.setProperty('--filter-popup-top', `${Math.min(innerHeight - 220, rect.bottom + 4)}px`);
+    menu.style.setProperty('--filter-popup-width', `${width}px`);
+  }));
   $$(`${root} [data-filter-text], ${root} [data-filter-min], ${root} [data-filter-max], ${root} [data-filter-date]`).forEach(input => input.addEventListener('input', redraw));
   $$(`${root} [data-filter-kind] input[type="checkbox"], ${root} [data-filter-mode]`).forEach(input => input.addEventListener('change', () => { updateFilterSummaries(root); const widget = input.closest('[data-filter-kind="number"]'); if (widget) widget.classList.toggle('single-value', input.value !== 'between'); redraw(); }));
   $$(`${root} [data-filter-clear]`).forEach(button => button.addEventListener('click', event => { event.preventDefault(); const widget = button.closest('[data-filter-kind]'); widget.querySelectorAll('input[type="checkbox"]').forEach(input => { input.checked = false; }); updateFilterSummaries(root); redraw(); }));
+  $$(`${root} [data-filter-select-all]`).forEach(button => button.addEventListener('click', event => { event.preventDefault(); const widget = button.closest('[data-filter-kind]'); widget.querySelectorAll('input[type="checkbox"]').forEach(input => { input.checked = true; }); updateFilterSummaries(root); redraw(); }));
   $$(`${root} [data-clear-filters]`).forEach(button => button.addEventListener('click', () => { $$(`${root} input[data-filter-text], ${root} input[data-filter-min], ${root} input[data-filter-max], ${root} input[data-filter-date]`).forEach(input => { input.value = ''; }); $$(`${root} [data-filter-kind] input[type="checkbox"]`).forEach(input => { input.checked = false; }); updateFilterSummaries(root); redraw(); }));
   updateFilterSummaries(root);
 }
@@ -416,14 +428,18 @@ function updateIdentity() {
   $('#me').textContent = `${state.me.display_name} · ${roleName(state.me.role)}`;
   $('#project-switch').textContent = state.me.current_project ? `${state.me.current_project.code} · ${state.me.current_project.name}` : 'Wybierz projekt';
   $('#settings-nav').hidden = !state.me.current_project || state.me.role === 'user';
+  document.querySelector('[data-view="operations"]').hidden = !state.me.current_project || !canCoordinate();
 }
 
 function bindShell() {
   $$('#nav button').forEach(button => button.addEventListener('click', () => setView(button.dataset.view)));
-  $('#mobile-menu').addEventListener('click', () => document.body.classList.toggle('nav-open'));
+  $('#mobile-menu').addEventListener('click', () => {
+    if (matchMedia('(max-width: 900px)').matches) document.body.classList.toggle('nav-open');
+    else document.body.classList.toggle('sidebar-collapsed');
+  });
   $('#sidebar-backdrop').addEventListener('click', () => document.body.classList.remove('nav-open'));
   $('#controller').addEventListener('change', async event => { state.controller = event.target.value; await loadData(); });
-  $('#add').addEventListener('click', () => state.view === 'calendar' ? openCalendarAnnotation() : openRecord(state.view));
+  $('#add').addEventListener('click', () => state.view === 'calendar' ? openCalendarAnnotation() : state.view === 'notes' ? openStatusTransferEditor() : openRecord(state.view));
   $('#close').addEventListener('click', () => $('#modal').close());
   $('#cancel').addEventListener('click', () => $('#modal').close());
   $('#form').addEventListener('submit', saveRecord);
@@ -478,6 +494,7 @@ function bindShell() {
   });
   $('#action-form').addEventListener('submit', event => { event.preventDefault(); finishAction(Object.fromEntries(new FormData(event.currentTarget))); });
   $('#insight-close').addEventListener('click', () => $('#insight-dialog').close());
+  $('#insight-dialog').addEventListener('close', () => $('#insight-dialog').classList.remove('kpi-expanded', 'area-detail-dialog'));
   $('#link-picker-close').addEventListener('click', closeLinkPicker);
   $('#link-picker-cancel').addEventListener('click', closeLinkPicker);
   $('#link-picker-search').addEventListener('input', renderLinkPicker);
@@ -509,7 +526,15 @@ function bindShell() {
   $('#entity-selection-search').addEventListener('input', renderEntitySelection);
   $('#entity-selection-type').addEventListener('change', renderEntitySelection);
   $('#entity-selection-apply').addEventListener('click', applyEntitySelection);
-  document.addEventListener('click', event => { if (!event.target.closest('#context-menu')) $('#context-menu').classList.add('hidden'); });
+  $('#status-transfer-close').addEventListener('click', () => $('#status-transfer-dialog').close());
+  $('#status-transfer-cancel').addEventListener('click', () => $('#status-transfer-dialog').close());
+  $('#status-transfer-add-section').addEventListener('click', () => addStatusTransferSection());
+  $('#status-transfer-form').addEventListener('submit', saveStatusTransfer);
+  $('#status-transfer-delete').addEventListener('click', deleteStatusTransfer);
+  document.addEventListener('click', event => {
+    if (!event.target.closest('#context-menu')) $('#context-menu').classList.add('hidden');
+    document.querySelectorAll('details.table-filter-menu[open]').forEach(menu => { if (!menu.contains(event.target)) menu.open = false; });
+  });
   installDialogOutsideClose();
 }
 
@@ -542,6 +567,7 @@ function openProjectDialog(mandatory = false) {
       state.me = await api('/api/select-project', { method: 'POST', body: JSON.stringify({ project_id: Number(button.dataset.projectId) }) });
       state.projects = state.me.projects || [];
       state.controller = 'all';
+      state.view = 'mine';
       state.activeSavedView = {};
       updateIdentity();
       dialog.close();
@@ -688,10 +714,10 @@ async function loadData(silent = false) {
   const calendarParams = new URLSearchParams({ controller: state.controller, from: state.calendarFrom, to: state.calendarTo, only_mine: state.calendarOnlyMine ? '1' : '0', category: state.calendarCategory });
   state.calendarTypes.forEach(type => calendarParams.append('type', type));
   state.calendarPriorities.forEach(priority => calendarParams.append('priority', priority));
-  [state.controllerGroups, state.controllers, state.users, state.config, state.overview, state.announcements, state.notifications, state.mine, state.dashboard, state.status, state.tasks, state.points, state.notes, state.goals, state.planner, state.calendar, state.history, state.savedViews, state.operations] = await Promise.all([
+  [state.controllerGroups, state.controllers, state.users, state.config, state.overview, state.announcements, state.notifications, state.mine, state.dashboard, state.status, state.tasks, state.points, state.notes, state.goals, state.planner, state.calendar, state.history, state.savedViews, state.operations, state.commissioning] = await Promise.all([
     api('/api/controller-groups'), api('/api/controllers'), api('/api/users'), api('/api/config'), api('/api/overview' + query), api('/api/announcements'), api('/api/notifications'), api('/api/my-summary'),
     api('/api/dashboard' + query), api('/api/status' + query), api('/api/tasks' + query), api('/api/open-points' + query),
-    api('/api/daily-notes' + notesQuery), api('/api/goals' + query), api('/api/planner' + plannerQuery), api('/api/calendar?' + calendarParams), api('/api/history?limit=200'), api('/api/saved-views'), api('/api/operations')
+    api('/api/daily-notes' + notesQuery), api('/api/goals' + query), api('/api/planner' + plannerQuery), api('/api/calendar?' + calendarParams), api('/api/history?limit=200'), api('/api/saved-views'), canCoordinate() ? api('/api/operations') : Promise.resolve(null), api('/api/commissioning')
   ]);
   if (!state.controllers.some(item => item.code === state.functionGroupController)) {
     state.functionGroupController = state.controller !== 'all' && state.controllers.some(item => item.code === state.controller)
@@ -819,10 +845,9 @@ async function openNotification(item) {
   } catch (error) { toast(error.message, true); }
   $('#notifications-dialog').close();
   if (item.entity_type === 'handover') {
-    try { state.operations = await api('/api/operations'); } catch (error) { toast(error.message, true); }
-    state.operationsTab = 'handovers';
-    setView('operations');
-    queueMicrotask(() => document.querySelector(`[data-handover-id="${Number(item.entity_id)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+    state.controller = 'all'; fillScopeSelect($('#controller'), 'all');
+    setView('notes');
+    toast('Dawne przekazania zmian zostały przeniesione do modułu „Przekazanie statusu”');
     return;
   }
   try {
@@ -866,6 +891,7 @@ async function acknowledgeAnnouncement(id) {
 
 function setView(view) {
   if (view === 'settings' && state.me.role === 'user') return;
+  if (view === 'operations' && !canCoordinate()) return;
   if (view === 'announcements' && state.view !== 'announcements') { state.announcementLabelFilter = ''; state.announcementImportanceFilter = ''; }
   state.view = view;
   document.body.classList.remove('nav-open');
@@ -879,7 +905,7 @@ function render() {
   $('#desc').textContent = copy[1];
   $('#add').textContent = copy[2];
   $('#add').hidden = !copy[2];
-  ({ overview: renderOverview, announcements: renderAnnouncements, mine: renderMine, operations: renderOperations, planner: renderPlanner, calendar: renderCalendar, status: renderStatus, tasks: renderTasks, goals: renderGoals, points: renderPoints, notes: renderNotes, history: renderHistory, settings: renderSettings })[state.view]();
+  ({ overview: renderOverview, announcements: renderAnnouncements, mine: renderMine, operations: renderOperations, commissioning: renderCommissioning, planner: renderPlanner, calendar: renderCalendar, status: renderStatus, tasks: renderTasks, goals: renderGoals, points: renderPoints, notes: renderNotes, history: renderHistory, settings: renderSettings })[state.view]();
 }
 
 function canManageAnnouncements() { return ['system_admin', 'project_admin', 'moderator'].includes(state.me.role); }
@@ -911,7 +937,8 @@ function openAnnouncementDetails(item) {
   const acknowledgement = item.requires_ack
     ? (!item.accepted_by_me ? '<button class="primary" id="ack-announcement">Akceptuję · przeczytane</button>' : `<span class="announcement-read-self">✓ Zaakceptowano ${displayDateTime(item.accepted_at)}</span>`)
     : '<span class="announcement-read-self neutral">Wiadomość informacyjna — potwierdzenie nie jest wymagane od tego użytkownika.</span>';
-  $('#insight-content').innerHTML = `<article class="announcement-detail"><div class="announcement-tags"><span class="importance importance-${escapeHtml(String(item.importance || 'normalna').toLowerCase())}">${escapeHtml(item.importance || 'Normalna')}</span>${labels}</div><p>${escapeHtml(item.content).replace(/\n/g, '<br>')}</p>${href ? `<a class="announcement-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">Otwórz dołączony link ↗</a>` : ''}<div class="announcement-audience"><span><b>Zakres:</b> ${escapeHtml(announcementAudience(item))}</span><span><b>Dotyczy bezpośrednio:</b> ${escapeHtml((item.recipient_names || []).join(', ') || 'wszyscy aktywni uczestnicy projektu')}</span></div><div class="goal-links">${(item.links || []).map(link => linkChip(link.entity_type, link.entity_id, ({ status: 'Status', task: 'Zadanie', point: 'Otwarty punkt', note: 'Dziennik', goal: 'Cel' })[link.entity_type])).join('') || '<span class="sub">Brak przypiętych elementów</span>'}</div>${acknowledgement}${canManageAnnouncements() ? `<section class="announcement-receipts"><header><b>Potwierdzenia przeczytania</b><span>${item.accepted_count || 0}/${item.audience_count || 0}</span></header><div>${(item.accepted_users || []).map(user => `<span><b>${escapeHtml(user.display_name)}</b><small>${displayDateTime(user.read_at)}</small></span>`).join('') || '<small>Brak potwierdzeń.</small>'}</div></section><button class="secondary" id="edit-announcement-detail">Edytuj wiadomość</button>` : ''}</article>`;
+  const entryLabel = ({ message: 'Komunikat', decision: 'Decyzja projektowa', scope_change: 'Zmiana zakresu' })[item.entry_type] || 'Komunikat';
+  $('#insight-content').innerHTML = `<article class="announcement-detail"><div class="announcement-tags"><span class="decision-type ${escapeHtml(item.entry_type || 'message')}">${entryLabel}</span><span class="importance importance-${escapeHtml(String(item.importance || 'normalna').toLowerCase())}">${escapeHtml(item.importance || 'Normalna')}</span>${labels}</div><p>${escapeHtml(item.content).replace(/\n/g, '<br>')}</p>${item.rationale ? `<section class="decision-rationale"><b>Uzasadnienie / wpływ</b><p>${escapeHtml(item.rationale).replace(/\n/g, '<br>')}</p><small>${item.effective_date ? `Obowiązuje od ${displayDate(item.effective_date)}` : ''} · ${escapeHtml(item.decision_status || 'published')}</small></section>` : ''}${href ? `<a class="announcement-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">Otwórz dołączony link ↗</a>` : ''}<div class="announcement-audience"><span><b>Zakres:</b> ${escapeHtml(announcementAudience(item))}</span><span><b>Dotyczy bezpośrednio:</b> ${escapeHtml((item.recipient_names || []).join(', ') || 'wszyscy aktywni uczestnicy projektu')}</span></div><div class="goal-links">${(item.links || []).map(link => linkChip(link.entity_type, link.entity_id, ({ status: 'Status', task: 'Zadanie', point: 'Otwarty punkt', note: 'Przekazanie', goal: 'Cel' })[link.entity_type])).join('') || '<span class="sub">Brak przypiętych elementów</span>'}</div>${acknowledgement}${canManageAnnouncements() ? `<section class="announcement-receipts"><header><b>Potwierdzenia przeczytania</b><span>${item.accepted_count || 0}/${item.audience_count || 0}</span></header><div>${(item.accepted_users || []).map(user => `<span><b>${escapeHtml(user.display_name)}</b><small>${displayDateTime(user.read_at)}</small></span>`).join('') || '<small>Brak potwierdzeń.</small>'}</div></section><button class="secondary" id="edit-announcement-detail">Edytuj wiadomość</button>` : ''}</article>`;
   bindJumpItems();
   $('#ack-announcement')?.addEventListener('click', () => acknowledgeAnnouncement(item.id));
   $('#edit-announcement-detail')?.addEventListener('click', () => { $('#insight-dialog').close(); openRecord('announcements', item); });
@@ -924,7 +951,8 @@ function renderAnnouncements() {
   const filtered = state.announcements.filter(item => (!state.announcementLabelFilter || (item.label_ids || []).includes(Number(state.announcementLabelFilter))) && (!state.announcementImportanceFilter || item.importance === state.announcementImportanceFilter));
   $('#content').innerHTML = `<section class="panel announcement-filters"><div class="toolbar"><strong>Wszystkie wiadomości</strong><label>Etykieta <select id="announcement-label-filter">${selectOptions((state.config.announcement_labels || []).map(item => ({ value: item.id, label: item.name })), state.announcementLabelFilter, 'Wszystkie')}</select></label><label>Ważność <select id="announcement-importance-filter">${selectOptions(importanceOptions, state.announcementImportanceFilter, 'Wszystkie')}</select></label><button class="mini" id="announcement-clear-filters">Wyczyść</button></div></section><section class="announcements-feed">${filtered.map(item => {
     const href = safeExternalLink(item.info_link);
-    return `<article class="announcement-card ${item.accepted_by_me ? 'read' : 'unread'}" data-announcement-id="${item.id}"><header><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.created_by_name || 'System')} · ${displayDateTime(item.created_at)}</small></span><span class="badge blue">${escapeHtml(announcementAudience(item))}</span></header><div class="announcement-tags"><span class="importance importance-${escapeHtml(String(item.importance || 'normalna').toLowerCase())}">${escapeHtml(item.importance || 'Normalna')}</span>${(item.labels || []).map(label => `<span class="announcement-label ${escapeHtml(label.color)}">${escapeHtml(label.name)}</span>`).join('')}</div><p>${escapeHtml(item.content)}</p><footer><span>${(item.recipient_names || []).length ? `Osoby: ${escapeHtml(item.recipient_names.join(', '))}` : 'Wiadomość ogólna'}</span><span>${item.requires_ack ? (item.accepted_by_me ? '✓ przeczytane' : 'wymaga potwierdzenia') : 'informacyjna'}${canManageAnnouncements() ? ` · ${item.accepted_count || 0}/${item.audience_count || 0} potwierdzeń` : ''}</span></footer></article>`;
+    const entryLabel = ({ message: 'Komunikat', decision: 'Decyzja', scope_change: 'Zmiana zakresu' })[item.entry_type] || 'Komunikat';
+    return `<article class="announcement-card ${item.accepted_by_me ? 'read' : 'unread'}" data-announcement-id="${item.id}"><header><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.created_by_name || 'System')} · ${displayDateTime(item.created_at)}</small></span><span class="badge blue">${escapeHtml(announcementAudience(item))}</span></header><div class="announcement-tags"><span class="decision-type ${escapeHtml(item.entry_type || 'message')}">${entryLabel}</span><span class="importance importance-${escapeHtml(String(item.importance || 'normalna').toLowerCase())}">${escapeHtml(item.importance || 'Normalna')}</span>${(item.labels || []).map(label => `<span class="announcement-label ${escapeHtml(label.color)}">${escapeHtml(label.name)}</span>`).join('')}</div><p>${escapeHtml(item.content)}</p><footer><span>${(item.recipient_names || []).length ? `Osoby: ${escapeHtml(item.recipient_names.join(', '))}` : 'Wiadomość ogólna'}</span><span>${item.requires_ack ? (item.accepted_by_me ? '✓ przeczytane' : 'wymaga potwierdzenia') : 'informacyjna'}${canManageAnnouncements() ? ` · ${item.accepted_count || 0}/${item.audience_count || 0} potwierdzeń` : ''}</span></footer></article>`;
   }).join('') || '<div class="empty">Informator nie zawiera jeszcze wiadomości.</div>'}</section>`;
   $('#announcement-label-filter').addEventListener('change', event => { state.announcementLabelFilter = event.target.value; renderAnnouncements(); });
   $('#announcement-importance-filter').addEventListener('change', event => { state.announcementImportanceFilter = event.target.value; renderAnnouncements(); });
@@ -964,7 +992,7 @@ function renderOverview() {
   ${state.overviewDetailed ? renderStatusBreakdown(data.status_breakdown || []) : ''}`;
   $$('.trend-period').forEach(button => { button.classList.toggle('active-toggle', button.dataset.period === state.trendPeriod); button.addEventListener('click', () => { state.trendPeriod = button.dataset.period; renderOverview(); }); });
   $$('[data-insight]').forEach(button => button.addEventListener('click', () => openOverviewInsight(button.dataset.insight)));
-  $$('[data-controller-scope]').forEach(button => button.addEventListener('click', async () => { state.controller = button.dataset.controllerScope; $('#controller').value = state.controller; await loadData(); }));
+  $$('[data-area-detail]').forEach(button => button.addEventListener('click', () => openAreaPerformanceDetails(button.dataset.areaDetail)));
   $('#kpi-config').addEventListener('click', openKpiConfig);
   $('#detailed-kpi-open').addEventListener('click', openDetailedKpi);
   $('#overview-detail-toggle').addEventListener('click', () => { state.overviewDetailed = !state.overviewDetailed; renderOverview(); });
@@ -984,7 +1012,31 @@ function metricCounts(metrics) {
 
 function overviewAreaRow(item) {
   const counts = metricCounts(item.metrics); const scope = item.scope || item.code;
-  return `<button class="area-performance-row" data-controller-scope="${escapeHtml(scope)}"><span><b>${item.type === 'group' ? '▰ ' : '◇ '}${escapeHtml(item.label || item.display_name || item.leaf_code)}</b><small>${escapeHtml(item.path_label || item.hierarchy_label || item.group_path_label || '')}</small></span><strong>${combinedMetric(item.metrics)}%</strong><b>${counts.total}</b><b class="open-count">${counts.open}</b><b class="closed-count">${counts.closed}</b>${['status', 'tasks', 'points', 'goals'].map(key => `<span><b>${item.metrics[key]?.progress || 0}%</b><i><u style="width:${item.metrics[key]?.progress || 0}%"></u></i></span>`).join('')}</button>`;
+  const label = item.label || item.display_name || item.leaf_code;
+  return `<button class="area-performance-row" data-area-detail="${escapeHtml(scope)}" aria-label="Otwórz szczegółową realizację dla ${escapeHtml(label)}"><span><b>${item.type === 'group' ? '▰ ' : '◇ '}${escapeHtml(label)}</b><small>${escapeHtml(item.path_label || item.hierarchy_label || item.group_path_label || '')}</small><em>Otwórz szczegóły →</em></span><strong>${combinedMetric(item.metrics)}%</strong><b>${counts.total}</b><b class="open-count">${counts.open}</b><b class="closed-count">${counts.closed}</b>${['status', 'tasks', 'points', 'goals'].map(key => `<span><b>${item.metrics[key]?.progress || 0}%</b><i><u style="width:${item.metrics[key]?.progress || 0}%"></u></i></span>`).join('')}</button>`;
+}
+
+function openAreaPerformanceDetails(scope) {
+  const item = (state.overview?.hierarchy_trends || []).find(row => row.scope === scope)
+    || (state.overview?.controllers || []).find(row => row.code === scope);
+  if (!item) return;
+  const metrics = item.metrics || {};
+  const names = { status: 'Status', tasks: 'Zadania', points: 'Otwarte punkty', goals: 'Cele' };
+  const doneKey = { status: 'done', tasks: 'done', points: 'closed', goals: 'done' };
+  const rows = ['status', 'tasks', 'points', 'goals'].map(key => {
+    const metric = metrics[key] || {}; const done = Number(metric[doneKey[key]] || 0); const total = Number(metric.total || 0);
+    const open = Number(metric.open ?? Math.max(0, total - done)); const closed = Number(metric.closed ?? done);
+    const blockers = Number(metric.blocked || (key === 'tasks' ? metric.overdue : key === 'points' ? metric.waiting : key === 'goals' ? metric.overdue : 0) || 0);
+    return `<article class="area-module-detail ${key}"><header><span><b>${names[key]}</b><small>${done}/${total} wykonanych</small></span><strong>${Number(metric.progress || 0)}%</strong></header><div class="progress"><i style="width:${Number(metric.progress || 0)}%"></i></div><footer><span><b>${total}</b> wszystkie</span><span><b>${open}</b> otwarte</span><span><b>${done}</b> wykonane</span><span><b>${closed}</b> zamknięte</span><span class="${blockers ? 'danger-text' : ''}"><b>${blockers}</b> blokady</span></footer></article>`;
+  }).join('');
+  const ids = scope === 'all' ? new Set(state.controllers.map(row => row.id)) : scope.startsWith('group:') ? hierarchyControllerCodes(scope).size ? new Set(state.controllers.filter(row => hierarchyControllerCodes(scope).has(row.code)).map(row => row.id)) : new Set() : new Set(state.controllers.filter(row => row.code === scope).map(row => row.id));
+  const breakdown = (state.overview.status_breakdown || []).filter(row => ids.has(Number(row.controller_id)));
+  $('#insight-title').textContent = `Realizacja · ${item.path_label || item.hierarchy_label || item.label || item.display_name || scope}`;
+  $('#insight-description').textContent = 'Rozkład wykonania, liczba pozycji oraz blokady w każdym module.';
+  $('#insight-content').innerHTML = `<div class="area-detail-grid">${rows}</div>${breakdown.length ? renderStatusBreakdown(breakdown) : ''}<div class="insight-footer"><button class="secondary" id="area-detail-scope">Pokaż ten zakres w Overview</button></div>`;
+  $('#area-detail-scope').addEventListener('click', async () => { $('#insight-dialog').close(); state.controller = scope; $('#controller').value = scope; await loadData(); });
+  $('#insight-dialog').classList.add('area-detail-dialog');
+  $('#insight-dialog').showModal();
 }
 
 function hierarchyTrendRow(item, period = state.detailedKpiPeriod, mode = state.detailedKpiMode) {
@@ -1003,12 +1055,15 @@ function openDetailedKpi() {
   };
   $('#insight-title').textContent = 'Szczegółowe KPI według hierarchii';
   $('#insight-description').textContent = 'Rozwiń obszar, aby przejść od linii przez podobszary do pojedynczych sterowników.';
-  $('#insight-content').innerHTML = `<div class="detailed-kpi-toolbar"><select id="detailed-kpi-mode"><option value="combined">Łączne KPI</option><option value="split">Z podziałem na moduły</option></select><select id="detailed-kpi-period"><option value="day">Dni</option><option value="week">Tygodnie</option><option value="month">Miesiące</option></select></div><div class="detailed-kpi-tree">${children('all').map(item => branch(item)).join('') || '<div class="empty">Brak danych KPI.</div>'}</div>`;
+  $('#insight-content').innerHTML = `<div class="detailed-kpi-toolbar"><span>Hierarchia projektu i trend wykonania</span><button type="button" class="mini" id="detailed-kpi-expand">Rozwiń wszystko</button><button type="button" class="mini" id="detailed-kpi-collapse">Zwiń podobszary</button><select id="detailed-kpi-mode"><option value="combined">Łączne KPI</option><option value="split">Z podziałem na moduły</option></select><select id="detailed-kpi-period"><option value="day">Dni</option><option value="week">Tygodnie</option><option value="month">Miesiące</option></select></div><div class="detailed-kpi-tree">${children('all').map(item => branch(item)).join('') || '<div class="empty">Brak danych KPI.</div>'}</div>`;
   $('#detailed-kpi-mode').value = state.detailedKpiMode;
   $('#detailed-kpi-period').value = state.detailedKpiPeriod;
   $('#detailed-kpi-mode').addEventListener('change', event => { state.detailedKpiMode = event.target.value; openDetailedKpi(); });
   $('#detailed-kpi-period').addEventListener('change', event => { state.detailedKpiPeriod = event.target.value; openDetailedKpi(); });
+  $('#detailed-kpi-expand').addEventListener('click', () => $$('.detailed-kpi-branch').forEach(item => { item.open = true; }));
+  $('#detailed-kpi-collapse').addEventListener('click', () => $$('.detailed-kpi-branch').forEach(item => { item.open = !item.parentElement.closest('.detailed-kpi-branch'); }));
   $$('[data-detailed-scope]').forEach(button => button.addEventListener('click', async event => { event.preventDefault(); event.stopPropagation(); $('#insight-dialog').close(); state.controller = button.dataset.detailedScope; $('#controller').value = state.controller; await loadData(); }));
+  $('#insight-dialog').classList.add('kpi-expanded');
   if (!$('#insight-dialog').open) $('#insight-dialog').showModal();
 }
 
@@ -1107,7 +1162,7 @@ function personalTaskRow(item) {
   return `<button class="focus-row" data-jump="tasks" data-id="${item.id}"><span class="progress-value ${item.progress >= 100 ? 'done' : item.progress > 0 ? 'active' : ''}"><b>${item.progress || 0}%</b><i><u style="width:${item.progress || 0}%"></u></i></span><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(controllerLabel(item))} · ${escapeHtml(item.owner_name || 'Nieprzypisane')}${own.length ? ` · Twoje podzadania ${own.filter(entry => entry.done).length}/${own.length}` : ''}</small></span><time class="${time?.overdue ? 'danger-text' : ''}">${time ? escapeHtml(time.label) : 'Start w przyszłości'}</time></button>`;
 }
 
-const operationTypeNames = { status: 'Status', task: 'Zadanie', point: 'Otwarty punkt', goal: 'Cel', note: 'Dziennik' };
+const operationTypeNames = { status: 'Status', task: 'Zadanie', point: 'Otwarty punkt', goal: 'Cel', note: 'Przekazanie statusu' };
 const triageSignalNames = { overdue: 'Po terminie', due_soon: 'Termin blisko', reminder_due: 'Przypomnienie', unassigned: 'Bez właściciela', blocked: 'Blokada', dependency: 'Zależność' };
 
 function operationJump(type, id) {
@@ -1125,13 +1180,16 @@ function renderOperations() {
   if (!data) { $('#content').innerHTML = '<div class="loading">Ładowanie centrum operacyjnego…</div>'; reloadOperations().catch(error => toast(error.message, true)); return; }
   const tabs = [
     ['triage', 'Triage', data.triage?.length || 0], ['quality', 'Jakość danych', data.quality?.length || 0],
-    ['dependencies', 'Zależności', data.dependencies?.blocked_tasks?.length || 0], ['handovers', 'Przekazania zmian', data.handovers?.filter(item => item.status !== 'accepted').length || 0],
+    ['risk', 'Radar ryzyka', data.risk_radar?.filter(item => item.risk_score >= 40).length || 0], ['dependencies', 'Zależności zadań', data.dependencies?.blocked_tasks?.length || 0],
+    ['external', 'Zależności zewnętrzne', data.external_dependencies?.filter(item => item.dependency_status !== 'resolved').length || 0],
+    ['meetings', 'Odprawa projektowa', data.meetings?.filter(item => item.status === 'open').length || 0], ['knowledge', 'Baza rozwiązań', data.knowledge?.filter(item => item.status === 'published').length || 0],
     ['automations', 'Automatyzacje', data.automation_rules?.filter(item => item.active).length || 0], ['templates', 'Szablony uruchomieniowe', data.commissioning_templates?.length || 0]
   ];
+  if (!tabs.some(([key]) => key === state.operationsTab)) state.operationsTab = 'triage';
   $('#content').innerHTML = `${savedViewsToolbar('operations')}<section class="operations-shell"><nav class="operations-tabs">${tabs.map(([key, label, count]) => `<button type="button" data-operations-tab="${key}" class="${state.operationsTab === key ? 'active' : ''}"><span>${escapeHtml(label)}</span><b>${count}</b></button>`).join('')}</nav><div id="operations-content"></div></section>`;
   $$('[data-operations-tab]').forEach(button => button.addEventListener('click', () => { state.operationsTab = button.dataset.operationsTab; renderOperations(); }));
   bindSavedViews('operations', '.operations-shell', renderOperations);
-  ({ triage: renderTriage, quality: renderDataQuality, dependencies: renderDependencies, handovers: renderHandovers, automations: renderAutomations, templates: renderCommissioningTemplates })[state.operationsTab]?.();
+  ({ triage: renderTriage, quality: renderDataQuality, risk: renderRiskRadar, dependencies: renderDependencies, external: renderExternalDependencies, meetings: renderProjectMeetings, knowledge: renderKnowledgeBase, automations: renderAutomations, templates: renderCommissioningTemplates })[state.operationsTab]?.();
 }
 
 function renderTriage() {
@@ -1166,41 +1224,97 @@ async function runTriageBatch(action) {
 
 function renderDataQuality() {
   const data = state.operations; const rows = data.quality || []; const counts = data.quality_counts || {};
-  $('#operations-content').innerHTML = `<section class="operation-view"><header class="operation-head"><div><h2>Raport jakości danych</h2><p>Braki utrudniające planowanie, raportowanie i automatyzację projektu.</p></div><button type="button" class="secondary" id="quality-refresh">Odśwież raport</button></header><div class="signal-strip quality"><span class="high"><b>${counts.high || 0}</b>Wysoki wpływ</span><span class="medium"><b>${counts.medium || 0}</b>Średni wpływ</span><span class="low"><b>${counts.low || 0}</b>Niski wpływ</span><span><b>${rows.length}</b>Łącznie</span></div><div class="operation-list">${rows.map(item => `<button type="button" class="operation-row quality-row" data-operation-jump="${item.entity_type}:${item.entity_id}"><span class="quality-level ${item.severity}"></span><span class="operation-primary"><b>${escapeHtml(item.scope_label || 'Cały projekt')} · ${escapeHtml(item.title)}</b><small>${escapeHtml(operationTypeNames[item.entity_type] || item.entity_type)}</small></span><span class="quality-message">${escapeHtml(item.message)}</span><span>→</span></button>`).join('') || '<div class="empty success-empty">Dane operacyjne są kompletne.</div>'}</div></section>`;
+  $('#operations-content').innerHTML = `<section class="operation-view"><header class="operation-head"><div><h2>Raport jakości danych</h2><p>Braki utrudniające planowanie, raportowanie i automatyzację projektu.</p></div><button type="button" class="secondary" id="quality-refresh">Odśwież raport</button></header><div class="signal-strip quality"><span class="high"><b>${counts.high || 0}</b>Wysoki wpływ</span><span class="medium"><b>${counts.medium || 0}</b>Średni wpływ</span><span class="low"><b>${counts.low || 0}</b>Niski wpływ</span><span><b>${rows.length}</b>Łącznie</span></div><div class="operation-list">${rows.map(item => `<div class="operation-row quality-row ${item.jump_available === false ? 'no-jump' : ''}" ${item.entity_type && item.entity_id ? `data-operation-jump="${item.entity_type}:${item.entity_id}"` : ''}><span class="quality-level ${item.severity}"></span><span class="operation-primary"><b>${escapeHtml(item.scope_label || 'Cały projekt')} · ${escapeHtml(item.title)}</b><small>${escapeHtml(operationTypeNames[item.entity_type] || (item.code === 'orphan_link' ? 'Powiązanie' : item.entity_type))}</small></span><span class="quality-message">${escapeHtml(item.message)}</span>${item.code === 'orphan_link' ? `<button type="button" class="mini danger-outline" data-orphan-delete="${item.link_id}">Usuń uszkodzone powiązanie</button>` : '<span>→</span>'}</div>`).join('') || '<div class="empty success-empty">Dane operacyjne są kompletne.</div>'}</div></section>`;
   $('#quality-refresh').addEventListener('click', () => reloadOperations().catch(error => toast(error.message, true)));
+  $$('[data-operation-jump]').forEach(row => row.addEventListener('click', event => { if (event.target.closest('[data-orphan-delete]')) return; const [type, id] = row.dataset.operationJump.split(':'); operationJump(type, Number(id)); }));
+  $$('[data-orphan-delete]').forEach(button => button.addEventListener('click', async () => { if (!await uiConfirm('Napraw uszkodzone powiązanie', 'Usunięty zostanie wyłącznie osierocony wpis relacji. Istniejące elementy projektu nie zostaną zmienione.', 'Usuń powiązanie', true)) return; try { await api(`/api/data-quality/orphan-links/${button.dataset.orphanDelete}`, { method: 'DELETE' }); toast('Uszkodzone powiązanie zostało usunięte'); await reloadOperations(); } catch (error) { toast(error.message, true); } }));
+}
+
+function renderRiskRadar() {
+  const rows = state.operations.risk_radar || [];
+  const counts = Object.fromEntries(['critical', 'high', 'medium', 'low'].map(level => [level, rows.filter(item => item.risk_level === level).length]));
+  $('#operations-content').innerHTML = `<section class="operation-view risk-radar"><header class="operation-head"><div><h2>Inteligentny radar ryzyka</h2><p>Priorytet łączy terminy, blokady, brak właściciela, zależności i oczekiwanie na strony zewnętrzne.</p></div><button type="button" class="secondary" id="risk-refresh">Przelicz ryzyko</button></header><div class="signal-strip"><span class="high"><b>${counts.critical || 0}</b>Krytyczne</span><span class="medium"><b>${counts.high || 0}</b>Wysokie</span><span><b>${counts.medium || 0}</b>Średnie</span><span><b>${rows.length}</b>Obserwowane</span></div><div class="risk-list">${rows.map(item => `<button type="button" class="risk-row ${item.risk_level}" data-operation-jump="${item.entity_type}:${item.entity_id}"><span class="risk-score"><b>${item.risk_score}</b><small>/100</small></span><span><b>${escapeHtml(item.scope_label)} · ${escapeHtml(item.title)}</b><small>${item.signals.map(signal => escapeHtml(triageSignalNames[signal] || signal)).join(' · ')}${item.external_dependencies ? ` · ${item.external_dependencies} zależn. zewn.` : ''}</small></span><span>${badge(item.priority)}<small>${item.due_date ? displayDate(item.due_date) : 'bez terminu'}</small></span></button>`).join('') || '<div class="empty success-empty">Brak aktywnych ryzyk.</div>'}</div></section>`;
+  $('#risk-refresh').addEventListener('click', () => reloadOperations().catch(error => toast(error.message, true)));
   $$('[data-operation-jump]').forEach(row => row.addEventListener('click', () => { const [type, id] = row.dataset.operationJump.split(':'); operationJump(type, Number(id)); }));
+}
+
+function renderExternalDependencies() {
+  const rows = state.operations.external_dependencies || [];
+  $('#operations-content').innerHTML = `<section class="operation-view"><header class="operation-head"><div><h2>Zależności zewnętrzne</h2><p>Oczekiwanie na dostawcę, klienta, mechanikę lub inną stronę z jasno wyznaczonym follow-upem.</p></div><button type="button" class="primary" id="external-add">+ Dodaj zależność</button></header><div class="external-dependency-list">${rows.map(item => `<article class="external-dependency-row ${item.dependency_status}"><button type="button" data-operation-jump="${item.entity_type}:${item.entity_id}"><span class="type-dot ${item.entity_type}"></span><span><b>${escapeHtml(item.entity?.scope_label || 'Projekt')} · ${escapeHtml(item.entity?.title || 'Element niedostępny')}</b><small>${escapeHtml(item.party)}${item.contact ? ` · ${escapeHtml(item.contact)}` : ''}</small></span></button><span>${badge(item.dependency_status === 'resolved' ? 'Closed' : item.dependency_status === 'responded' ? 'In progress' : 'Waiting')}<small>Follow-up: ${displayDate(item.next_followup)}</small></span><span><b>${escapeHtml(item.owner_name || 'bez właściciela')}</b><small>${escapeHtml(item.note || '')}</small></span><div><button class="mini" data-external-edit="${item.id}">Edytuj</button><button class="mini danger-text" data-external-delete="${item.id}">Usuń</button></div></article>`).join('') || '<div class="empty">Brak zależności zewnętrznych.</div>'}</div></section>`;
+  $('#external-add').addEventListener('click', () => openExternalDependencyEditor());
+  $$('[data-external-edit]').forEach(button => button.addEventListener('click', () => openExternalDependencyEditor(rows.find(item => item.id === Number(button.dataset.externalEdit)))));
+  $$('[data-external-delete]').forEach(button => button.addEventListener('click', async () => { if (!await uiConfirm('Usuń zależność zewnętrzną', 'Historia elementu projektu pozostanie bez zmian.', 'Usuń', true)) return; try { await api(`/api/external-dependencies/${button.dataset.externalDelete}`, { method: 'DELETE' }); await reloadOperations(); } catch (error) { toast(error.message, true); } }));
+  $$('[data-operation-jump]').forEach(button => button.addEventListener('click', () => { const [type, id] = button.dataset.operationJump.split(':'); operationJump(type, Number(id)); }));
+}
+
+async function openExternalDependencyEditor(existing = null) {
+  const result = await uiForm({ title: existing ? 'Edytuj zależność zewnętrzną' : 'Nowa zależność zewnętrzna', description: existing ? existing.entity?.title : 'Po zapisaniu formularza wskażesz jeden element, którego dotyczy oczekiwanie.', submitLabel: existing ? 'Zapisz' : 'Wybierz element', fields: [
+    { name: 'party', label: 'Strona zewnętrzna', value: existing?.party || '', required: true }, { name: 'contact', label: 'Kontakt', value: existing?.contact || '' },
+    { name: 'dependency_status', label: 'Status', type: 'select', value: existing?.dependency_status || 'waiting', options: [{ value: 'waiting', label: 'Oczekiwanie' }, { value: 'responded', label: 'Odpowiedź otrzymana' }, { value: 'resolved', label: 'Rozwiązane' }] },
+    { name: 'owner_user_id', label: 'Właściciel follow-upu', type: 'select', value: existing?.owner_user_id || '', options: [{ value: '', label: 'Nieprzypisane' }, ...assignableUsers().map(user => ({ value: user.id, label: user.display_name }))] },
+    { name: 'requested_at', label: 'Data zgłoszenia', type: 'date', value: existing?.requested_at || today(), required: true }, { name: 'expected_date', label: 'Oczekiwana odpowiedź', type: 'date', value: existing?.expected_date || '' },
+    { name: 'next_followup', label: 'Następny follow-up', type: 'date', value: existing?.next_followup || '' }, { name: 'note', label: 'Kontekst', type: 'textarea', value: existing?.note || '', full: true, rows: 4 }
+  ] });
+  if (!result) return;
+  const save = async link => { await api(existing ? `/api/external-dependencies/${existing.id}` : '/api/external-dependencies', { method: existing ? 'PATCH' : 'POST', body: JSON.stringify({ ...result, owner_user_id: Number(result.owner_user_id) || null, entity_type: link.entity_type, entity_id: link.entity_id }) }); toast('Zależność zewnętrzna została zapisana'); await reloadOperations(); };
+  if (existing) { try { await save({ entity_type: existing.entity_type, entity_id: existing.entity_id }); } catch (error) { toast(error.message, true); } return; }
+  openEntitySelection({ mode: 'external_dependency', allowed: ['status', 'task', 'point', 'goal'], initial: [], onApply: async links => { if (links.length !== 1) throw new Error('Wybierz dokładnie jeden element'); await save(links[0]); } });
+}
+
+function renderProjectMeetings() {
+  const rows = state.operations.meetings || [];
+  $('#operations-content').innerHTML = `<section class="operation-view"><header class="operation-head"><div><h2>Tryb odprawy projektowej</h2><p>Skupiony widok tematów wymagających decyzji, właściciela i terminu.</p></div><button type="button" class="primary" id="meeting-add">+ Rozpocznij odprawę</button></header><div class="meeting-list">${rows.map(item => `<button type="button" class="meeting-card ${item.status}" data-meeting-open="${item.id}"><span><b>${escapeHtml(item.title)}</b><small>${displayDate(item.meeting_date)} · ${escapeHtml(item.created_by_name || '')}</small></span><span><b>${item.items.length}</b><small>tematów</small></span>${badge(item.status === 'closed' ? 'Closed' : 'Open')}</button>`).join('') || '<div class="empty">Brak zapisanych odpraw.</div>'}</div></section>`;
+  $('#meeting-add').addEventListener('click', () => createProjectMeeting());
+  $$('[data-meeting-open]').forEach(button => button.addEventListener('click', () => openProjectMeeting(rows.find(item => item.id === Number(button.dataset.meetingOpen)))));
+}
+
+async function createProjectMeeting() {
+  const result = await uiForm({ title: 'Nowa odprawa projektowa', description: 'System automatycznie dołączy najwyżej ocenione pozycje z Triage.', submitLabel: 'Rozpocznij odprawę', fields: [{ name: 'meeting_date', label: 'Data', type: 'date', value: today(), required: true }, { name: 'title', label: 'Tytuł odprawy', value: `Odprawa · ${displayDate(today())}`, required: true }, { name: 'summary', label: 'Cel / agenda', type: 'textarea', full: true, rows: 3 }] });
+  if (!result) return;
+  try { const meeting = await api('/api/project-meetings', { method: 'POST', body: JSON.stringify(result) }); await reloadOperations(); openProjectMeeting(meeting); } catch (error) { toast(error.message, true); }
+}
+
+function openProjectMeeting(meeting) {
+  if (!meeting) return;
+  $('#insight-title').textContent = meeting.title;
+  $('#insight-description').textContent = `${displayDate(meeting.meeting_date)} · ${meeting.items.length} tematów · ${meeting.status === 'closed' ? 'odprawa zamknięta' : 'odprawa aktywna'}`;
+  $('#insight-content').innerHTML = `<div class="meeting-mode"><label class="field full"><span>Podsumowanie odprawy</span><textarea id="meeting-summary" rows="3">${escapeHtml(meeting.summary || '')}</textarea></label><div class="meeting-items">${meeting.items.map((item, index) => `<article data-meeting-item="${index}"><button type="button" data-operation-jump="${item.entity_type}:${item.entity_id}"><span class="type-dot ${item.entity_type}"></span><span><b>${escapeHtml(item.entity?.scope_label || 'Projekt')} · ${escapeHtml(item.entity?.title || 'Element niedostępny')}</b><small>${escapeHtml(item.entity?.status || '')}</small></span></button><textarea data-meeting-decision rows="2" placeholder="Decyzja / następny krok">${escapeHtml(item.decision || '')}</textarea><select data-meeting-owner>${selectOptions([{ value: '', label: 'Bez właściciela' }, ...assignableUsers().map(user => ({ value: user.id, label: user.display_name }))], item.owner_user_id, null)}</select><input data-meeting-due type="date" value="${escapeHtml(item.due_date || '')}"><select data-meeting-status>${selectOptions([{ value: 'open', label: 'Otwarte' }, { value: 'decided', label: 'Decyzja' }, { value: 'deferred', label: 'Odłożone' }], item.item_status, null)}</select></article>`).join('') || '<div class="empty">Brak tematów.</div>'}</div><footer class="meeting-actions"><button type="button" class="danger" id="meeting-delete">Usuń odprawę</button><span></span><button type="button" class="secondary" id="meeting-save">Zapisz ustalenia</button>${meeting.status === 'open' ? '<button type="button" class="primary" id="meeting-close">Zapisz i zamknij odprawę</button>' : '<button type="button" class="primary" id="meeting-reopen">Otwórz ponownie</button>'}</footer></div>`;
+  const save = async status => {
+    const items = $$('#insight-content [data-meeting-item]').map((root, index) => ({ entity_type: meeting.items[index].entity_type, entity_id: meeting.items[index].entity_id, decision: root.querySelector('[data-meeting-decision]').value, owner_user_id: Number(root.querySelector('[data-meeting-owner]').value) || null, due_date: root.querySelector('[data-meeting-due]').value, item_status: root.querySelector('[data-meeting-status]').value }));
+    const updated = await api(`/api/project-meetings/${meeting.id}`, { method: 'PATCH', body: JSON.stringify({ ...meeting, summary: $('#meeting-summary').value, status, items }) }); toast('Ustalenia odprawy zostały zapisane'); await reloadOperations(); openProjectMeeting(updated);
+  };
+  $('#meeting-save').addEventListener('click', () => save(meeting.status).catch(error => toast(error.message, true)));
+  $('#meeting-close')?.addEventListener('click', () => save('closed').catch(error => toast(error.message, true)));
+  $('#meeting-reopen')?.addEventListener('click', () => save('open').catch(error => toast(error.message, true)));
+  $('#meeting-delete').addEventListener('click', async () => { if (!await uiConfirm('Usuń odprawę', 'Ustalenia zapisane wyłącznie w tej odprawie zostaną usunięte.', 'Usuń', true)) return; try { await api(`/api/project-meetings/${meeting.id}`, { method: 'DELETE' }); $('#insight-dialog').close(); await reloadOperations(); } catch (error) { toast(error.message, true); } });
+  $$('[data-operation-jump]').forEach(button => button.addEventListener('click', () => { const [type, id] = button.dataset.operationJump.split(':'); operationJump(type, Number(id)); }));
+  $('#insight-dialog').classList.add('kpi-expanded'); if (!$('#insight-dialog').open) $('#insight-dialog').showModal();
+}
+
+function renderKnowledgeBase() {
+  const rows = state.operations.knowledge || [];
+  $('#operations-content').innerHTML = `<section class="operation-view"><header class="operation-head"><div><h2>Baza rozwiązań</h2><p>Sprawdzone rozwiązania powtarzalnych problemów, gotowe do wyszukania i ponownego użycia.</p></div><button type="button" class="primary" id="knowledge-add">+ Dodaj rozwiązanie</button></header><div class="knowledge-grid">${rows.map(item => `<article class="knowledge-card ${item.status}"><header><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.category || 'Bez kategorii')} · użyto ${item.use_count || 0}×</small></span>${badge(item.status === 'published' ? 'Done' : item.status === 'draft' ? 'To do' : 'N/A')}</header><p><b>Problem:</b> ${escapeHtml(item.problem)}</p><details><summary>Pokaż rozwiązanie</summary><p>${escapeHtml(item.solution).replace(/\n/g, '<br>')}</p></details><footer><span>${escapeHtml(item.tags || '')}</span><button class="mini" data-knowledge-edit="${item.id}">Edytuj</button><button class="mini danger-text" data-knowledge-delete="${item.id}">Usuń</button></footer></article>`).join('') || '<div class="empty">Baza nie zawiera jeszcze rozwiązań.</div>'}</div></section>`;
+  $('#knowledge-add').addEventListener('click', () => openKnowledgeEditor());
+  $$('[data-knowledge-edit]').forEach(button => button.addEventListener('click', () => openKnowledgeEditor(rows.find(item => item.id === Number(button.dataset.knowledgeEdit)))));
+  $$('[data-knowledge-delete]').forEach(button => button.addEventListener('click', async () => { if (!await uiConfirm('Usuń rozwiązanie', 'Wpis zostanie usunięty z bazy wiedzy.', 'Usuń', true)) return; try { await api(`/api/knowledge/${button.dataset.knowledgeDelete}`, { method: 'DELETE' }); await reloadOperations(); } catch (error) { toast(error.message, true); } }));
+}
+
+async function openKnowledgeEditor(existing = null) {
+  const result = await uiForm({ title: existing ? 'Edytuj rozwiązanie' : 'Nowe rozwiązanie', submitLabel: 'Zapisz w bazie', fields: [
+    { name: 'title', label: 'Tytuł', value: existing?.title || '', required: true, full: true }, { name: 'category', label: 'Kategoria', value: existing?.category || '' },
+    { name: 'status', label: 'Status', type: 'select', value: existing?.status || 'published', options: [{ value: 'draft', label: 'Szkic' }, { value: 'published', label: 'Opublikowane' }, { value: 'archived', label: 'Archiwum' }] },
+    { name: 'problem', label: 'Objawy / problem', type: 'textarea', value: existing?.problem || '', required: true, full: true, rows: 4 },
+    { name: 'solution', label: 'Rozwiązanie krok po kroku', type: 'textarea', value: existing?.solution || '', required: true, full: true, rows: 6 },
+    { name: 'tags', label: 'Tagi (po przecinku)', value: existing?.tags || '', full: true }
+  ] });
+  if (!result) return;
+  try { await api(existing ? `/api/knowledge/${existing.id}` : '/api/knowledge', { method: existing ? 'PATCH' : 'POST', body: JSON.stringify(result) }); toast('Baza rozwiązań została zaktualizowana'); await reloadOperations(); } catch (error) { toast(error.message, true); }
 }
 
 function renderDependencies() {
   const data = state.operations.dependencies || { critical_path: [], blocked_tasks: [] };
   $('#operations-content').innerHTML = `<section class="operation-view"><header class="operation-head"><div><h2>Zależności i ścieżka krytyczna</h2><p>Szacowanie wykorzystuje planowany start i deadline; brak zakresu dat oznacza 1 dzień.</p></div><span class="operation-summary">${data.edges || 0} zależności · ${data.total_days || 0} dni ścieżki</span></header>${data.cycle_count ? `<div class="operation-alert">Wykryto ${data.cycle_count} zadań w cyklu zależności. Edycja nowych cykli jest zablokowana.</div>` : ''}<div class="dependency-layout"><section><h3>Ścieżka krytyczna</h3><ol class="critical-path">${(data.critical_path || []).map((item, index) => `<li><button type="button" data-operation-jump="task:${item.entity_id}"><span>${index + 1}</span><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.scope_label)} · ${item.duration_days} dni</small></span><em>Σ ${item.cumulative_days} dni</em></button></li>`).join('') || '<li class="empty">Dodaj zależności do zadań, aby wyznaczyć ścieżkę.</li>'}</ol></section><section><h3>Zadania zablokowane</h3><div class="blocked-list">${(data.blocked_tasks || []).map(item => `<button type="button" data-operation-jump="task:${item.entity_id}"><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.scope_label)}</small><span>Blokuje: ${item.blocked_by.map(blocker => escapeHtml(blocker.title)).join(', ')}</span></button>`).join('') || '<div class="empty success-empty">Żadne zadanie nie jest blokowane przez zależności.</div>'}</div></section></div></section>`;
   $$('[data-operation-jump]').forEach(row => row.addEventListener('click', () => { const [type, id] = row.dataset.operationJump.split(':'); operationJump(type, Number(id)); }));
-}
-
-function renderHandovers() {
-  const rows = state.operations.handovers || [];
-  $('#operations-content').innerHTML = `<section class="operation-view"><header class="operation-head"><div><h2>Przekazania zmian</h2><p>Krótka, potwierdzana lista kontekstu dla kolejnej zmiany.</p></div><button type="button" class="primary" id="handover-add">+ Nowe przekazanie</button></header><div class="handover-list">${rows.map(item => `<article class="handover-card ${item.status}" data-handover-id="${item.id}"><header><span><b>${escapeHtml(item.from_shift)} → ${escapeHtml(item.to_shift)}</b><small>${displayDate(item.handover_date)}</small></span>${item.status === 'accepted' ? '<span class="badge green">Odebrane</span>' : '<span class="badge amber">Oczekuje</span>'}</header><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary).replace(/\n/g, '<br>')}</p><div class="handover-links">${(item.items || []).map(link => `<button type="button" data-operation-jump="${link.entity_type}:${link.entity_id}" ${link.missing ? 'disabled' : ''}><span class="type-dot ${link.entity_type}"></span><span><b>${escapeHtml(link.title)}</b><small>${escapeHtml(link.scope_label)} · ${escapeHtml(link.status || '')}</small></span></button>`).join('') || '<small>Bez powiązanych elementów.</small>'}</div><footer><span>Przekazał: <b>${escapeHtml(item.created_by_name || 'System')}</b>${item.accepted_by_name ? ` · odebrał: <b>${escapeHtml(item.accepted_by_name)}</b>` : ''}</span><div>${item.can_edit ? `<button type="button" class="mini" data-handover-edit="${item.id}">Edytuj</button><button type="button" class="mini danger-text" data-handover-delete="${item.id}">Usuń</button>` : ''}${item.status !== 'accepted' ? `<button type="button" class="primary" data-handover-accept="${item.id}">Potwierdź odbiór</button>` : ''}</div></footer></article>`).join('') || '<div class="empty">Nie utworzono jeszcze przekazania zmiany.</div>'}</div></section>`;
-  $('#handover-add').addEventListener('click', () => openHandoverEditor());
-  $$('[data-handover-edit]').forEach(button => button.addEventListener('click', () => openHandoverEditor(rows.find(item => item.id === Number(button.dataset.handoverEdit)))));
-  $$('[data-handover-accept]').forEach(button => button.addEventListener('click', async () => { try { await api(`/api/handovers/${button.dataset.handoverAccept}/accept`, { method: 'POST' }); toast('Przekazanie zostało odebrane'); await reloadOperations(); } catch (error) { toast(error.message, true); } }));
-  $$('[data-handover-delete]').forEach(button => button.addEventListener('click', async () => { if (!await uiConfirm('Usuń przekazanie', 'Powiązana praca projektu pozostanie bez zmian.', 'Usuń', true)) return; try { await api(`/api/handovers/${button.dataset.handoverDelete}`, { method: 'DELETE' }); await reloadOperations(); toast('Przekazanie usunięte'); } catch (error) { toast(error.message, true); } }));
-  $$('[data-operation-jump]').forEach(button => button.addEventListener('click', () => { const [type, id] = button.dataset.operationJump.split(':'); operationJump(type, Number(id)); }));
-}
-
-async function openHandoverEditor(existing = null) {
-  const result = await uiForm({ title: existing ? 'Edytuj przekazanie zmiany' : 'Nowe przekazanie zmiany', description: 'Po uzupełnieniu podsumowania wybierzesz elementy projektu wymagające uwagi.', submitLabel: 'Wybierz elementy', fields: [
-    { name: 'handover_date', label: 'Data przekazania', type: 'date', value: existing?.handover_date || today(), required: true },
-    { name: 'from_shift', label: 'Zmiana przekazująca', type: 'select', value: existing?.from_shift || options('shift')[0] || 'Dzień', options: options('shift') },
-    { name: 'to_shift', label: 'Zmiana odbierająca', type: 'select', value: existing?.to_shift || options('shift')[1] || options('shift')[0] || 'Noc', options: options('shift') },
-    { name: 'title', label: 'Tytuł', value: existing?.title || '', required: true, full: true },
-    { name: 'summary', label: 'Najważniejszy kontekst i następne kroki', type: 'textarea', value: existing?.summary || '', required: true, full: true, rows: 6 }
-  ] });
-  if (!result) return;
-  openEntitySelection({ mode: 'handover', allowed: ['status', 'task', 'point', 'goal', 'note'], initial: existing?.items || [], onApply: async items => {
-    const endpoint = existing ? `/api/handovers/${existing.id}` : '/api/handovers';
-    await api(endpoint, { method: existing ? 'PATCH' : 'POST', body: JSON.stringify({ ...result, items }) });
-    toast('Przekazanie zmiany zostało zapisane'); await reloadOperations();
-  } });
 }
 
 function renderAutomations() {
@@ -1262,6 +1376,84 @@ async function applyCommissioningTemplate(template) {
   catch (error) { toast(error.message, true); }
 }
 
+function renderCommissioning() {
+  const data = state.commissioning || { campaigns: [], gates: [], can_coordinate: false };
+  const tabs = [['campaigns', 'Sesje testowe', data.campaigns.length], ['gates', 'Readiness Gates', data.gates.length]];
+  $('#content').innerHTML = `<section class="commissioning-shell"><nav class="operations-tabs">${tabs.map(([key, label, count]) => `<button type="button" data-commissioning-tab="${key}" class="${state.commissioningTab === key ? 'active' : ''}"><span>${label}</span><b>${count}</b></button>`).join('')}</nav><div id="commissioning-content"></div></section>`;
+  $$('[data-commissioning-tab]').forEach(button => button.addEventListener('click', () => { state.commissioningTab = button.dataset.commissioningTab; renderCommissioning(); }));
+  if (state.commissioningTab === 'gates') renderReadinessGates(); else renderTestCampaigns();
+}
+
+async function reloadCommissioning() { state.commissioning = await api('/api/commissioning'); if (state.view === 'commissioning') renderCommissioning(); }
+
+function renderTestCampaigns() {
+  const rows = state.commissioning.campaigns || [];
+  $('#commissioning-content').innerHTML = `<section class="operation-view"><header class="operation-head"><div><h2>Kampanie i sesje testowe</h2><p>Kontrolowany przebieg testów: PASS zamyka punkt statusu, FAIL tworzy otwarty punkt i wymusza retest.</p></div>${state.commissioning.can_coordinate ? '<button type="button" class="primary" id="campaign-add">+ Nowa sesja</button>' : ''}</header><div class="campaign-grid">${rows.map(item => `<article class="campaign-card ${item.status}"><header><span><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.scope_label)} · ${escapeHtml(item.campaign_type)}${item.model ? ` · ${escapeHtml(item.model)}` : ''}</small></span>${badge(item.status === 'completed' ? 'Done' : item.status === 'active' ? 'In progress' : item.status === 'cancelled' ? 'N/A' : 'To do')}</header><div class="campaign-progress"><span><i><u style="width:${item.progress}%"></u></i><b>${item.progress}%</b></span><small>${item.counts.pass} PASS · ${item.counts.fail} FAIL · ${item.counts.pending} oczekuje</small></div><footer><span>${displayDate(item.planned_start)} – ${displayDate(item.planned_end)} · ${escapeHtml(item.owner_name || 'bez właściciela')}</span><button class="secondary" data-campaign-open="${item.id}">Otwórz sesję</button>${state.commissioning.can_coordinate ? `<button class="mini" data-campaign-edit="${item.id}">Ustawienia</button>` : ''}</footer></article>`).join('') || '<div class="empty">Nie utworzono jeszcze sesji testowej.</div>'}</div></section>`;
+  $('#campaign-add')?.addEventListener('click', () => openTestCampaignEditor());
+  $$('[data-campaign-edit]').forEach(button => button.addEventListener('click', () => openTestCampaignEditor(rows.find(item => item.id === Number(button.dataset.campaignEdit)))));
+  $$('[data-campaign-open]').forEach(button => button.addEventListener('click', () => openTestCampaign(rows.find(item => item.id === Number(button.dataset.campaignOpen)))));
+}
+
+async function openTestCampaignEditor(existing = null) {
+  const scopeOptions = [{ value: 'project:0', label: 'Cały projekt' }, ...state.controllerGroups.map(item => ({ value: `group:${item.id}`, label: `▰ ${item.path_label}` })), ...state.controllers.map(item => ({ value: `controller:${item.id}`, label: `◇ ${item.hierarchy_label}` }))];
+  const scope = `${existing?.scope_type || 'project'}:${existing?.scope_id || 0}`;
+  const result = await uiForm({ title: existing ? 'Ustawienia sesji testowej' : 'Nowa sesja testowa', description: 'Po zapisaniu możesz wybrać dokładne punkty statusu albo użyć całego wskazanego zakresu.', submitLabel: 'Wybierz testy', fields: [
+    { name: 'name', label: 'Nazwa sesji', value: existing?.name || '', required: true, full: true }, { name: 'campaign_type', label: 'Typ testu', value: existing?.campaign_type || 'Functional test' },
+    { name: 'model', label: 'Model / wariant', value: existing?.model || '' }, { name: 'scope', label: 'Zakres', type: 'select', value: scope, options: scopeOptions },
+    { name: 'shift', label: 'Zmiana', type: 'select', value: existing?.shift || options('shift')[0] || 'Dzień', options: options('shift') }, { name: 'owner_user_id', label: 'Właściciel sesji', type: 'select', value: existing?.owner_user_id || '', options: [{ value: '', label: 'Nieprzypisane' }, ...assignableUsers().map(user => ({ value: user.id, label: user.display_name }))] },
+    { name: 'planned_start', label: 'Planowany start', type: 'date', value: existing?.planned_start || today() }, { name: 'planned_end', label: 'Planowany koniec', type: 'date', value: existing?.planned_end || '' },
+    { name: 'description', label: 'Opis i warunki testu', type: 'textarea', value: existing?.description || '', full: true, rows: 4 }
+  ] });
+  if (!result) return;
+  const [scope_type, rawScopeId] = result.scope.split(':');
+  const save = async links => { const status_item_ids = links.map(link => link.entity_id); await api(existing ? `/api/test-campaigns/${existing.id}` : '/api/test-campaigns', { method: existing ? 'PATCH' : 'POST', body: JSON.stringify({ ...result, scope_type, scope_id: Number(rawScopeId), owner_user_id: Number(result.owner_user_id) || null, status_item_ids, status: existing?.status || 'planned' }) }); toast('Sesja testowa została zapisana'); await reloadCommissioning(); };
+  openEntitySelection({ mode: 'campaign', allowed: ['status'], initial: existing?.items?.map(item => ({ entity_type: 'status', entity_id: item.status_item_id })) || [], onApply: save });
+}
+
+function openTestCampaign(campaign) {
+  if (!campaign) return;
+  $('#insight-title').textContent = campaign.name;
+  $('#insight-description').textContent = `${campaign.scope_label} · ${campaign.progress}% · ${campaign.counts.pass} PASS / ${campaign.counts.fail} FAIL`;
+  $('#insight-content').innerHTML = `<div class="test-session-list">${campaign.items.map(item => `<article class="test-session-item ${item.result}"><span class="test-result">${item.result === 'pass' ? 'PASS' : item.result === 'fail' ? 'FAIL' : item.result === 'skipped' ? 'N/A' : '—'}</span><span><b>${escapeHtml(item.scope_label)} · ${escapeHtml(item.title)}</b><small>${escapeHtml(item.category)}${item.subcategory ? ` / ${escapeHtml(item.subcategory)}` : ''}${item.tested_by_name ? ` · ${escapeHtml(item.tested_by_name)}` : ''}</small><em>${escapeHtml(item.note || '')}</em></span><div><button class="mini green-outline" data-test-result="pass" data-test-item="${item.id}">PASS</button><button class="mini danger-outline" data-test-result="fail" data-test-item="${item.id}">FAIL</button><button class="mini" data-test-result="skipped" data-test-item="${item.id}">N/A</button>${item.created_point_id ? `<button class="mini" data-jump="point" data-id="${item.created_point_id}">Otwarty punkt →</button>` : ''}</div></article>`).join('')}</div>${state.commissioning.can_coordinate ? `<footer class="meeting-actions"><button class="danger" id="campaign-delete">Usuń sesję</button></footer>` : ''}`;
+  $$('[data-test-result]').forEach(button => button.addEventListener('click', () => updateTestResult(campaign, Number(button.dataset.testItem), button.dataset.testResult)));
+  $('#campaign-delete')?.addEventListener('click', async () => { if (!await uiConfirm('Usuń sesję testową', 'Utworzone otwarte punkty pozostaną w projekcie.', 'Usuń', true)) return; try { await api(`/api/test-campaigns/${campaign.id}`, { method: 'DELETE' }); $('#insight-dialog').close(); await reloadCommissioning(); } catch (error) { toast(error.message, true); } });
+  bindJumpItems(); $('#insight-dialog').classList.add('kpi-expanded'); if (!$('#insight-dialog').open) $('#insight-dialog').showModal();
+}
+
+async function updateTestResult(campaign, itemId, resultValue) {
+  const result = await uiForm({ title: resultValue === 'fail' ? 'Wynik FAIL' : resultValue === 'pass' ? 'Wynik PASS' : 'Pomiń test', description: resultValue === 'fail' ? 'System utworzy otwarty punkt i powiąże go z testem.' : 'Zapisz dowód i krótką uwagę.', submitLabel: 'Zapisz wynik', fields: [{ name: 'note', label: 'Notatka', type: 'textarea', full: true, rows: 4 }, { name: 'evidence_link', label: 'Dowód / link', full: true }] });
+  if (!result) return;
+  try { const updated = await api(`/api/test-campaigns/${campaign.id}/items/${itemId}`, { method: 'PATCH', body: JSON.stringify({ ...result, result: resultValue }) }); await reloadCommissioning(); openTestCampaign(updated); toast('Wynik testu został zapisany'); } catch (error) { toast(error.message, true); }
+}
+
+function renderReadinessGates() {
+  const rows = state.commissioning.gates || [];
+  $('#commissioning-content').innerHTML = `<section class="operation-view"><header class="operation-head"><div><h2>Bramy gotowości</h2><p>Formalne kryteria przejścia do kolejnego etapu, z zatwierdzeniem przez drugą osobę.</p></div>${state.commissioning.can_coordinate ? '<button class="primary" id="gate-add">+ Nowa brama</button>' : ''}</header><div class="gate-list">${rows.map(item => `<article class="readiness-gate ${item.calculated_status}"><header><span><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.scope_label)} · etap ${item.stage_order}</small></span>${badge(item.calculated_status === 'approved' ? 'Done' : item.calculated_status === 'overridden' ? 'N/A' : item.ready ? 'Ready to test' : 'Blocked')}</header><div>${item.checks.map(check => `<span class="gate-check ${check.passed ? 'passed' : 'failed'}"><b>${check.passed ? '✓' : '!'}</b><span>${escapeHtml(check.label)}<small>${check.actual} / cel ${check.target}${check.key === 'max_blockers' ? ' max.' : '%'}</small></span></span>`).join('')}</div><footer><span>${item.approved_by_name ? `Zatwierdził: ${escapeHtml(item.approved_by_name)} · ${displayDateTime(item.approved_at)}` : item.override_reason ? escapeHtml(item.override_reason) : item.ready ? 'Gotowa do zatwierdzenia' : 'Kryteria niespełnione'}</span>${state.commissioning.can_coordinate ? `<button class="mini" data-gate-action="approve" data-gate="${item.id}" ${!item.ready || ['approved', 'overridden'].includes(item.status) ? 'disabled' : ''}>Zatwierdź</button><button class="mini" data-gate-action="override" data-gate="${item.id}" ${['approved', 'overridden'].includes(item.status) ? 'disabled' : ''}>Obejdź świadomie</button><button class="mini" data-gate-edit="${item.id}">Edytuj</button>` : ''}</footer></article>`).join('') || '<div class="empty">Brak bram gotowości.</div>'}</div></section>`;
+  $('#gate-add')?.addEventListener('click', () => openReadinessGateEditor());
+  $$('[data-gate-edit]').forEach(button => button.addEventListener('click', () => openReadinessGateEditor(rows.find(item => item.id === Number(button.dataset.gateEdit)))));
+  $$('[data-gate-action]').forEach(button => button.addEventListener('click', () => readinessGateAction(Number(button.dataset.gate), button.dataset.gateAction)));
+}
+
+async function openReadinessGateEditor(existing = null) {
+  const scopes = [{ value: 'project:0', label: 'Cały projekt' }, ...state.controllerGroups.map(item => ({ value: `group:${item.id}`, label: `▰ ${item.path_label}` })), ...state.controllers.map(item => ({ value: `controller:${item.id}`, label: `◇ ${item.hierarchy_label}` }))];
+  const result = await uiForm({ title: existing ? 'Edytuj bramę gotowości' : 'Nowa brama gotowości', submitLabel: 'Zapisz bramę', fields: [
+    { name: 'name', label: 'Nazwa', value: existing?.name || '', required: true, full: true }, { name: 'scope', label: 'Zakres', type: 'select', value: `${existing?.scope_type || 'project'}:${existing?.scope_id || 0}`, options: scopes },
+    { name: 'stage_order', label: 'Kolejność etapu', type: 'number', value: existing?.stage_order || 0 }, { name: 'owner_user_id', label: 'Właściciel', type: 'select', value: existing?.owner_user_id || '', options: [{ value: '', label: 'Nieprzypisane' }, ...assignableUsers().map(user => ({ value: user.id, label: user.display_name }))] },
+    { name: 'status_progress', label: 'Status min. %', type: 'number', value: existing?.criteria?.status_progress ?? 80 }, { name: 'tasks_progress', label: 'Zadania min. %', type: 'number', value: existing?.criteria?.tasks_progress ?? 60 },
+    { name: 'points_progress', label: 'Otwarte punkty min. %', type: 'number', value: existing?.criteria?.points_progress ?? '' }, { name: 'goals_progress', label: 'Cele min. %', type: 'number', value: existing?.criteria?.goals_progress ?? '' },
+    { name: 'max_blockers', label: 'Maksymalna liczba blokad', type: 'number', value: existing?.criteria?.max_blockers ?? 0 }
+  ] });
+  if (!result) return; const [scope_type, raw] = result.scope.split(':');
+  const criteria = Object.fromEntries(['status_progress', 'tasks_progress', 'points_progress', 'goals_progress', 'max_blockers'].filter(key => result[key] !== '').map(key => [key, Number(result[key])]));
+  try { await api(existing ? `/api/readiness-gates/${existing.id}` : '/api/readiness-gates', { method: existing ? 'PATCH' : 'POST', body: JSON.stringify({ ...result, scope_type, scope_id: Number(raw), owner_user_id: Number(result.owner_user_id) || null, criteria }) }); toast('Brama gotowości została zapisana'); await reloadCommissioning(); } catch (error) { toast(error.message, true); }
+}
+
+async function readinessGateAction(id, action) {
+  let reason = '';
+  if (action === 'override') { const result = await uiForm({ title: 'Świadome obejście bramy', description: 'Powód pozostanie widoczny w bramie i historii decyzji.', submitLabel: 'Obejdź bramę', danger: true, fields: [{ name: 'reason', label: 'Powód i zaakceptowane ryzyko', type: 'textarea', required: true, full: true, rows: 4 }] }); if (!result) return; reason = result.reason; }
+  try { await api(`/api/readiness-gates/${id}/action`, { method: 'POST', body: JSON.stringify({ action, reason }) }); toast(action === 'approve' ? 'Brama została zatwierdzona' : 'Obejście zostało zapisane'); await reloadCommissioning(); } catch (error) { toast(error.message, true); }
+}
+
 function canCoordinate() { return ['moderator', 'project_admin', 'system_admin'].includes(state.me.role); }
 
 function renderPlanner() {
@@ -1299,21 +1491,41 @@ function renderPlanner() {
       chip.addEventListener('dragstart', event => { state.plannerDragEntry = Number(chip.dataset.entryId); event.dataTransfer.effectAllowed = 'copyMove'; event.dataTransfer.setData('text/planner-entry', chip.dataset.entryId); chip.classList.add('dragging'); });
       chip.addEventListener('dragend', () => { state.plannerDragEntry = null; chip.classList.remove('dragging'); $$('.planner-cell').forEach(cell => cell.classList.remove('drag-over')); });
     });
+    $$('.absence-chip[draggable="true"]').forEach(chip => {
+      chip.addEventListener('dragstart', event => { const cell = chip.closest('.planner-cell'); state.plannerDragDay = { userId: Number(cell.dataset.userId), date: cell.dataset.date }; event.dataTransfer.effectAllowed = 'copyMove'; event.dataTransfer.setData('text/planner-day', JSON.stringify(state.plannerDragDay)); chip.classList.add('dragging'); });
+      chip.addEventListener('dragend', () => { state.plannerDragDay = null; chip.classList.remove('dragging'); $$('.planner-cell').forEach(cell => cell.classList.remove('drag-over')); });
+    });
     $$('.planner-today-user').forEach(button => button.addEventListener('click', () => openPlannerCell(Number(button.dataset.userId), today())));
   }
+  requestAnimationFrame(positionPlannerTodayOutline);
+}
+
+function positionPlannerTodayOutline() {
+  const scroll = document.querySelector('.planner-scroll');
+  const table = scroll?.querySelector('.planner-table');
+  const header = table?.querySelector('thead tr:last-child th.today');
+  if (!scroll || !table || !header) return;
+  scroll.querySelector('.planner-today-column-outline')?.remove();
+  const scrollRect = scroll.getBoundingClientRect(); const headerRect = header.getBoundingClientRect(); const tableRect = table.getBoundingClientRect();
+  const outline = document.createElement('i'); outline.className = 'planner-today-column-outline'; outline.setAttribute('aria-hidden', 'true');
+  outline.style.left = `${headerRect.left - scrollRect.left + scroll.scrollLeft}px`;
+  outline.style.top = `${tableRect.top - scrollRect.top + scroll.scrollTop}px`;
+  outline.style.width = `${headerRect.width}px`; outline.style.height = `${table.offsetHeight}px`;
+  scroll.append(outline);
 }
 
 function plannerUnifiedSection(users, days, entryMap, workMap, summaryMap, areaDaySummary, showRequirements, absenceMap, timeMap, holidayMap, showTime) {
   const segments = (source, label) => { const result = []; let current; source.forEach(date => { const value = label(date); if (!current || current.value !== value) { current = { value, count: 0 }; result.push(current); } current.count += 1; }); return result; };
   const months = segments(days, date => new Intl.DateTimeFormat('pl-PL', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`)));
   const weeks = segments(days, date => isoWeek(date).label);
-  const areaRows = areaDaySummary.map(area => `<tr class="area-day-row"><th class="person-col">${escapeHtml(area.name)}</th>${days.map(date => plannerHeadcountCell(area.days.find(item => item.date === date), showRequirements)).join('')}</tr>`).join('');
-  return `<section class="planner-shell planner-unified"><header><div><strong>Plan zespołu</strong><small>ON i OFF w jednym widoku · przeciągnij aktywność na inny dzień lub osobę</small></div><span>${users.length} uczestników</span></header><div class="planner-scroll"><table class="planner-table compact" style="--planner-days:${days.length}"><thead><tr><th class="person-col" rowspan="4">Pracownik</th>${months.map(item => `<th colspan="${item.count}">${escapeHtml(item.value)}</th>`).join('')}</tr><tr>${weeks.map(item => `<th colspan="${item.count}">${escapeHtml(item.value)}</th>`).join('')}</tr><tr>${days.map(date => `<th class="${date === today() ? 'today' : ''} ${holidayMap.has(date) ? 'holiday' : ''}" title="${escapeHtml(holidayMap.get(date)?.name || '')}">${new Intl.DateTimeFormat('pl-PL', { weekday: 'short', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`))}</th>`).join('')}</tr><tr>${days.map(date => `<th class="${date === today() ? 'today' : ''} ${holidayMap.has(date) ? 'holiday' : ''}" title="${escapeHtml(holidayMap.get(date)?.name || '')}">${date.slice(8, 10)}</th>`).join('')}</tr></thead><tbody>${users.map(user => `<tr class="${user.planner_enabled ? '' : 'temporary-planner-user'}"><th class="person-col"><b>${escapeHtml(user.display_name)}</b><small>${escapeHtml(user.configured_areas || 'bez obszaru')}${user.planner_enabled ? '' : ' · tylko dzisiaj'}</small>${showTime ? `<em>${Number((state.planner.time_details?.users || []).find(item => item.user_id === user.id)?.actual_hours || 0).toFixed(1)} h</em>` : ''}</th>${days.map(date => plannerCell(user, date, entryMap.get(`${user.id}:${date}`) || [], workMap.get(`${user.id}:${date}`), absenceMap.get(`${user.id}:${date}`), timeMap.get(`${user.id}:${date}`), holidayMap.get(date), showTime)).join('')}</tr>`).join('') || `<tr><td colspan="${days.length + 1}" class="empty compact-empty">Brak uczestników Plannera.</td></tr>`}</tbody><tfoot><tr class="total-headcount-row"><th class="person-col">Obsada razem</th>${days.map(date => { const summary = summaryMap.get(date); return `<td><b>${summary?.headcount || 0}</b><small><i class="on-tag">ON ${summary?.online_headcount || 0}</i><i class="off-tag">OFF ${summary?.offline_headcount || 0}</i></small></td>`; }).join('')}</tr>${areaRows}</tfoot></table></div></section>`;
+  const areaRows = showRequirements ? areaDaySummary.map(area => `<tr class="area-day-row"><th class="person-col">${escapeHtml(area.name)}</th>${days.map(date => plannerHeadcountCell(area.days.find(item => item.date === date), true, date)).join('')}</tr>`).join('') : '';
+  const dayHeader = (date, number = false) => { const weekend = [0, 6].includes(new Date(`${date}T12:00:00Z`).getUTCDay()); const holiday = holidayMap.get(date); return `<th class="${date === today() ? 'today' : ''} ${holiday ? 'holiday' : ''} ${weekend ? 'weekend' : ''}" title="${escapeHtml(holiday?.name || '')}">${number ? date.slice(8, 10) : new Intl.DateTimeFormat('pl-PL', { weekday: 'short', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`))}${holiday && !number ? `<span class="holiday-info" title="${escapeHtml(holiday.name)}">i</span>` : ''}</th>`; };
+  return `<section class="planner-shell planner-unified"><header><div><strong>Plan zespołu</strong><small>ON i OFF w jednym widoku · przeciągnij aktywność, urlop lub wolne na inny dzień albo osobę</small></div><span>${users.length} uczestników</span></header><div class="planner-scroll"><table class="planner-table compact" style="--planner-days:${days.length}"><thead><tr><th class="person-col" rowspan="4">Pracownik</th>${months.map(item => `<th colspan="${item.count}">${escapeHtml(item.value)}</th>`).join('')}</tr><tr>${weeks.map(item => `<th colspan="${item.count}">${escapeHtml(item.value)}</th>`).join('')}</tr><tr>${days.map(date => dayHeader(date)).join('')}</tr><tr>${days.map(date => dayHeader(date, true)).join('')}</tr></thead><tbody>${users.map(user => `<tr class="${user.planner_enabled ? '' : 'temporary-planner-user'}"><th class="person-col"><b>${escapeHtml(user.display_name)}</b><small>${escapeHtml(user.configured_areas || 'bez obszaru')}${user.planner_enabled ? '' : ' · tylko dzisiaj'}</small>${showTime ? `<em>${Number((state.planner.time_details?.users || []).find(item => item.user_id === user.id)?.actual_hours || 0).toFixed(1)} h</em>` : ''}</th>${days.map(date => plannerCell(user, date, entryMap.get(`${user.id}:${date}`) || [], workMap.get(`${user.id}:${date}`), absenceMap.get(`${user.id}:${date}`), timeMap.get(`${user.id}:${date}`), holidayMap.get(date), showTime)).join('')}</tr>`).join('') || `<tr><td colspan="${days.length + 1}" class="empty compact-empty">Brak uczestników Plannera.</td></tr>`}</tbody><tfoot><tr class="total-headcount-row"><th class="person-col">Obsada razem</th>${days.map(date => { const summary = summaryMap.get(date); return `<td class="${date === today() ? 'today' : ''}"><b>${summary?.headcount || 0}</b><small><i class="on-tag">ON ${summary?.online_headcount || 0}</i><i class="off-tag">OFF ${summary?.offline_headcount || 0}</i></small></td>`; }).join('')}</tr>${areaRows}</tfoot></table></div></section>`;
 }
 
-function plannerHeadcountCell(day = {}, showRequirements = false) {
+function plannerHeadcountCell(day = {}, showRequirements = false, date = '') {
   const shortage = showRequirements && ((day.online || 0) < (day.online_required || 0) || (day.offline || 0) < (day.offline_required || 0));
-  return `<td class="area-headcount-cell ${shortage ? 'shortage' : ''}"><span><i class="on-tag">ON</i><b>${day.online || 0}${showRequirements ? `/${day.online_required || 0}` : ''}</b></span><span><i class="off-tag">OFF</i><b>${day.offline || 0}${showRequirements ? `/${day.offline_required || 0}` : ''}</b></span></td>`;
+  return `<td class="area-headcount-cell ${shortage ? 'shortage' : ''} ${date === today() ? 'today' : ''}"><span><i class="on-tag">ON</i><b>${day.online || 0}${showRequirements ? `/${day.online_required || 0}` : ''}</b></span><span><i class="off-tag">OFF</i><b>${day.offline || 0}${showRequirements ? `/${day.offline_required || 0}` : ''}</b></span></td>`;
 }
 
 function plannerCell(user, date, entries, work, absence, timeDetail, holiday, showTime) {
@@ -1321,7 +1533,7 @@ function plannerCell(user, date, entries, work, absence, timeDetail, holiday, sh
   const editable = canCoordinate() && (Number(user.planner_enabled) || date === today());
   const chips = entries.map(entry => `<span class="plan-chip ${entry.transport_mode} ${entry.work_mode}" data-entry-id="${entry.id}" draggable="${editable ? 'true' : 'false'}"><b class="mode-label">${entry.work_mode === 'offline' ? 'OFF' : 'ON'}</b>${entry.transport_mode === 'transport_only' ? '<b>T</b>' : entry.transport_mode === 'transport_work' ? '<b>T+P</b>' : ''}<span>${entry.area_path ? escapeHtml(entry.area_path) : entry.area_name ? escapeHtml(entry.area_name) : 'Transport / ogólne'}</span>${entry.note ? `<span class="plan-note" data-note="${escapeHtml(entry.note)}" title="${escapeHtml(entry.note)}" tabindex="0" aria-label="Notatka: ${escapeHtml(entry.note)}">i</span>` : ''}<small>${escapeHtml(entry.shift)}</small></span>`).join('');
   const workload = work && (work.tasks || work.points || work.statuses || work.notes) ? `<span class="workload" title="Zadania / otwarte punkty / status / notatki">${work.tasks}/${work.points}/${work.statuses}/${work.notes}</span>` : '';
-  const absenceChip = absence ? `<span class="absence-chip ${absence.absence_type}"><b>${absence.absence_type === 'vacation' ? 'URLOP' : 'WOLNE'}</b><small>${escapeHtml(absence.note || '')}</small></span>` : '';
+  const absenceChip = absence ? `<span class="absence-chip ${absence.absence_type}" draggable="${editable ? 'true' : 'false'}"><b>${absence.absence_type === 'vacation' ? 'URLOP' : 'WOLNE'}</b><small>${escapeHtml(absence.note || '')}</small></span>` : '';
   const hours = showTime && timeDetail ? `<span class="planner-hours-chip" title="Dzisiaj: ${Number(timeDetail.actual_hours + timeDetail.credited_hours).toFixed(1)} h · narastająco bez mnożnika: ${Number(timeDetail.overtime_raw_cumulative || 0).toFixed(1)} h · z mnożnikiem: ${Number(timeDetail.overtime_weighted_cumulative || 0).toFixed(1)} h"><b>${Number(timeDetail.actual_hours + timeDetail.credited_hours).toFixed(1)}h</b><i>Σ ${Number(timeDetail.overtime_raw_cumulative || 0).toFixed(1)} / ${Number(timeDetail.overtime_weighted_cumulative || 0).toFixed(1)}</i></span>` : '';
   return `<td class="planner-cell ${weekend ? 'weekend' : ''} ${holiday ? 'holiday' : ''} ${absence ? 'absent' : ''} ${date === today() ? 'today' : ''} ${entries.length ? 'planned' : ''} ${editable ? '' : 'read-only'}" data-user-id="${user.id}" data-date="${date}" data-editable="${editable ? 1 : 0}" title="${holiday ? `${escapeHtml(holiday.name)} · ` : ''}${editable ? 'Kliknij: edycja · prawy klik: kopiowanie · przeciągnij aktywność' : 'Plan tylko do odczytu'}">${absenceChip}${chips}${workload}${hours}${!absenceChip && !chips && editable ? '<i>+</i>' : ''}</td>`;
 }
@@ -1329,6 +1541,12 @@ function plannerCell(user, date, entries, work, absence, timeDetail, holiday, sh
 async function dropPlannerEntry(event, cell) {
   if (!canCoordinate() || cell.dataset.editable !== '1') return;
   event.preventDefault(); cell.classList.remove('drag-over');
+  const rawDay = event.dataTransfer.getData('text/planner-day');
+  if (rawDay || state.plannerDragDay) {
+    const source = rawDay ? JSON.parse(rawDay) : state.plannerDragDay;
+    try { const copy = event.ctrlKey || event.altKey; await api('/api/planner/move-day', { method: 'POST', body: JSON.stringify({ source_user_id: source.userId, source_date: source.date, target_user_id: Number(cell.dataset.userId), target_date: cell.dataset.date, copy }) }); toast(copy ? 'Skopiowano cały dzień' : 'Przeniesiono cały dzień'); await reloadPlanner(); } catch (error) { toast(error.message, true); }
+    return;
+  }
   const entryId = Number(event.dataTransfer.getData('text/planner-entry') || state.plannerDragEntry);
   if (!entryId) return;
   try {
@@ -1394,7 +1612,7 @@ async function savePlannerCell(event) {
 
 async function savePlannerTarget(userId, date, entries, day = {}) {
   if (!await confirmMixedPlannerModes(userId, date, entries)) return false;
-  await api('/api/planner/day', { method: 'PUT', body: JSON.stringify({ user_id: userId, plan_date: date, entries: entries.map(({ controller_group_id, work_mode, shift, transport_mode, note }) => ({ controller_group_id, work_mode, shift, transport_mode, note })), absence_type: day.absence_type || '', absence_note: day.absence_note || '', ...(Object.hasOwn(day, 'work_start_time') ? { work_start_time: day.work_start_time || '', work_end_time: day.work_end_time || '', adjustment_note: day.adjustment_note || '' } : {}) }) });
+  await api('/api/planner/day', { method: 'PUT', body: JSON.stringify({ user_id: userId, plan_date: date, entries: entries.map(({ controller_group_id, work_mode, shift, transport_mode, note }) => ({ controller_group_id, work_mode, shift, transport_mode, note })), absence_type: day.absence_type || '', absence_note: day.absence_note || '', ...(Object.hasOwn(day, 'work_start_time') ? { work_start_time: day.work_start_time || '', work_end_time: day.work_end_time || '', overtime_raw_balance_override: day.overtime_raw_balance_override ?? null, overtime_weighted_balance_override: day.overtime_weighted_balance_override ?? null, adjustment_note: day.adjustment_note || '' } : {}) }) });
   await reloadPlanner();
   return true;
 }
@@ -1476,7 +1694,10 @@ function plannerDaySnapshot(userId, date) {
   return {
     entries: state.planner.entries.filter(item => item.user_id === userId && item.plan_date === date),
     absence_type: absence?.absence_type || '', absence_note: absence?.note || '',
-    work_start_time: adjustment?.work_start_time || '', work_end_time: adjustment?.work_end_time || '', adjustment_note: adjustment?.note || ''
+    work_start_time: adjustment?.work_start_time || '', work_end_time: adjustment?.work_end_time || '',
+    overtime_raw_balance_override: adjustment?.overtime_raw_balance_override ?? null,
+    overtime_weighted_balance_override: adjustment?.overtime_weighted_balance_override ?? null,
+    adjustment_note: adjustment?.note || ''
   };
 }
 
@@ -1493,7 +1714,7 @@ async function pastePlannerRange(userId, anchorDate, source, kind) {
     for (const date of days) {
       const existing = (state.planner.entries || []).filter(item => item.user_id === userId && item.plan_date === date);
       const target = kind === 'day' ? snapshot.entries : [...existing, ...(snapshot.entries || []).filter(candidate => !existing.some(item => Number(item.controller_group_id || 0) === Number(candidate.controller_group_id || 0) && candidate.controller_group_id))];
-      await api('/api/planner/day', { method: 'PUT', body: JSON.stringify({ user_id: userId, plan_date: date, entries: target.map(({ controller_group_id, work_mode, shift, transport_mode, note }) => ({ controller_group_id, work_mode, shift, transport_mode, note })), absence_type: kind === 'day' ? snapshot.absence_type : '', absence_note: kind === 'day' ? snapshot.absence_note : '', ...(kind === 'day' ? { work_start_time: snapshot.work_start_time || '', work_end_time: snapshot.work_end_time || '', adjustment_note: snapshot.adjustment_note || '' } : {}) }) });
+      await api('/api/planner/day', { method: 'PUT', body: JSON.stringify({ user_id: userId, plan_date: date, entries: target.map(({ controller_group_id, work_mode, shift, transport_mode, note }) => ({ controller_group_id, work_mode, shift, transport_mode, note })), absence_type: kind === 'day' ? snapshot.absence_type : '', absence_note: kind === 'day' ? snapshot.absence_note : '', ...(kind === 'day' ? { work_start_time: snapshot.work_start_time || '', work_end_time: snapshot.work_end_time || '', overtime_raw_balance_override: snapshot.overtime_raw_balance_override, overtime_weighted_balance_override: snapshot.overtime_weighted_balance_override, adjustment_note: snapshot.adjustment_note || '' } : {}) }) });
     }
     toast(`Skopiowano aktywność na ${days.length} dni`); await reloadPlanner();
   } catch (error) { toast(error.message, true); }
@@ -1543,7 +1764,7 @@ function renderCalendar() {
   spans.forEach(item => { let lane = laneEnds.findIndex(end => end < item.start); if (lane < 0) lane = laneEnds.length; laneEnds[lane] = item.end; item.lane = lane; });
   $('#add').hidden = !canCoordinate();
   $('#content').innerHTML = `<section class="calendar-command"><div><button class="mini calendar-nav" data-offset="-1">←</button><button class="mini" id="calendar-today">Dzisiaj</button><button class="mini calendar-nav" data-offset="1">→</button></div><div class="calendar-modes"><button class="mini" data-calendar-mode="day">Dzień</button><button class="mini" data-calendar-mode="week">Tydzień</button><button class="mini" data-calendar-mode="month">Miesiąc</button><button class="mini" data-calendar-mode="custom">Dowolny</button></div><label>Od <input type="date" id="calendar-from" value="${state.calendarFrom}"></label><label>Do <input type="date" id="calendar-to" value="${state.calendarTo}"></label><button class="secondary" id="calendar-apply-range">Pokaż</button><button class="secondary ${state.calendarOnlyMine ? 'active-toggle' : ''}" id="calendar-mine-toggle">${state.calendarOnlyMine ? '✓ Tylko moje' : 'Wszystkie / moje'}</button><button class="secondary" id="calendar-filter">Filtry <b>${state.calendarTypes.length}</b></button></section>
-  <section class="calendar-shell"><div class="calendar-timeline" style="--calendar-days:${days.length}"><div class="calendar-date-heads">${days.map(date => `<header class="calendar-day-head ${date === today() ? 'today' : ''} ${[0, 6].includes(new Date(`${date}T12:00:00Z`).getUTCDay()) ? 'weekend' : ''}" data-date="${date}"><strong>${new Intl.DateTimeFormat('pl-PL', { weekday: 'short', day: '2-digit', month: '2-digit', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`))}</strong><small>${isoWeek(date).label}</small></header>`).join('')}</div>${spans.length ? `<div class="calendar-span-rows" style="--span-row-count:${laneEnds.length}">${spans.map(item => `<div class="calendar-span-slot" style="grid-column:${item.start + 1}/span ${item.end - item.start + 1};grid-row:${item.lane + 1}">${calendarEvent(item.event, false, true)}</div>`).join('')}</div>` : ''}<div class="calendar-day-bodies">${days.map(date => `<article class="calendar-day ${date === today() ? 'today' : ''} ${[0, 6].includes(new Date(`${date}T12:00:00Z`).getUTCDay()) ? 'weekend' : ''}" data-date="${date}" title="Prawy przycisk: dodaj lub wybierz element"><div>${singleEventsForDay(date).map(event => calendarEvent(event, false)).join('') || '<span class="calendar-empty">Prawy klik, aby dodać</span>'}</div></article>`).join('')}</div></div></section><div class="calendar-legend"><span class="type-dot task"></span>Zadania <span class="type-dot point"></span>Otwarte punkty <span class="type-dot status"></span>Status <span class="type-dot goal"></span>Cele <span class="type-dot note"></span>Dziennik <span class="type-dot annotation"></span>Adnotacje</div>`;
+  <section class="calendar-shell"><div class="calendar-timeline" style="--calendar-days:${days.length}"><div class="calendar-date-heads">${days.map(date => `<header class="calendar-day-head ${date === today() ? 'today' : ''} ${[0, 6].includes(new Date(`${date}T12:00:00Z`).getUTCDay()) ? 'weekend' : ''}" data-date="${date}"><strong>${new Intl.DateTimeFormat('pl-PL', { weekday: 'short', day: '2-digit', month: '2-digit', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`))}</strong><small>${isoWeek(date).label}</small></header>`).join('')}</div>${spans.length ? `<div class="calendar-span-rows" style="--span-row-count:${laneEnds.length}">${spans.map(item => `<div class="calendar-span-slot" style="grid-column:${item.start + 1}/span ${item.end - item.start + 1};grid-row:${item.lane + 1}">${calendarEvent(item.event, false, true)}</div>`).join('')}</div>` : ''}<div class="calendar-day-bodies">${days.map(date => `<article class="calendar-day ${date === today() ? 'today' : ''} ${[0, 6].includes(new Date(`${date}T12:00:00Z`).getUTCDay()) ? 'weekend' : ''}" data-date="${date}" title="Prawy przycisk: dodaj lub wybierz element"><div>${singleEventsForDay(date).map(event => calendarEvent(event, false)).join('') || '<span class="calendar-empty">Prawy klik, aby dodać</span>'}</div></article>`).join('')}</div></div></section><div class="calendar-legend"><span class="type-dot task"></span>Zadania <span class="type-dot point"></span>Otwarte punkty <span class="type-dot status"></span>Status <span class="type-dot goal"></span>Cele <span class="type-dot note"></span>Przekazanie statusu <span class="type-dot annotation"></span>Adnotacje</div>`;
   $$('[data-calendar-mode]').forEach(button => { button.classList.toggle('active-toggle', button.dataset.calendarMode === state.calendarMode); button.addEventListener('click', async () => { await setCalendarMode(button.dataset.calendarMode); }); });
   $$('.calendar-nav').forEach(button => button.addEventListener('click', async () => { const span = days.length; state.calendarFrom = addDays(state.calendarFrom, Number(button.dataset.offset) * span); state.calendarTo = addDays(state.calendarTo, Number(button.dataset.offset) * span); await reloadCalendar(); }));
   $('#calendar-today').addEventListener('click', async () => { await setCalendarMode(state.calendarMode === 'custom' ? 'week' : state.calendarMode, today()); });
@@ -1568,7 +1789,7 @@ function calendarEvent(event, continuation = false, spanning = false) {
 function showCalendarDayContext(event, date) {
   event.preventDefault(); event.stopPropagation();
   const menu = $('#context-menu');
-  menu.innerHTML = `${canCoordinate() ? '<button data-action="annotation">+ Adnotacja</button>' : ''}<button data-action="task">+ Nowe zadanie</button><button data-action="status">+ Nowy punkt statusu</button><button data-action="point">+ Nowy otwarty punkt</button><button data-action="goal">+ Nowy cel</button><button data-action="note">+ Nowa notatka</button><button data-action="existing">Wybierz istniejące elementy…</button>`;
+  menu.innerHTML = `${canCoordinate() ? '<button data-action="annotation">+ Adnotacja</button>' : ''}<button data-action="task">+ Nowe zadanie</button><button data-action="status">+ Nowy punkt statusu</button><button data-action="point">+ Nowy otwarty punkt</button><button data-action="goal">+ Nowy cel</button><button data-action="note">+ Nowe przekazanie statusu</button><button data-action="existing">Wybierz istniejące elementy…</button>`;
   menu.style.left = `${Math.min(event.clientX, innerWidth - 300)}px`; menu.style.top = `${Math.min(event.clientY, innerHeight - 320)}px`; menu.classList.remove('hidden');
   menu.querySelectorAll('button').forEach(button => button.addEventListener('click', () => {
     menu.classList.add('hidden');
@@ -1578,7 +1799,7 @@ function showCalendarDayContext(event, date) {
     if (action === 'task') return openRecord('tasks', null, { start_date: date });
     if (action === 'point') return openRecord('points', null, { start_date: date });
     if (action === 'goal') return openRecord('goals', null, { due_date: date });
-    if (action === 'note') return openRecord('notes', null, { note_date: date });
+    if (action === 'note') return openStatusTransferEditor(null, { note_date: date });
     if (action === 'status') return openRecord('status', null, { _calendar_date: date });
   }));
 }
@@ -1598,7 +1819,7 @@ async function reloadCalendar() {
 }
 
 function openCalendarFilters() {
-  const labels = { task: 'Zadania', point: 'Otwarte punkty', status: 'Status', goal: 'Cele', note: 'Dziennik', annotation: 'Adnotacje' };
+  const labels = { task: 'Zadania', point: 'Otwarte punkty', status: 'Status', goal: 'Cele', note: 'Przekazanie statusu', annotation: 'Adnotacje' };
   $('#calendar-filter-fields').innerHTML = `<section class="calendar-filter-section full"><header><b>Typy informacji</b><small>Zaznacz moduły widoczne na osi czasu.</small></header><div class="calendar-choice-grid">${Object.entries(labels).map(([type, label]) => `<label class="calendar-choice"><input type="checkbox" name="type" value="${type}" ${state.calendarTypes.includes(type) ? 'checked' : ''}><span>${label}</span></label>`).join('')}</div></section><section class="calendar-filter-section full"><header><b>Priorytety</b><small>Dotyczy zadań, statusu, punktów i celów.</small></header><div class="calendar-choice-grid four">${['Low', 'Medium', 'High', 'Critical'].map(priority => `<label class="calendar-choice"><input type="checkbox" name="priority" value="${priority}" ${state.calendarPriorities.includes(priority) ? 'checked' : ''}><span>${badgeText(priority)}</span></label>`).join('')}</div></section><label class="field calendar-filter-text"><span>Kategoria / branża zawiera</span><input name="category" value="${escapeHtml(state.calendarCategory)}" placeholder="np. Electrical"></label><label class="calendar-own-filter"><input name="only_mine" type="checkbox" value="1" ${state.calendarOnlyMine ? 'checked' : ''}><span><b>Tylko moje elementy</b><small>Utworzone przeze mnie lub takie, do których jestem przypisany / wspomniany.</small></span></label>`;
   $('#calendar-filter-dialog').showModal();
 }
@@ -1634,7 +1855,7 @@ function showCalendarAnnotationContext(event, record) {
 }
 
 function renderHistory() {
-  const types = [['status', 'Status'], ['task', 'Zadania'], ['point', 'Otwarte punkty'], ['note', 'Dziennik']];
+  const types = [['status', 'Status'], ['task', 'Zadania'], ['point', 'Otwarte punkty'], ['note', 'Przekazanie statusu']];
   $('#content').innerHTML = `<section class="history-shell"><div class="history-tools"><strong>Rejestr zmian projektu</strong><div>${types.map(([type, label]) => `<label class="mention"><input type="checkbox" data-history-type value="${type}" checked>${label}</label>`).join('')}</div><label>Grupuj <select id="history-group"><option value="hierarchy">Hierarchia projektu</option><option value="controller">Sterownik</option><option value="none">Bez grupowania</option></select></label><input id="history-search" type="search" placeholder="Szukaj osoby, elementu lub zmienionego pola…"></div><div id="history-feed" class="history-feed"></div></section>`;
   $('#history-group').value = state.grouping.history || 'hierarchy';
   $$('[data-history-type]').forEach(input => input.addEventListener('change', drawHistory)); $('#history-search').addEventListener('input', drawHistory); $('#history-group').addEventListener('change', event => { state.grouping.history = event.target.value; drawHistory(); }); drawHistory();
@@ -1719,15 +1940,13 @@ function renderStatus() {
     { key: 'responsible_name', label: 'Odpowiedzialni', values: uniqueValues(state.status, 'responsible_name', true) }, { key: 'requirement_names', label: 'Zapotrzebowanie', values: uniqueValues(state.status, 'requirement_names', true) }, { key: 'updated_at', label: 'Aktualizacja', filter: 'date' }
   ];
   state.statusColumns = columns;
-  $('#content').innerHTML = `<div class="metrics">
-    <article class="metric-card"><header><span>Postęp</span><span>${d.progress || 0}%</span></header><strong>${d.done || 0}/${d.total || 0}</strong><div class="progress"><i style="width:${d.progress || 0}%"></i></div></article>
-    <article class="metric-card"><header><span>W trakcie</span></header><strong>${d.in_progress || 0}</strong></article>
-    <article class="metric-card"><header><span>Zablokowane / NOK</span></header><strong>${d.blocked || 0}</strong></article>
-  </div>${savedViewsToolbar('status')}<div class="panel" id="status-panel"><div class="toolbar"><strong>Lista statusowa</strong><button id="quick-status-edit" class="secondary">Szybka edycja</button><button type="button" class="mini" data-clear-filters>Wyczyść filtry</button><label>Grupuj <select id="status-group"><option value="function_group_name">Grupa funkcyjna</option><option value="function_group_subcategory_name">Podkategoria grupy</option><option value="category">Kategoria</option><option value="subcategory">Podkategoria statusu</option><option value="status">Status</option><option value="">Bez grupowania</option></select></label></div>
+  $('#content').innerHTML = `<div class="panel compact-data-panel" id="status-panel"><div class="toolbar module-toolbar"><strong>Lista statusowa</strong><button id="quick-status-edit" class="secondary">Szybka edycja</button><button type="button" class="mini" data-clear-filters>Wyczyść filtry</button><label>Grupuj <select id="status-group"><option value="function_group_name">Grupa funkcyjna</option><option value="function_group_subcategory_name">Podkategoria grupy</option><option value="category">Kategoria</option><option value="subcategory">Podkategoria statusu</option><option value="status">Status</option><option value="">Bez grupowania</option></select></label><button type="button" class="mini" id="status-collapse-all">Zwiń wszystkie</button><button type="button" class="mini" id="status-expand-all">Rozwiń wszystkie</button>${savedViewsToolbar('status')}<div class="status-inline-metrics"><span><b>${d.progress || 0}%</b> postęp</span><span><b>${d.in_progress || 0}</b> w trakcie</span><span class="${d.blocked ? 'danger-text' : ''}"><b>${d.blocked || 0}</b> blokady/NOK</span></div></div>
   <div class="tablewrap"><table><thead><tr>${columns.map(column => `<th class="sortable" data-column="${column.key}" data-sort="${column.key}" data-label="${column.label}">${column.label}${sortMarker('status', column.key)}</th>`).join('')}</tr>${tableFilterRow(columns)}</thead><tbody id="status-body"></tbody></table></div></div>`;
   $('#status-group').value = state.grouping.status;
   $('#quick-status-edit').addEventListener('click', openQuickStatusEditor);
-  $('#status-group').addEventListener('change', event => { state.grouping.status = event.target.value; drawStatusRows(); });
+  $('#status-group').addEventListener('change', event => { state.grouping.status = event.target.value; state.collapsedStatusGroups.clear(); drawStatusRows(); });
+  $('#status-collapse-all').addEventListener('click', () => { orderedGroups('status', state.grouping.status, filterRows(state.status, '#status-panel')).forEach(group => state.collapsedStatusGroups.add(String(group))); drawStatusRows(); });
+  $('#status-expand-all').addEventListener('click', () => { state.collapsedStatusGroups.clear(); drawStatusRows(); });
   bindTableFilters('#status-panel', drawStatusRows);
   bindSavedViews('status', '#status-panel', drawStatusRows);
   $$('#status-panel th[data-sort]').forEach(th => th.addEventListener('click', () => updateSort('status', th.dataset.sort)));
@@ -1743,11 +1962,15 @@ function drawStatusRows() {
   let html = '';
   for (const group of orderedGroups('status', grouping, rows)) {
     const items = grouping ? rows.filter(row => (row[grouping] || 'Bez wartości') === group) : rows;
-    if (grouping) html += `<tr class="group-row"><td colspan="${visibleCount}">${escapeHtml(group)} <small>${items.length} pozycji</small></td></tr>`;
-    html += items.map(item => `<tr data-id="${item.id}"><td data-column="function_group_name">${escapeHtml(item.function_group_name || '—')}</td><td data-column="function_detail" class="maincell">${escapeHtml(item.function_detail || '—')}<span class="sub">${escapeHtml(item.current_note || '')}</span></td><td data-column="function_group_subcategory_name">${escapeHtml(item.function_group_subcategory_name || '—')}</td><td data-column="function_group_element_name">${escapeHtml(item.function_group_element_name || '—')}</td><td data-column="controller">${escapeHtml(controllerLabel(item))}</td><td data-column="category">${escapeHtml(item.category)}</td><td data-column="subcategory">${escapeHtml(item.subcategory || '—')}</td><td data-column="status">${badge(item.status)}</td><td data-column="related_work_progress"><span class="status-related"><b>${item.related_work_progress}%</b><small class="sub">${item.related_work_done}/${item.related_work_total}</small><span class="progress"><i style="width:${item.related_work_progress}%"></i></span></span></td><td data-column="criticality">${badge(item.criticality)}</td><td data-column="responsible_name">${escapeHtml(item.responsible_name || '—')}</td><td data-column="requirement_names">${escapeHtml(item.requirement_names || '—')}</td><td data-column="updated_at">${displayDate((item.updated_at || '').slice(0, 10))}</td></tr>`).join('');
+    const collapsed = grouping && state.collapsedStatusGroups.has(String(group));
+    const completed = items.filter(item => ['Done', 'N/A'].includes(item.status)).length;
+    const progress = items.length ? Math.round(completed * 100 / items.length) : 0;
+    if (grouping) html += `<tr class="group-row ${collapsed ? 'collapsed' : ''}" data-status-group="${escapeHtml(group)}"><td colspan="${visibleCount}"><button type="button" class="group-toggle" aria-expanded="${collapsed ? 'false' : 'true'}"><span>${collapsed ? '▸' : '▾'}</span><b>${escapeHtml(group)}</b><small>${items.length} pozycji</small><span class="group-progress"><i><u style="width:${progress}%"></u></i><b>${progress}%</b></span></button></td></tr>`;
+    if (!collapsed) html += items.map(item => `<tr data-id="${item.id}"><td data-column="function_group_name">${escapeHtml(item.function_group_name || '—')}</td><td data-column="function_detail" class="maincell">${escapeHtml(item.function_detail || '—')}<span class="sub">${escapeHtml(item.current_note || '')}</span></td><td data-column="function_group_subcategory_name">${escapeHtml(item.function_group_subcategory_name || '—')}</td><td data-column="function_group_element_name">${escapeHtml(item.function_group_element_name || '—')}</td><td data-column="controller">${escapeHtml(controllerLabel(item))}</td><td data-column="category">${escapeHtml(item.category)}</td><td data-column="subcategory">${escapeHtml(item.subcategory || '—')}</td><td data-column="status">${badge(item.status)}</td><td data-column="related_work_progress"><span class="status-related"><b>${item.related_work_progress}%</b><small class="sub">${item.related_work_done}/${item.related_work_total}</small><span class="progress"><i style="width:${item.related_work_progress}%"></i></span></span></td><td data-column="criticality">${badge(item.criticality)}</td><td data-column="responsible_name">${escapeHtml(item.responsible_name || '—')}</td><td data-column="requirement_names">${escapeHtml(item.requirement_names || '—')}</td><td data-column="updated_at">${displayDate((item.updated_at || '').slice(0, 10))}</td></tr>`).join('');
   }
   $('#status-body').innerHTML = html || `<tr><td colspan="${visibleCount}" class="empty">Brak wyników</td></tr>`;
   applyGroupedColumnVisibility('#status-panel', grouping, columns);
+  $$('#status-body [data-status-group]').forEach(row => row.addEventListener('click', () => { const key = row.dataset.statusGroup; if (state.collapsedStatusGroups.has(key)) state.collapsedStatusGroups.delete(key); else state.collapsedStatusGroups.add(key); drawStatusRows(); }));
   $$('#status-body tr[data-id]').forEach(row => {
     const item = state.status.find(entry => entry.id === Number(row.dataset.id));
     row.addEventListener('click', () => openRecord('status', item));
@@ -1758,7 +1981,7 @@ function drawStatusRows() {
 function showStatusContext(event, item) {
   event.preventDefault(); event.stopPropagation();
   const menu = $('#context-menu');
-  menu.innerHTML = `<button data-action="edit">Edytuj punkt statusu</button><button data-action="duplicate">Duplikuj punkt…</button><button data-action="task">+ Utwórz powiązane zadanie</button><button data-action="point">+ Utwórz powiązany otwarty punkt</button><button data-action="note">+ Dodaj wpis w dzienniku</button><button data-action="done">Oznacz jako gotowe</button>`;
+  menu.innerHTML = `<button data-action="edit">Edytuj punkt statusu</button><button data-action="duplicate">Duplikuj punkt…</button><button data-action="task">+ Utwórz powiązane zadanie</button><button data-action="point">+ Utwórz powiązany otwarty punkt</button><button data-action="note">+ Dodaj przekazanie statusu</button><button data-action="done">Oznacz jako gotowe</button>`;
   menu.style.left = `${Math.min(event.clientX, innerWidth - 270)}px`; menu.style.top = `${Math.min(event.clientY, innerHeight - 240)}px`; menu.classList.remove('hidden');
   menu.querySelectorAll('button').forEach(button => button.addEventListener('click', async () => {
     menu.classList.add('hidden');
@@ -1770,7 +1993,7 @@ function showStatusContext(event, item) {
     }
     const type = button.dataset.action === 'task' ? 'tasks' : button.dataset.action === 'point' ? 'points' : 'notes';
     const prefill = { controller: item.controller, hierarchy_target: `controller:${item.controller}`, function_group_id: item.function_group_id, function_group_element_id: item.function_group_element_id, category: item.category, subcategory: item.subcategory, title: item.function_detail, content: `Aktualizacja statusu: ${item.function_detail}`, links: [{ entity_type: 'status', entity_id: item.id }] };
-    openRecord(type, null, prefill);
+    if (type === 'notes') openStatusTransferEditor(null, prefill); else openRecord(type, null, prefill);
   }));
 }
 
@@ -1891,7 +2114,7 @@ function taskCard(item) {
 }
 
 function renderTasks() {
-  $('#content').innerHTML = `${savedViewsToolbar('tasks')}<div class="panel"><div class="toolbar" id="task-filter-bar"><strong>Zadania</strong><button id="task-board-mode" class="secondary ${state.taskMode === 'board' ? 'active-toggle' : ''}">Tablica</button><button id="task-list-mode" class="secondary ${state.taskMode === 'list' ? 'active-toggle' : ''}">Lista</button><input id="task-search" placeholder="Szukaj we wszystkich polach">${multiFilterControl('toolbar_category', taskCategories(), 'Wszystkie kategorie')}${multiFilterControl('toolbar_requirement', (state.config.requirements || []).map(item => item.name), 'Każde zapotrzebowanie')}${state.taskMode === 'list' ? `<label class="toggle-line compact-toggle"><input type="checkbox" id="task-show-completed" ${state.taskShowCompleted ? 'checked' : ''}> Pokaż ukończone</label>` : ''}</div></div><div id="task-content"></div>`;
+  $('#content').innerHTML = `<div class="panel"><div class="toolbar module-toolbar" id="task-filter-bar"><strong>Zadania</strong><button id="task-board-mode" class="secondary ${state.taskMode === 'board' ? 'active-toggle' : ''}">Tablica</button><button id="task-list-mode" class="secondary ${state.taskMode === 'list' ? 'active-toggle' : ''}">Lista</button><input id="task-search" placeholder="Szukaj we wszystkich polach">${multiFilterControl('toolbar_category', taskCategories(), 'Wszystkie kategorie')}${multiFilterControl('toolbar_requirement', (state.config.requirements || []).map(item => item.name), 'Każde zapotrzebowanie')}${state.taskMode === 'list' ? `<label class="toggle-line compact-toggle"><input type="checkbox" id="task-show-completed" ${state.taskShowCompleted ? 'checked' : ''}> Pokaż ukończone</label>` : ''}${savedViewsToolbar('tasks')}</div></div><div id="task-content"></div>`;
   $('#task-board-mode').addEventListener('click', () => { state.taskMode = 'board'; renderTasks(); });
   $('#task-list-mode').addEventListener('click', () => { state.taskMode = 'list'; renderTasks(); });
   $('#task-search').addEventListener('input', drawTasks);
@@ -2006,11 +2229,11 @@ function renderGoals() {
 }
 
 function renderPoints() {
-  $('#content').innerHTML = `${savedViewsToolbar('points')}<div class="panel"><div class="toolbar"><strong>Otwarte punkty</strong><button id="point-list-mode" class="secondary ${state.pointMode === 'list' ? 'active-toggle' : ''}">Pełna lista</button><button id="point-reminder-mode" class="secondary ${state.pointMode === 'reminders' ? 'active-toggle' : ''}">Przypomnienia</button></div></div><div id="point-content"></div>`;
+  $('#content').innerHTML = `<div class="panel"><div class="toolbar module-toolbar" id="point-filter-bar"><strong>Otwarte punkty</strong><button id="point-list-mode" class="secondary ${state.pointMode === 'list' ? 'active-toggle' : ''}">Pełna lista</button><button id="point-reminder-mode" class="secondary ${state.pointMode === 'reminders' ? 'active-toggle' : ''}">Przypomnienia</button>${savedViewsToolbar('points')}</div></div><div id="point-content"></div>`;
   $('#point-list-mode').addEventListener('click', () => { state.pointMode = 'list'; renderPoints(); });
   $('#point-reminder-mode').addEventListener('click', () => { state.pointMode = 'reminders'; renderPoints(); });
   if (state.pointMode === 'reminders') drawReminderView(); else drawPointList();
-  if (state.pointMode === 'reminders') bindSavedViews('points', '#point-content', drawReminderView);
+  if (state.pointMode === 'reminders') bindSavedViews('points', '#point-filter-bar', drawReminderView);
 }
 
 function drawPointList() {
@@ -2117,9 +2340,70 @@ function drawNotes() {
   const rows = state.notes.map(item => ({ ...item, scope: item.scope_label || controllerLabel(item) || 'Cały projekt', cw: isoWeek(item.note_date).label, cwKey: isoWeek(item.note_date).key })).filter(item => !weekFilter || item.cwKey === weekFilter);
   const grouping = state.grouping.notes;
   const groups = grouping ? [...new Set(rows.map(item => item[grouping] || 'Bez wartości'))] : [''];
-  $('#notes-list').innerHTML = groups.map(group => `${grouping ? `<div class="group-title">${escapeHtml(group)} · ${rows.filter(item => (item[grouping] || 'Bez wartości') === group).length}</div>` : ''}${(grouping ? rows.filter(item => (item[grouping] || 'Bez wartości') === group) : rows).map(item => { const links = item.links || []; return `<article class="note clickable-note" data-id="${item.id}"><div class="note-meta">${displayDate(item.note_date)} · ${escapeHtml(item.cw)}<br>${escapeHtml(item.scope_label || controllerLabel(item) || 'Cały projekt')} · ${escapeHtml(item.shift)}<br>${escapeHtml(item.author || item.created_by_name)}<br>Utworzono: ${displayDateTime(item.created_at)}</div><div><strong>${escapeHtml(item.type)}</strong><p class="note-content-clamp">${escapeHtml(item.content)}</p><div class="links">${links.slice(0, 2).map(link => linkChip(link.entity_type, link.entity_id, ({ status: 'Status', task: 'Zadanie', point: 'Otwarty punkt' })[link.entity_type] || link.entity_type)).join('')}${links.length > 2 ? `<span class="more-relations">+${links.length - 2} powiązania · otwórz notatkę</span>` : ''}</div></div></article>`; }).join('')}`).join('') || '<div class="empty">Brak wpisów</div>';
-  $$('.note[data-id]').forEach(row => row.addEventListener('click', event => { if (!event.target.closest('.jump')) openRecord('notes', state.notes.find(item => item.id === Number(row.dataset.id))); }));
+  $('#notes-list').innerHTML = groups.map(group => `${grouping ? `<div class="group-title">${escapeHtml(group)} · ${rows.filter(item => (item[grouping] || 'Bez wartości') === group).length}</div>` : ''}${(grouping ? rows.filter(item => (item[grouping] || 'Bez wartości') === group) : rows).map(item => { const links = item.links || []; const sections = item.sections?.length ? item.sections : [{ content: item.content, scopes: [{ label: item.scope_label || 'Cały projekt' }] }]; return `<article class="note status-transfer-card" data-id="${item.id}"><div class="note-meta">${displayDate(item.note_date)} · ${escapeHtml(item.cw)}<br>${escapeHtml(item.shift)}<br>${escapeHtml(item.author || item.created_by_name)}<br>Utworzono: ${displayDateTime(item.created_at)}</div><div><strong>${escapeHtml(item.title || 'Przekazanie statusu')}</strong><small class="sub">${sections.length} ${sections.length === 1 ? 'informacja' : 'informacje'}</small><div class="transfer-section-preview">${sections.slice(0, 3).map(section => `<p><b>${escapeHtml((section.scopes || []).map(scope => scope.label).join(', ') || 'Cały projekt')}</b><span>${escapeHtml(section.content)}</span></p>`).join('')}${sections.length > 3 ? `<small>+${sections.length - 3} kolejne informacje</small>` : ''}</div><div class="links">${links.slice(0, 2).map(link => linkChip(link.entity_type, link.entity_id, ({ status: 'Status', task: 'Zadanie', point: 'Otwarty punkt', goal: 'Cel', note: 'Przekazanie' })[link.entity_type] || link.entity_type)).join('')}${links.length > 2 ? `<span class="more-relations">+${links.length - 2} powiązania · otwórz przekazanie</span>` : ''}</div></div></article>`; }).join('')}`).join('') || '<div class="empty">Brak przekazań statusu</div>';
+  $$('.note[data-id]').forEach(row => row.addEventListener('click', event => { if (!event.target.closest('.jump')) openStatusTransferEditor(state.notes.find(item => item.id === Number(row.dataset.id))); }));
   bindJumpItems();
+}
+
+function emptyStatusTransferSection() { return { content: '', scopes: [{ scope_type: 'project', scope_id: 0 }], links: [] }; }
+
+function captureStatusTransferSections() {
+  if (!state.statusTransfer) return;
+  state.statusTransfer.sections = $$('#status-transfer-sections .status-transfer-section').map((root, index) => ({
+    content: root.querySelector('[data-transfer-content]').value,
+    scopes: [...root.querySelectorAll('[data-transfer-scope]:checked')].map(input => { const [scope_type, raw] = input.value.split(':'); return { scope_type, scope_id: Number(raw || 0) }; }),
+    links: state.statusTransfer.sections[index]?.links || []
+  }));
+}
+
+function statusTransferScopeOptions(selected = []) {
+  const keys = new Set(selected.map(scope => `${scope.scope_type}:${Number(scope.scope_id || 0)}`));
+  const entries = [{ value: 'project:0', label: 'Cały projekt' }, ...state.controllerGroups.map(group => ({ value: `group:${group.id}`, label: `${'  '.repeat(Math.max(0, Number(group.depth || 1) - 1))}▰ ${group.path_label}` })), ...state.controllers.map(item => ({ value: `controller:${item.id}`, label: `◇ ${item.hierarchy_label || item.display_name}` }))];
+  return entries.map(item => `<label><input type="checkbox" data-transfer-scope value="${item.value}" ${keys.has(item.value) ? 'checked' : ''}><span>${escapeHtml(item.label)}</span></label>`).join('');
+}
+
+function renderStatusTransferSections() {
+  const draft = state.statusTransfer; if (!draft) return;
+  $('#status-transfer-sections').innerHTML = draft.sections.map((section, index) => `<section class="status-transfer-section" data-section-index="${index}"><header><span><b>Informacja ${index + 1}</b><small>Może dotyczyć wielu zakresów i wielu elementów</small></span>${draft.sections.length > 1 ? `<button type="button" class="mini danger-text" data-transfer-remove="${index}">Usuń</button>` : ''}</header><label class="field full"><span>Treść *</span><textarea rows="5" data-transfer-content required>${escapeHtml(section.content || '')}</textarea></label><div class="transfer-section-tools"><details class="transfer-scope-picker"><summary>Zakresy · ${(section.scopes || []).length || 1}</summary><div>${statusTransferScopeOptions(section.scopes || [])}</div></details><button type="button" class="secondary" data-transfer-links="${index}">Powiązania · ${(section.links || []).length}</button></div><div class="transfer-links-preview">${(section.links || []).slice(0, 5).map(link => linkChip(link.entity_type, link.entity_id, operationTypeNames[link.entity_type] || link.entity_type)).join('')}${(section.links || []).length > 5 ? `<small>+${section.links.length - 5} kolejnych</small>` : ''}</div></section>`).join('');
+  $$('[data-transfer-remove]').forEach(button => button.addEventListener('click', () => { captureStatusTransferSections(); state.statusTransfer.sections.splice(Number(button.dataset.transferRemove), 1); renderStatusTransferSections(); }));
+  $$('[data-transfer-links]').forEach(button => button.addEventListener('click', () => {
+    captureStatusTransferSections(); const index = Number(button.dataset.transferLinks); const section = state.statusTransfer.sections[index];
+    openEntitySelection({ mode: 'status_transfer', allowed: ['status', 'task', 'point', 'goal', 'note'], initial: section.links || [], onApply: async links => { section.links = links; renderStatusTransferSections(); } });
+  }));
+  bindJumpItems();
+}
+
+function openStatusTransferEditor(existing = null, prefill = null) {
+  state.statusTransfer = {
+    id: existing?.id || null, updated_at: existing?.updated_at || null,
+    title: existing?.title || prefill?.title || `Przekazanie · ${options('shift')[0] || 'Dzień'}`,
+    note_date: existing?.note_date || prefill?.note_date || today(), shift: existing?.shift || options('shift')[0] || 'Dzień',
+    sections: existing?.sections?.length ? existing.sections.map(section => ({ content: section.content, scopes: (section.scopes || []).map(scope => ({ scope_type: scope.scope_type, scope_id: Number(scope.scope_id || 0) })), links: (section.links || []).map(link => ({ entity_type: link.entity_type, entity_id: Number(link.entity_id) })) })) : [prefill ? { content: prefill.content || '', scopes: prefill.controller ? [{ scope_type: 'controller', scope_id: state.controllers.find(item => item.code === prefill.controller)?.id || 0 }] : [{ scope_type: 'project', scope_id: 0 }], links: prefill.links || [] } : emptyStatusTransferSection()],
+    can_delete: existing?.can_delete
+  };
+  $('#status-transfer-title').value = state.statusTransfer.title;
+  $('#status-transfer-date').value = state.statusTransfer.note_date;
+  $('#status-transfer-shift').innerHTML = selectOptions(options('shift'), state.statusTransfer.shift, null);
+  $('#status-transfer-delete').hidden = !existing?.id || !existing?.can_delete;
+  renderStatusTransferSections();
+  $('#status-transfer-dialog').showModal();
+}
+
+function addStatusTransferSection() { captureStatusTransferSections(); state.statusTransfer.sections.push(emptyStatusTransferSection()); renderStatusTransferSections(); }
+
+async function saveStatusTransfer(event) {
+  event.preventDefault(); captureStatusTransferSections();
+  const draft = state.statusTransfer; const sections = draft.sections.filter(section => section.content.trim()).map(section => ({ ...section, scopes: section.scopes.length ? section.scopes : [{ scope_type: 'project', scope_id: 0 }] }));
+  if (!sections.length) return toast('Dodaj co najmniej jedną informację', true);
+  try {
+    await api(draft.id ? `/api/daily-notes/${draft.id}` : '/api/daily-notes', { method: draft.id ? 'PATCH' : 'POST', body: JSON.stringify({ title: $('#status-transfer-title').value, note_date: $('#status-transfer-date').value, shift: $('#status-transfer-shift').value, sections, updated_at: draft.updated_at }) });
+    $('#status-transfer-dialog').close(); toast('Przekazanie statusu zostało zapisane'); await loadData();
+  } catch (error) { toast(error.message, true); }
+}
+
+async function deleteStatusTransfer() {
+  const draft = state.statusTransfer; if (!draft?.id || !await uiConfirm('Usuń przekazanie statusu', 'Wpis i jego sekcje zostaną usunięte z historii.', 'Usuń', true)) return;
+  try { await api(`/api/daily-notes/${draft.id}`, { method: 'DELETE' }); $('#status-transfer-dialog').close(); toast('Przekazanie usunięte'); await loadData(); } catch (error) { toast(error.message, true); }
 }
 
 function linkChip(type, id, prefix) {
@@ -2237,7 +2521,7 @@ function configPanelDefinition(key) {
     announcements: ['Informator · etykiety i ważność', announcementConfig],
     planner: ['Planner · konfiguracja', plannerConfig],
     dictionaries: ['Słowniki projektu', `<section class="config-panel-body config-dictionaries">${dictionaries}</section>`],
-    completion_requirements: ['Wymagania do spełnienia', `<section class="config-panel-body"><p class="sub">Ta uporządkowana lista jest dostępna jako wielokrotny wybór w Statusie, Zadaniach i Otwartych punktach.</p>${(state.config.requirements || []).map((item, index, items) => `<div class="settings-row">${canEdit ? orderControls('completion_requirements', items, index) : ''}<span><b>${escapeHtml(item.name)}</b><small class="sub">${escapeHtml(item.description || 'Bez opisu')}</small></span>${canEdit ? `<button class="mini edit-requirement-config" data-id="${item.id}">Edytuj</button>` : ''}${admin ? `<button class="mini delete-requirement-config" data-id="${item.id}">Usuń</button>` : ''}</div>`).join('') || '<div class="empty compact-empty">Nie zdefiniowano jeszcze wymagań.</div>'}${canEdit ? '<button class="secondary" id="new-requirement-config">+ Dodaj wymaganie</button>' : ''}</section>`],
+    completion_requirements: ['Wymagania do spełnienia', `<section class="config-panel-body"><p class="sub">Ta uporządkowana lista jest dostępna jako wielokrotny wybór w Statusie, Zadaniach i Otwartych punktach.</p>${(state.config.requirements || []).map((item, index, items) => `<div class="settings-row">${canEdit ? orderControls('completion_requirements', items, index) : ''}<span><b>${escapeHtml(item.name)}</b><small class="sub">${escapeHtml(item.description || 'Bez opisu')}</small><small class="requirement-flags">${item.requires_evidence ? 'Dowód wymagany' : 'Dowód opcjonalny'} · ${item.requires_second_approval ? 'zatwierdza druga osoba' : 'bez drugiego zatwierdzenia'}</small></span>${canEdit ? `<button class="mini edit-requirement-config" data-id="${item.id}">Edytuj</button>` : ''}${admin ? `<button class="mini delete-requirement-config" data-id="${item.id}">Usuń</button>` : ''}</div>`).join('') || '<div class="empty compact-empty">Nie zdefiniowano jeszcze wymagań.</div>'}${canEdit ? '<button class="secondary" id="new-requirement-config">+ Dodaj wymaganie</button>' : ''}</section>`],
     reminders: ['Ustawienia przypomnień', `<section class="config-panel-body">${admin ? `<p class="sub">Źródło obszarów dla „Mojego podsumowania” każdy użytkownik wybiera indywidualnie w tym module.</p><label class="field"><span>Domyślne przypomnienie po utworzeniu (dni)</span><input id="default-reminder" type="number" min="1" value="${escapeHtml(state.config.settings.default_reminder_days || 14)}"></label><label class="field"><span>Okno „zbliżających się” przypomnień (dni)</span><input id="warning-days" type="number" min="1" value="${escapeHtml(state.config.settings.reminder_warning_days || 7)}"></label>` : '<p class="sub">Tylko administrator może zmieniać ustawienia projektu.</p>'}</section>`],
     backup: ['Backup projektu', `<section class="config-panel-body"><p class="sub">Plik JSON zawiera konfigurację, status, zadania, cele, otwarte punkty, dziennik, Planner, Informator, powiązania i historię zmian.</p><div class="backup-actions"><button class="secondary" id="download-backup">Pobierz backup</button><label class="secondary file-button">Wczytaj backup<input id="restore-backup" type="file" accept="application/json,.json"></label></div></section>`],
     exports: ['Szablony eksportu statusu', `<section class="config-panel-body">${(state.config.export_templates || []).map((item, index) => `<div class="settings-row">${orderControls('export_templates', state.config.export_templates, index)}<span><b>${escapeHtml(item.name)}</b><small class="sub">${escapeHtml(item.detail_level)}</small></span><button class="mini edit-export-template" data-id="${item.id}">Edytuj</button><button class="mini delete-export-template" data-id="${item.id}">Usuń</button></div>`).join('') || '<p class="sub">Brak własnych szablonów.</p>'}<button class="secondary" id="new-export-template">+ Nowy szablon</button></section>`]
@@ -2487,7 +2771,9 @@ async function editCompletionRequirement(id = null) {
   const existing = (state.config.requirements || []).find(item => item.id === id);
   const result = await uiForm({ title: id ? 'Edytuj wymaganie' : 'Nowe wymaganie do spełnienia', fields: [
     { name: 'name', label: 'Nazwa', value: existing?.name || '', required: true },
-    { name: 'description', label: 'Krótki opis dla pracownika', type: 'textarea', value: existing?.description || '', full: true }
+    { name: 'description', label: 'Krótki opis dla pracownika', type: 'textarea', value: existing?.description || '', full: true },
+    { name: 'requires_evidence', label: 'Wymagaj dowodu lub linku', type: 'checkbox', value: Boolean(existing?.requires_evidence) },
+    { name: 'requires_second_approval', label: 'Wymagaj zatwierdzenia przez drugą osobę', type: 'checkbox', value: Boolean(existing?.requires_second_approval) }
   ], submitLabel: id ? 'Zapisz wymaganie' : 'Dodaj wymaganie' });
   if (!result?.name) return;
   try { await api('/api/completion-requirements' + (id ? `/${id}` : ''), { method: id ? 'PATCH' : 'POST', body: JSON.stringify(result) }); toast('Lista wymagań została zapisana'); await loadData(); } catch (error) { toast(error.message, true); }
@@ -2730,7 +3016,8 @@ const formDefinitions = {
     ['controller', 'Sterownik', 'controller'], ['title', 'Nazwa celu'], ['status', 'Status', 'select', ['Open', 'In progress', 'Done']], ['priority', 'Priorytet', 'select', ['Low', 'Medium', 'High', 'Critical']], ['due_date', 'Termin', 'date'], ['description', 'Opis', 'textarea'], ['goal_links', 'Powiązane elementy', 'goal-links']
   ] },
   announcements: { endpoint: '/api/announcements', title: 'wiadomość', fields: [
-    ['title', 'Tytuł', 'wide-text'], ['importance', 'Poziom ważności', 'options', 'announcement_importance'], ['label_ids', 'Etykiety', 'announcement-labels'], ['content', 'Treść', 'bigtextarea'], ['info_link', 'Link', 'wide-text'],
+    ['entry_type', 'Rodzaj wpisu', 'select', [{ value: 'message', label: 'Komunikat' }, { value: 'decision', label: 'Decyzja projektowa' }, { value: 'scope_change', label: 'Zmiana zakresu' }]], ['decision_status', 'Stan decyzji / zmiany', 'select', [{ value: 'draft', label: 'Szkic' }, { value: 'published', label: 'Opublikowana' }, { value: 'implemented', label: 'Wdrożona' }, { value: 'superseded', label: 'Zastąpiona' }]],
+    ['title', 'Tytuł', 'wide-text'], ['importance', 'Poziom ważności', 'options', 'announcement_importance'], ['label_ids', 'Etykiety', 'announcement-labels'], ['content', 'Treść', 'bigtextarea'], ['rationale', 'Uzasadnienie / wpływ na zakres', 'textarea'], ['effective_date', 'Obowiązuje od', 'date'], ['info_link', 'Link', 'wide-text'],
     ['scope_group_ids', 'Zakres projektu', 'announcement-scopes'], ['recipient_user_ids', 'Osoby, których wiadomość bezpośrednio dotyczy', 'announcement-users'],
     ['links', 'Przypięte elementy', 'multi-links', ['status', 'task', 'point', 'note', 'goal']]
   ] },
@@ -2771,6 +3058,8 @@ async function openRecord(type, record = null, prefill = null, duplicateSource =
   $('#comments-section').classList.toggle('hidden', !commentable);
   $('#comment-content').value = '';
   if (commentable) renderEntityComments(record.comments || []);
+  resetSimilarKnowledge();
+  renderDefinitionOfDone(type, record);
   $('#fields').innerHTML = definition.fields.map(field => fieldHtml(field, source, type)).join('');
   if (type === 'users' && state.me.role !== 'system_admin') {
     ['username', 'display_name', 'password', 'system_role', 'active'].forEach(name => { const input = $(`#fields [name="${name}"]`); if (input) input.disabled = true; });
@@ -2780,6 +3069,53 @@ async function openRecord(type, record = null, prefill = null, duplicateSource =
   bindDynamicFields(type);
   $('#modal').showModal();
   $('#modal').dataset.dirty = '';
+  if (record && ['status', 'tasks', 'points'].includes(type)) void loadSimilarKnowledge(typeToEntity(type), record.id);
+}
+
+function resetSimilarKnowledge() {
+  $('#similar-knowledge-section').classList.add('hidden');
+  $('#similar-knowledge-count').textContent = '';
+  $('#similar-knowledge-list').innerHTML = '';
+}
+
+async function loadSimilarKnowledge(entityType, entityId) {
+  try {
+    const rows = await api(`/api/knowledge/similar?type=${encodeURIComponent(entityType)}&id=${Number(entityId)}`);
+    if (state.dialog?.record?.id !== Number(entityId) || typeToEntity(state.dialog?.type) !== entityType || !rows.length) return;
+    $('#similar-knowledge-count').textContent = `${rows.length} ${rows.length === 1 ? 'podpowiedź' : 'podpowiedzi'}`;
+    $('#similar-knowledge-list').innerHTML = rows.map(item => `<details class="similar-knowledge-row">
+      <summary><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml([item.category, item.tags].filter(Boolean).join(' · ') || 'Baza wiedzy')}</small></span><strong>${Number(item.similarity || 0)}% zgodności</strong></summary>
+      <div><p><b>Problem:</b> ${escapeHtml(item.problem).replace(/\n/g, '<br>')}</p><p><b>Rozwiązanie:</b> ${escapeHtml(item.solution).replace(/\n/g, '<br>')}</p></div>
+    </details>`).join('');
+    $('#similar-knowledge-section').classList.remove('hidden');
+  } catch {
+    resetSimilarKnowledge();
+  }
+}
+
+function renderDefinitionOfDone(formType, record) {
+  const entityType = typeToEntity(formType);
+  const requirements = record?.requirements || [];
+  const visible = Boolean(record && ['status', 'task', 'point'].includes(entityType) && requirements.length);
+  $('#dod-section').classList.toggle('hidden', !visible);
+  if (!visible) { $('#dod-list').innerHTML = ''; return; }
+  const done = requirements.filter(item => item.completed_at && (!item.requires_second_approval || item.approved_at)).length;
+  $('#dod-count').textContent = `${done}/${requirements.length} spełnione`;
+  $('#dod-list').innerHTML = requirements.map(item => {
+    const complete = Boolean(item.completed_at); const approved = Boolean(item.approved_at); const ready = complete && (!item.requires_second_approval || approved);
+    return `<article class="dod-row ${ready ? 'done' : complete ? 'waiting-approval' : ''}"><span class="dod-state">${ready ? '✓' : complete ? '2' : '1'}</span><span><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.description || '')}</small>${item.evidence ? `<em>Dowód: ${escapeHtml(item.evidence)}</em>` : ''}${complete ? `<em>Wykonał: ${escapeHtml(item.completed_by_name || '')} · ${displayDateTime(item.completed_at)}</em>` : ''}${approved ? `<em>Zatwierdził: ${escapeHtml(item.approved_by_name || '')} · ${displayDateTime(item.approved_at)}</em>` : ''}</span><div>${!complete ? `<button type="button" class="mini" data-dod-action="complete" data-requirement="${item.id}">Oznacz wykonanie</button>` : item.requires_second_approval && !approved && canCoordinate() && Number(item.completed_by) !== Number(state.me.id) ? `<button type="button" class="mini green-outline" data-dod-action="approve" data-requirement="${item.id}">Zatwierdź</button>` : ''}${complete ? `<button type="button" class="mini" data-dod-action="reopen" data-requirement="${item.id}">Cofnij</button>` : ''}</div></article>`;
+  }).join('');
+  $$('[data-dod-action]').forEach(button => button.addEventListener('click', () => updateDefinitionOfDone(entityType, record, Number(button.dataset.requirement), button.dataset.dodAction)));
+}
+
+async function updateDefinitionOfDone(entityType, record, requirementId, action) {
+  const requirement = record.requirements.find(item => item.id === requirementId);
+  let evidence = '';
+  if (action === 'complete') {
+    const result = await uiForm({ title: `Wykonano · ${requirement.name}`, description: requirement.requires_second_approval ? 'Po zapisaniu druga osoba będzie musiała zatwierdzić spełnienie wymagania.' : 'Wymaganie zostanie oznaczone jako spełnione.', submitLabel: 'Potwierdź wykonanie', fields: [{ name: 'evidence', label: requirement.requires_evidence ? 'Dowód / link *' : 'Dowód / link (opcjonalnie)', required: Boolean(requirement.requires_evidence), full: true }] });
+    if (!result) return; evidence = result.evidence;
+  } else if (!await uiConfirm(action === 'approve' ? 'Zatwierdź Definition of Done' : 'Cofnij wykonanie wymagania', action === 'approve' ? 'Potwierdzasz rezultat wykonany przez inną osobę.' : 'Element ponownie będzie wymagał wykonania tego warunku.', action === 'approve' ? 'Zatwierdź' : 'Cofnij')) return;
+  try { record.requirements = await api(`/api/${entityType}/${record.id}/requirements/${requirementId}`, { method: 'PATCH', body: JSON.stringify({ action, evidence }) }); renderDefinitionOfDone(state.dialog.type, record); toast('Definition of Done została zaktualizowana'); } catch (error) { toast(error.message, true); }
 }
 
 function typeToEntity(type) { return ({ status: 'status', tasks: 'task', points: 'point', notes: 'note', goals: 'goal' })[type]; }
@@ -2835,6 +3171,8 @@ async function openDuplicate(type, record) {
 }
 
 function defaultValue(name) {
+  if (name === 'entry_type') return 'message';
+  if (name === 'decision_status') return 'published';
   if (name === 'hierarchy_target') {
     if (state.controller === 'all') return `controller:${state.controllers[0]?.code || ''}`;
     return state.controller.startsWith('group:') ? state.controller : `controller:${state.controller}`;
@@ -3091,7 +3429,7 @@ async function openLinkPicker(allowed) {
   state.linkPickerAllowed = allowed;
   state.linkPickerDraft = state.linkDraft.map(link => ({ ...link }));
   $('#link-picker-search').value = '';
-  const typeLabels = { status: 'Status', task: 'Zadania', point: 'Otwarte punkty', goal: 'Cele', note: 'Dziennik' };
+  const typeLabels = { status: 'Status', task: 'Zadania', point: 'Otwarte punkty', goal: 'Cele', note: 'Przekazanie statusu' };
   $('#link-picker-type').innerHTML = '<option value="all">Wszystkie typy</option>' + allowed.map(type => `<option value="${type}">${typeLabels[type] || type}</option>`).join('');
   $('#link-picker-dialog').showModal();
   $('#link-picker-content').innerHTML = '<div class="loading">Ładowanie elementów całego projektu…</div>';
@@ -3150,16 +3488,16 @@ function selectionCollections() {
 }
 
 async function openEntitySelection(context) {
-  const labels = { status: 'Status', task: 'Zadania', point: 'Otwarte punkty', goal: 'Cele', note: 'Dziennik' };
+  const labels = { status: 'Status', task: 'Zadania', point: 'Otwarte punkty', goal: 'Cele', note: 'Przekazanie statusu' };
   state.selectionContext = context;
   state.selectionDraft = [...new Map((context.initial || []).map(item => [`${item.entity_type}:${Number(item.entity_id)}`, { entity_type: item.entity_type, entity_id: Number(item.entity_id) }])).values()];
   $('#entity-selection-search').value = '';
   $('#entity-selection-type').innerHTML = `<option value="all">Wszystkie typy</option>${context.allowed.map(type => `<option value="${type}">${labels[type]}</option>`).join('')}`;
-  $('#entity-selection-title').textContent = context.mode === 'planner' ? 'Przypisz pracę pracownikowi' : context.mode === 'handover' ? 'Elementy przekazania zmiany' : 'Dodaj istniejące elementy do dnia';
+  $('#entity-selection-title').textContent = context.mode === 'planner' ? 'Przypisz pracę pracownikowi' : context.onApply ? 'Powiązane elementy informacji' : 'Dodaj istniejące elementy do dnia';
   const user = context.userId ? state.users.find(item => item.id === context.userId) : null;
   $('#entity-selection-description').textContent = context.mode === 'planner'
     ? `${user?.display_name || 'Pracownik'} · ${displayDate(context.date)} · wybór przypisze osobę i planowany start.`
-    : context.mode === 'handover' ? 'Wybierz tematy, które następna zmiana ma przejąć lub znać.'
+    : context.onApply ? 'Wybierz zadania, status, otwarte punkty, cele lub wcześniejsze przekazania związane z tą informacją.'
       : `${displayDate(context.date)} · wybrane elementy pojawią się w tym dniu bez zmiany ich terminów.`;
   $('#entity-selection-dialog').showModal();
   $('#entity-selection-content').innerHTML = '<div class="loading">Ładowanie elementów całego projektu…</div>';
@@ -3179,7 +3517,7 @@ function renderEntitySelection() {
   const selected = new Set(state.selectionDraft.map(item => `${item.entity_type}:${item.entity_id}`));
   let rows = context.allowed.flatMap(type => (selectionCollections()[type] || []).map(item => ({ type, item })));
   rows = rows.filter(({ type, item }) => (selectedType === 'all' || type === selectedType) && (!query || `${entityLabel(type, item)} ${controllerLabel(item)} ${item.owner_name || item.responsible_name || item.created_by_name || ''} ${item.category || ''}`.toLocaleLowerCase('pl').includes(query)));
-  const typeNames = { status: 'Status', task: 'Zadanie', point: 'Otwarty punkt', goal: 'Cel', note: 'Dziennik' };
+  const typeNames = { status: 'Status', task: 'Zadanie', point: 'Otwarty punkt', goal: 'Cel', note: 'Przekazanie statusu' };
   $('#entity-selection-content').innerHTML = `<div class="link-picker-table">${pickerGroupHtml(rows.slice(0, 700), ({ type, item }) => {
     const key = `${type}:${item.id}`;
     const assigned = item.owner_name || item.responsible_name || item.created_by_name || item.author || 'Nieprzypisane';
@@ -3210,11 +3548,11 @@ async function applyEntitySelection() {
   button.disabled = true;
   try {
     if (context.mode === 'planner') await api('/api/planner/assign-work', { method: 'POST', body: JSON.stringify({ user_id: context.userId, plan_date: context.date, items: state.selectionDraft }) });
-    else if (context.mode === 'handover') await context.onApply(state.selectionDraft.map(item => ({ ...item })));
+    else if (context.onApply) await context.onApply(state.selectionDraft.map(item => ({ ...item })));
     else await api('/api/calendar/items', { method: 'POST', body: JSON.stringify({ calendar_date: context.date, items: state.selectionDraft }) });
     const count = state.selectionDraft.length;
     closeEntitySelection();
-    if (context.mode !== 'handover') {
+    if (!context.onApply) {
       toast(`${count} elementów zostało ${context.mode === 'planner' ? 'przypisanych' : 'dodanych do kalendarza'}`);
       await loadData();
     }
@@ -3284,7 +3622,7 @@ function fieldLabel(field) { return ({
 
 function auditUserName(id) { return state.users.find(user => user.id === Number(id))?.display_name || 'Nieprzypisane'; }
 function auditControllerName(id) { return state.controllers.find(item => item.id === Number(id))?.display_name || 'Bez sterownika'; }
-function auditLinkName(link) { const item = entity(link?.entity_type, link?.entity_id); return `${({ status: 'Status', task: 'Zadanie', point: 'Otwarty punkt', note: 'Dziennik', goal: 'Cel' })[link?.entity_type] || 'Element'}${item ? ` · ${entityLabel(link.entity_type, item)}` : ''}`; }
+function auditLinkName(link) { const item = entity(link?.entity_type, link?.entity_id); return `${({ status: 'Status', task: 'Zadanie', point: 'Otwarty punkt', note: 'Przekazanie statusu', goal: 'Cel' })[link?.entity_type] || 'Element'}${item ? ` · ${entityLabel(link.entity_type, item)}` : ''}`; }
 function formatAuditValue(field, value) {
   if (value === null || value === undefined || value === '') return '—';
   if (['owner_user_id', 'responsible_user_id', 'created_by'].includes(field)) return auditUserName(value);
@@ -3381,7 +3719,10 @@ function jumpTo(type, id) {
   const view = type === 'task' || type === 'tasks' ? 'tasks' : type === 'point' || type === 'points' ? 'points' : type === 'note' || type === 'notes' ? 'notes' : type === 'goal' || type === 'goals' ? 'goals' : 'status';
   setView(view);
   const item = entity(type, id);
-  if (item) openRecord(view, item);
+  if (item) {
+    if (view === 'notes') openStatusTransferEditor(item);
+    else openRecord(view, item);
+  }
 }
 
 function bindJumpItems() {

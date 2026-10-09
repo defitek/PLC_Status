@@ -1,8 +1,25 @@
-# PLC Commissioning Hub V12.0.0
+# PLC Commissioning Hub V13.0.0
 
 Samodzielna aplikacja WWW do zarządzania uruchomieniem PLC, zespołem i kilkoma projektami. Działa na Node.js 24 oraz SQLite, bez zewnętrznych usług i bez zależności npm.
 
-## Najważniejsze zmiany V12
+## Najważniejsze zmiany V13
+
+V13 łączy warstwę uruchomieniową, przepływ informacji i zarządzanie gotowością projektu, zachowując dotychczasową konfigurację Railway i automatyczną migrację danych:
+
+- szczegółowa **Realizacja według obszarów** z procentem, liczbą wszystkich, otwartych, wykonanych, zamkniętych i zablokowanych elementów osobno dla Statusu, Zadań, Otwartych punktów i Celów;
+- większy, rozwijalny widok **Szczegółowych KPI według hierarchii**, bez wewnętrznego pionowego scrolla poszczególnych obszarów;
+- moduł **Przekazanie statusu** zastępujący Dzienne notatki i dawne Przekazanie zmiany: jeden wpis może zawierać wiele sekcji, a każda sekcja wiele obszarów/sterowników oraz własne powiązania;
+- nowe **Sesje testowe / kampanie uruchomieniowe** z wynikami PASS/FAIL/N/A, dowodami, retestami i automatycznym utworzeniem Otwartego punktu po wyniku FAIL;
+- konfigurowalne **Bramy gotowości (Readiness Gates)** obliczane z KPI, zatwierdzane przez drugą osobę albo świadomie obchodzone z obowiązkowym uzasadnieniem;
+- **Definition of Done** z wymaganym dowodem i opcjonalnym zatwierdzeniem przez drugą osobę przed zamknięciem Statusu, Zadania lub Otwartego punktu;
+- rozbudowane Centrum operacyjne: tryb odprawy projektowej, inteligentny radar ryzyka, zależności zewnętrzne, automatyzacje oraz baza rozwiązań z podpowiadaniem podobnych problemów w formularzu elementu;
+- Informator obsługuje komunikaty, decyzje projektowe i zmiany zakresu wraz z uzasadnieniem, datą obowiązywania i stanem wdrożenia;
+- Status ma pływające filtry wielokrotnego wyboru, szybkie zaznaczenie wszystkiego, zwijane grupy i procent wykonania grupy;
+- Planner wyróżnia weekendy, święta i cały bieżący dzień, kopiuje/przenosi również urlopy i wolne oraz chroni podsumowanie zapotrzebowania uprawnieniami Managera projektu;
+- domyślnym ekranem po logowaniu jest **Moje podsumowanie**, a boczne menu można zawsze zwinąć;
+- backup projektu i schemat bazy mają wersję `13.0`; testy obejmują również wszystkie nowe przepływy V13.
+
+## Poprzednie zmiany V12
 
 V12 dodaje operacyjną warstwę koordynacji pracy, zachowując konfigurację Railway oraz automatyczną migrację istniejącej bazy:
 
@@ -165,7 +182,7 @@ Wydanie V7 rozwija poprzednią wersję bez zmiany konfiguracji Railway. Poprawia
 - Planner pokazuje obciążenie zadaniami, otwartymi punktami, Statusem i notatkami oraz podsumowania liczby osób per obszar i zmiana;
 - Kalendarz scala terminy ze Statusu, zadań i otwartych punktów z notatkami oraz adnotacjami koordynacyjnymi;
 - dostępne są widoki dzień, tydzień, miesiąc i zakres własny do 31 dni oraz filtry typu danych, kategorii i „tylko moje”;
-- moduł Historia pokazuje zmiany w Statusie, zadaniach, otwartych punktach i dzienniku z przejściem do rekordu;
+- moduł Historia pokazuje zmiany w Statusie, zadaniach, otwartych punktach i Przekazaniu statusu z przejściem do rekordu;
 - po wyborze projektu wyświetla się krótkie podsumowanie bieżącego dnia: tematy dodane, zamknięte, zmienione i usunięte;
 - podsumowanie można ponownie otworzyć z górnego paska i wybrać zakres do 14 dni; listy są podzielone na moduły i prowadzą do istniejących rekordów.
 
@@ -175,8 +192,8 @@ Wydanie V7 rozwija poprzednią wersję bez zmiany konfiguracji Railway. Poprawia
 - filtrowanie i sortowanie po kolumnach;
 - grupa funkcyjna oraz opcjonalny element grupy;
 - instrukcja testu w szczegółach i po wskazaniu kursorem;
-- menu prawego przycisku umożliwia utworzenie zadania, otwartego punktu lub wpisu dziennika;
-- wiele powiązań z zadaniami, otwartymi punktami i dziennikiem wraz z przejściem do elementu;
+- menu prawego przycisku umożliwia utworzenie zadania, otwartego punktu lub Przekazania statusu;
+- wiele powiązań z zadaniami, otwartymi punktami i Przekazaniem statusu wraz z przejściem do elementu;
 - osobny procent ukończenia prac powiązanych, niewliczany do bazowego postępu Statusu;
 - historia każdej zmiany: użytkownik, dokładny czas i zmienione pola.
 
@@ -191,18 +208,18 @@ Wydanie V7 rozwija poprzednią wersję bez zmiany konfiguracji Railway. Poprawia
 - checklista, link/informacje dodatkowe, start, deadline i automatyczny czas pozostały;
 - gdy brak deadline'u, czas trwania jest liczony od planowanego startu, a przy jego braku od utworzenia; przyszły start nie pokazuje czasu trwania;
 - grupa funkcyjna + element albo ręczne pole „Inne” z wzajemnym blokowaniem pól;
-- wiele powiązań ze Statusem, otwartymi punktami i dziennikiem wybieranych w przeszukiwanym i filtrowanym oknie;
+- wiele powiązań ze Statusem, otwartymi punktami i Przekazaniem statusu wybieranych w przeszukiwanym i filtrowanym oknie;
 - to samo powiązanie może wystąpić tylko raz, również gdy zostanie wskazane z drugiej strony relacji;
 - autor, data utworzenia i pełna historia zmian w szczegółach;
 - użytkownik może usunąć własne zadanie, jeśli nikt inny go nie zmieniał.
 
-### Otwarte punkty, cele i dziennik
+### Otwarte punkty, cele i Przekazanie statusu
 
 - sortowanie każdej kolumny i filtrowanie wszystkich informacji;
 - widok przypomnień: przedawnione oraz zbliżające się w ciągu 7 dni;
 - domyślne przypomnienie konfigurowalne przez administratora, startowo 14 dni;
 - cele z czytelną listą elementów i osobnym selektorem Status/Zadania/Otwarte punkty;
-- dziennik z filtrem i grupowaniem według calendar week (poniedziałek–niedziela);
+- Przekazanie statusu z filtrem i grupowaniem według calendar week (poniedziałek–niedziela), wieloma sekcjami i wieloma zakresami hierarchii w jednym wpisie;
 - jedna, dowolnie rozszerzana lista jawnie opisanych powiązań w szczegółach notatki;
 - autor i data utworzenia we wszystkich widokach szczegółowych;
 - użytkownik może usunąć własną notatkę;
@@ -212,7 +229,7 @@ Wydanie V7 rozwija poprzednią wersję bez zmiany konfiguracji Railway. Poprawia
 
 - administrator systemu lub projektu może pobrać backup bieżącego projektu jako JSON i odtworzyć go w konfiguracji;
 - przywrócenie wymaga backupu o tym samym kodzie projektu i zastępuje dane tylko bieżącego projektu;
-- eksport całego projektu do jednego pliku Excel: Podsumowanie, Status, Zadania, Cele, Otwarte punkty i Dziennik;
+- eksport całego projektu do jednego pliku Excel: Podsumowanie, Status, Zadania, Cele, Otwarte punkty i Przekazanie statusu;
 - eksport otwartych punktów dla wybranego zakresu, filtrów i sortowania;
 - eksport Statusu według sterownika/grupy oraz na poziomie: sterowniki, kategorie, grupy funkcyjne lub pełne szczegóły;
 - administrator może przygotować predefiniowane szablony eksportu Statusu;
@@ -265,9 +282,9 @@ Po redeployu trzeba zalogować się ponownie, ponieważ sesje są przechowywane 
 
 ## Aktualizacja istniejącej bazy
 
-V12 automatycznie migruje bazy ze starszych wydań, nie kasując rekordów. Migracja zachowuje funkcje V11 oraz dodaje zapisane widoki, zależności zadań, przekazania zmian, reguły automatyzacji i szablony uruchomieniowe. Dotychczasowe powiązania celów pozostają zsynchronizowane z relacjami pozostałych modułów.
+V13 automatycznie migruje bazy ze starszych wydań, nie kasując rekordów. Dawne Przekazania zmian są jednorazowo przenoszone do modułu **Przekazanie statusu**. Migracja dodaje sekcje i zakresy przekazań, kampanie testowe, bramy gotowości, status realizacji Definition of Done, odprawy, zależności zewnętrzne oraz bazę rozwiązań. Dotychczasowe relacje, dane Plannera i konfiguracja projektów pozostają zachowane.
 
-Przed wdrożeniem produkcyjnym zalecany jest snapshot Railway Volume lub kopia pliku `/app/data/plc-status.db`. Po uruchomieniu V12 można też używać kopii projektowych w **Konfiguracja → Backup projektu**.
+Przed wdrożeniem produkcyjnym zalecany jest snapshot Railway Volume lub kopia pliku `/app/data/plc-status.db`. Po uruchomieniu V13 można też używać kopii projektowych w **Konfiguracja → Backup projektu**.
 
 Jeśli w fazie koncepcyjnej potrzebny jest czysty start, usuń wyłącznie pliki:
 
@@ -279,7 +296,7 @@ Jeśli w fazie koncepcyjnej potrzebny jest czysty start, usuń wyłącznie pliki
 
 Następnie wykonaj redeploy. Nie usuwaj całego Volume, jeśli znajdują się na nim inne pliki.
 
-## Uprawnienia prototypowe V12
+## Uprawnienia prototypowe V13
 
 | Czynność | Administrator systemu | Administrator projektu | Manager projektu | Użytkownik |
 |---|:---:|:---:|:---:|:---:|
@@ -294,7 +311,10 @@ Następnie wykonaj redeploy. Nie usuwaj całego Volume, jeśli znajdują się na
 | Kalendarz — adnotacje koordynacyjne | ✓ | ✓ | ✓ | — |
 | Triage — zmiany zbiorcze | ✓ | ✓ | ✓ | — |
 | Reguły automatyzacji i szablony uruchomieniowe | ✓ | ✓ | ✓ | podgląd |
-| Przekazania zmian — tworzenie i odbiór | ✓ | ✓ | ✓ | ✓ |
+| Przekazanie statusu — tworzenie sekcji i zakresów | ✓ | ✓ | ✓ | ✓ |
+| Centrum operacyjne, odprawy i radar ryzyka | ✓ | ✓ | ✓ | — |
+| Kampanie testowe — wyniki / konfiguracja | ✓ / ✓ | ✓ / ✓ | ✓ / ✓ | ✓ / — |
+| Bramy gotowości — podgląd / zatwierdzanie | ✓ / ✓ | ✓ / ✓ | ✓ / ✓ | ✓ / — |
 | Zapisane widoki prywatne / zespołowe | oba | oba | oba | prywatne |
 | Dane robocze i zmiana sterownika | ✓ | ✓ | ✓ | ✓ |
 | Usuwanie danych innych osób | ✓ | ✓ | — | — |
@@ -318,7 +338,7 @@ Kontrola zdrowia i wersji:
 curl http://localhost:8080/api/health
 ```
 
-Oczekiwany release: `12.0.0`.
+Oczekiwany release: `13.0.0`.
 
 ## Testy automatyczne
 
@@ -328,4 +348,4 @@ W Node.js 24 lub nowszym:
 npm test
 ```
 
-Testy obejmują tworzenie nowej bazy, migracje, kolejność konfiguracji, grupy funkcyjne, izolację i zabezpieczone usuwanie projektów, pełne identyfikatory hierarchii, zadania obszarowe, backup/restore V12, wymagania do spełnienia, projektową widoczność użytkowników, bezpieczne duplikowanie, komentarze i powiadomienia, skierowane potwierdzenia Informatora, zakresy notatek, wielodniowy Kalendarz, urlopy, święta, ręczne godziny od–do, korekty salda i narastające nadgodziny, udział i zapotrzebowanie w Plannerze, ważone zadania, wieloosobowy Status, trendy KPI, dwukierunkowe powiązania z celami, zapisane widoki, triage, jakość danych, zależności, przekazania zmian, automatyzacje, szablony uruchomieniowe i podsumowanie dnia.
+Testy obejmują tworzenie nowej bazy, migracje, kolejność konfiguracji, grupy funkcyjne, izolację i zabezpieczone usuwanie projektów, pełne identyfikatory hierarchii, zadania obszarowe, backup/restore V13, wymagania i Definition of Done, projektową widoczność użytkowników, bezpieczne duplikowanie, komentarze i powiadomienia, Informator, wielosekcyjne Przekazanie statusu, Kalendarz, urlopy, święta, kopiowanie nieobecności, godziny pracy i nadgodziny, Planner, ważone zadania, wieloosobowy Status, trendy KPI, cele, zapisane widoki, triage, jakość danych, zależności, kampanie testowe, bramy gotowości, odprawy, radar ryzyka, bazę rozwiązań, automatyzacje, szablony uruchomieniowe i podsumowanie dnia.

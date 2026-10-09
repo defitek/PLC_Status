@@ -1,7 +1,7 @@
 import { createWorkbook } from './xlsx.js';
 
 const dateTime = value => value ? String(value).replace('T', ' ').replace('Z', '') : '';
-const linkText = links => (links || []).map(link => `${({ status: 'Status', task: 'Zadanie', point: 'Otwarty punkt', note: 'Dziennik', goal: 'Cel' })[link.entity_type] || 'Element'}${link.status ? ` (${link.status})` : ''}`).join(', ');
+const linkText = links => (links || []).map(link => `${({ status: 'Status', task: 'Zadanie', point: 'Otwarty punkt', note: 'Przekazanie statusu', goal: 'Cel' })[link.entity_type] || 'Element'}${link.status ? ` (${link.status})` : ''}`).join(', ');
 const percent = (done, total) => total ? Math.round(Number(done || 0) * 100 / Number(total)) : 0;
 
 function filterAndSort(rows, options = {}) {
@@ -122,6 +122,6 @@ export function projectWorkbook(data, project) {
     { name: 'Zadania', title: 'Zadania projektu', subtitle, columns: cols(taskColumns), rows: taskRows(data.tasks) },
     { name: 'Cele', title: 'Cele projektu', subtitle, columns: cols([['title', 'Cel', 38], ['controller', 'Sterownik', 18], ['status', 'Status', 16], ['priority', 'Priorytet', 14], ['due_date', 'Deadline', 16], ['description', 'Opis', 50], ['links_text', 'Powiązane elementy', 42], ['created_by_name', 'Utworzone przez', 22], ['created_at', 'Data utworzenia', 20]]), rows: goalRows },
     { name: 'Otwarte punkty', title: 'Otwarte punkty projektu', subtitle, columns: cols(pointColumns), rows: enrich(data.points) },
-    { name: 'Dziennik', title: 'Dziennik projektu', subtitle, columns: cols([['note_date', 'Data wpisu', 16], ['controller', 'Sterownik', 14], ['shift', 'Zmiana', 14], ['type', 'Typ', 18], ['author', 'Autor', 22], ['content', 'Treść', 60], ['links_text', 'Powiązania', 42], ['created_at', 'Data utworzenia', 20], ['updated_at', 'Aktualizacja', 20]]), rows: noteRows }
+    { name: 'Przekazanie statusu', title: 'Przekazanie statusu projektu', subtitle, columns: cols([['note_date', 'Data wpisu', 16], ['controller', 'Sterownik', 14], ['shift', 'Zmiana', 14], ['type', 'Typ', 18], ['author', 'Autor', 22], ['content', 'Treść', 60], ['links_text', 'Powiązania', 42], ['created_at', 'Data utworzenia', 20], ['updated_at', 'Aktualizacja', 20]]), rows: noteRows }
   ], { title: `Eksport projektu ${project.code}` });
 }

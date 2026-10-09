@@ -90,8 +90,51 @@ async function handleProjectApi(request, response, url, user) {
     if (method === 'PATCH') return json(response, 200, repository.saveSavedView(savedViewId, await readJson(request), user));
     if (method === 'DELETE') { repository.deleteSavedView(savedViewId, user); response.writeHead(204); return response.end(); }
   }
-  if (method === 'GET' && path === '/api/operations') return json(response, 200, repository.operations(user));
+  if (method === 'GET' && path === '/api/operations') { requireRole(user, 'moderator'); return json(response, 200, repository.operations(user)); }
   if (method === 'PATCH' && path === '/api/triage/batch') { requireRole(user, 'moderator'); return json(response, 200, repository.triageBatch(await readJson(request), user)); }
+  const orphanLinkId = path.match(/^\/api\/data-quality\/orphan-links\/(\d+)$/);
+  if (orphanLinkId && method === 'DELETE') { requireRole(user, 'moderator'); return json(response, 200, repository.deleteOrphanLink(Number(orphanLinkId[1]))); }
+  if (method === 'GET' && path === '/api/commissioning') return json(response, 200, repository.commissioning(user));
+  if (method === 'POST' && path === '/api/test-campaigns') { requireRole(user, 'moderator'); return json(response, 201, repository.saveTestCampaign(null, await readJson(request), user)); }
+  const campaignItem = path.match(/^\/api\/test-campaigns\/(\d+)\/items\/(\d+)$/);
+  if (campaignItem && method === 'PATCH') return json(response, 200, repository.updateTestCampaignItem(Number(campaignItem[1]), Number(campaignItem[2]), await readJson(request), user));
+  const campaignId = numericId(path, '/api/test-campaigns');
+  if (campaignId !== null) {
+    requireRole(user, 'moderator');
+    if (method === 'PATCH') return json(response, 200, repository.saveTestCampaign(campaignId, await readJson(request), user));
+    if (method === 'DELETE') { repository.deleteTestCampaign(campaignId); response.writeHead(204); return response.end(); }
+  }
+  if (method === 'POST' && path === '/api/readiness-gates') { requireRole(user, 'moderator'); return json(response, 201, repository.saveReadinessGate(null, await readJson(request), user)); }
+  const gateAction = path.match(/^\/api\/readiness-gates\/(\d+)\/action$/);
+  if (gateAction && method === 'POST') { requireRole(user, 'moderator'); return json(response, 200, repository.actionReadinessGate(Number(gateAction[1]), await readJson(request), user)); }
+  const gateId = numericId(path, '/api/readiness-gates');
+  if (gateId !== null) {
+    requireRole(user, 'moderator');
+    if (method === 'PATCH') return json(response, 200, repository.saveReadinessGate(gateId, await readJson(request), user));
+    if (method === 'DELETE') { repository.deleteReadinessGate(gateId); response.writeHead(204); return response.end(); }
+  }
+  if (method === 'POST' && path === '/api/project-meetings') { requireRole(user, 'moderator'); return json(response, 201, repository.saveProjectMeeting(null, await readJson(request), user)); }
+  const meetingId = numericId(path, '/api/project-meetings');
+  if (meetingId !== null) {
+    requireRole(user, 'moderator');
+    if (method === 'PATCH') return json(response, 200, repository.saveProjectMeeting(meetingId, await readJson(request), user));
+    if (method === 'DELETE') { repository.deleteProjectMeeting(meetingId); response.writeHead(204); return response.end(); }
+  }
+  if (method === 'POST' && path === '/api/external-dependencies') { requireRole(user, 'moderator'); return json(response, 201, repository.saveExternalDependency(null, await readJson(request), user)); }
+  const externalDependencyId = numericId(path, '/api/external-dependencies');
+  if (externalDependencyId !== null) {
+    requireRole(user, 'moderator');
+    if (method === 'PATCH') return json(response, 200, repository.saveExternalDependency(externalDependencyId, await readJson(request), user));
+    if (method === 'DELETE') { repository.deleteExternalDependency(externalDependencyId); response.writeHead(204); return response.end(); }
+  }
+  if (method === 'POST' && path === '/api/knowledge') { requireRole(user, 'moderator'); return json(response, 201, repository.saveKnowledgeArticle(null, await readJson(request), user)); }
+  if (method === 'GET' && path === '/api/knowledge/similar') return json(response, 200, repository.similarKnowledge(url.searchParams.get('type'), Number(url.searchParams.get('id')), user));
+  const knowledgeId = numericId(path, '/api/knowledge');
+  if (knowledgeId !== null) {
+    requireRole(user, 'moderator');
+    if (method === 'PATCH') return json(response, 200, repository.saveKnowledgeArticle(knowledgeId, await readJson(request), user));
+    if (method === 'DELETE') { repository.deleteKnowledgeArticle(knowledgeId); response.writeHead(204); return response.end(); }
+  }
   if (method === 'GET' && path === '/api/handovers') return json(response, 200, repository.handovers(user));
   if (method === 'POST' && path === '/api/handovers') return json(response, 201, repository.saveHandover(null, await readJson(request), user));
   const handoverAccept = path.match(/^\/api\/handovers\/(\d+)\/accept$/);
@@ -123,6 +166,7 @@ async function handleProjectApi(request, response, url, user) {
   if (method === 'GET' && path === '/api/planner') return json(response, 200, repository.planner(url.searchParams.get('from'), url.searchParams.get('to'), user));
   if (method === 'PUT' && path === '/api/planner/day') { requireRole(user, 'moderator'); return json(response, 200, repository.savePlannerDay(await readJson(request), user)); }
   if (method === 'POST' && path === '/api/planner/move') { requireRole(user, 'moderator'); return json(response, 200, repository.movePlannerEntry(await readJson(request), user)); }
+  if (method === 'POST' && path === '/api/planner/move-day') { requireRole(user, 'moderator'); return json(response, 200, repository.movePlannerDay(await readJson(request), user)); }
   if (method === 'PUT' && path === '/api/planner/requirements') { requireRole(user, 'moderator'); return json(response, 200, repository.setPlannerRequirements(await readJson(request), user)); }
   if (method === 'PUT' && path === '/api/planner/requirements/batch') { requireRole(user, 'moderator'); return json(response, 200, repository.setPlannerRequirementsBatch(await readJson(request), user)); }
   if (method === 'POST' && path === '/api/planner/holidays') { requireRole(user, 'moderator'); return json(response, 201, repository.savePlannerHoliday(null, await readJson(request), user)); }
@@ -149,6 +193,12 @@ async function handleProjectApi(request, response, url, user) {
   const notificationRead = path.match(/^\/api\/notifications\/(\d+)\/read$/);
   if (notificationRead && method === 'POST') return json(response, 200, repository.markNotificationRead(Number(notificationRead[1]), user));
   if (method === 'POST' && path === '/api/comments') return json(response, 201, repository.addComment(await readJson(request), user));
+  const requirementStatus = path.match(/^\/api\/(status|task|point)\/(\d+)\/requirements\/(\d+)$/);
+  if (requirementStatus && method === 'PATCH') {
+    const body = await readJson(request);
+    if (body.action === 'approve') requireRole(user, 'moderator');
+    return json(response, 200, repository.updateRequirementStatus(requirementStatus[1], Number(requirementStatus[2]), Number(requirementStatus[3]), body, user));
+  }
   if (method === 'GET' && path === '/api/calendar') return json(response, 200, repository.calendar({
     from: url.searchParams.get('from'), to: url.searchParams.get('to'), scope,
     types: url.searchParams.getAll('type'), priorities: url.searchParams.getAll('priority'), category: url.searchParams.get('category'), only_mine: url.searchParams.get('only_mine') === '1'
@@ -305,7 +355,7 @@ async function handleProjectApi(request, response, url, user) {
 
 async function handleApi(request, response, url) {
   const method = request.method || 'GET'; const path = url.pathname;
-  if (method === 'GET' && path === '/api/health') return json(response, 200, { status: 'ok', version: 12, release: '12.0.0' });
+  if (method === 'GET' && path === '/api/health') return json(response, 200, { status: 'ok', version: 13, release: '13.0.0' });
   if (method === 'POST' && path === '/api/login') {
     const input = await readJson(request); const account = repository.authenticate(input.username);
     if (!account || !verifyPassword(input.password || '', account.password_hash)) return json(response, 401, { error: 'Nieprawidłowy login lub hasło' });
@@ -381,7 +431,7 @@ function runScheduledAutomations() {
   }
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) server.listen(port, '0.0.0.0', () => {
-  console.log(`PLC Commissioning Hub V12.0.0 running on port ${port}`);
+  console.log(`PLC Commissioning Hub V13.0.0 running on port ${port}`);
   automationStartupTimer = setTimeout(runScheduledAutomations, 5000); automationStartupTimer.unref();
   automationTimer = setInterval(runScheduledAutomations, 5 * 60 * 1000); automationTimer.unref();
 });

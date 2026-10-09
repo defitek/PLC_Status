@@ -299,6 +299,7 @@ CREATE TABLE IF NOT EXISTS daily_notes (
   shift TEXT NOT NULL DEFAULT 'Dzień',
   author TEXT NOT NULL,
   type TEXT NOT NULL DEFAULT 'Postęp',
+  title TEXT NOT NULL DEFAULT '',
   content TEXT NOT NULL,
   created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   linked_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
@@ -432,6 +433,10 @@ CREATE TABLE IF NOT EXISTS announcements (
   content TEXT NOT NULL,
   info_link TEXT NOT NULL DEFAULT '',
   importance TEXT NOT NULL DEFAULT 'Normalna',
+  entry_type TEXT NOT NULL DEFAULT 'message' CHECK(entry_type IN ('message','decision','scope_change')),
+  rationale TEXT NOT NULL DEFAULT '',
+  effective_date TEXT,
+  decision_status TEXT NOT NULL DEFAULT 'published' CHECK(decision_status IN ('draft','published','implemented','superseded')),
   created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -507,6 +512,8 @@ CREATE TABLE IF NOT EXISTS completion_requirements (
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   name TEXT NOT NULL COLLATE NOCASE,
   description TEXT NOT NULL DEFAULT '',
+  requires_evidence INTEGER NOT NULL DEFAULT 0,
+  requires_second_approval INTEGER NOT NULL DEFAULT 0,
   sort_order INTEGER NOT NULL DEFAULT 0,
   active INTEGER NOT NULL DEFAULT 1,
   UNIQUE(project_id,name)
@@ -676,6 +683,159 @@ CREATE TABLE IF NOT EXISTS commissioning_templates (
   UNIQUE(project_id,name)
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS daily_note_sections (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  note_id INTEGER NOT NULL REFERENCES daily_notes(id) ON DELETE CASCADE,
+  content TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS daily_note_section_scopes (
+  section_id INTEGER NOT NULL REFERENCES daily_note_sections(id) ON DELETE CASCADE,
+  scope_type TEXT NOT NULL CHECK(scope_type IN ('project','group','controller')),
+  scope_id INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(section_id,scope_type,scope_id)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS daily_note_section_links (
+  section_id INTEGER NOT NULL REFERENCES daily_note_sections(id) ON DELETE CASCADE,
+  entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point','goal','note')),
+  entity_id INTEGER NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(section_id,entity_type,entity_id)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS test_campaigns (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  campaign_type TEXT NOT NULL DEFAULT 'Functional test',
+  model TEXT NOT NULL DEFAULT '',
+  shift TEXT NOT NULL DEFAULT 'Dzień',
+  scope_type TEXT NOT NULL DEFAULT 'project' CHECK(scope_type IN ('project','group','controller')),
+  scope_id INTEGER NOT NULL DEFAULT 0,
+  planned_start TEXT,
+  planned_end TEXT,
+  status TEXT NOT NULL DEFAULT 'planned' CHECK(status IN ('planned','active','completed','cancelled')),
+  description TEXT NOT NULL DEFAULT '',
+  owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS test_campaign_items (
+  id INTEGER PRIMARY KEY,
+  campaign_id INTEGER NOT NULL REFERENCES test_campaigns(id) ON DELETE CASCADE,
+  status_item_id INTEGER NOT NULL REFERENCES status_items(id) ON DELETE CASCADE,
+  result TEXT NOT NULL DEFAULT 'pending' CHECK(result IN ('pending','pass','fail','skipped')),
+  note TEXT NOT NULL DEFAULT '',
+  evidence_link TEXT NOT NULL DEFAULT '',
+  retest_number INTEGER NOT NULL DEFAULT 0,
+  tested_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  tested_at TEXT,
+  created_point_id INTEGER REFERENCES open_points(id) ON DELETE SET NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(campaign_id,status_item_id)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS readiness_gates (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  stage_order INTEGER NOT NULL DEFAULT 0,
+  scope_type TEXT NOT NULL DEFAULT 'project' CHECK(scope_type IN ('project','group','controller')),
+  scope_id INTEGER NOT NULL DEFAULT 0,
+  criteria_json TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','ready','approved','overridden')),
+  owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  approved_at TEXT,
+  override_reason TEXT NOT NULL DEFAULT '',
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS project_meetings (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  meeting_date TEXT NOT NULL,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','closed')),
+  summary TEXT NOT NULL DEFAULT '',
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  closed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  closed_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS project_meeting_items (
+  id INTEGER PRIMARY KEY,
+  meeting_id INTEGER NOT NULL REFERENCES project_meetings(id) ON DELETE CASCADE,
+  entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point','goal','note')),
+  entity_id INTEGER NOT NULL,
+  decision TEXT NOT NULL DEFAULT '',
+  owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  due_date TEXT,
+  item_status TEXT NOT NULL DEFAULT 'open' CHECK(item_status IN ('open','decided','deferred')),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(meeting_id,entity_type,entity_id)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS entity_requirement_status (
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point')),
+  entity_id INTEGER NOT NULL,
+  requirement_id INTEGER NOT NULL REFERENCES completion_requirements(id) ON DELETE CASCADE,
+  evidence TEXT NOT NULL DEFAULT '',
+  completed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  completed_at TEXT,
+  approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  approved_at TEXT,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(entity_type,entity_id,requirement_id)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS external_dependencies (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point','goal')),
+  entity_id INTEGER NOT NULL,
+  party TEXT NOT NULL,
+  contact TEXT NOT NULL DEFAULT '',
+  dependency_status TEXT NOT NULL DEFAULT 'waiting' CHECK(dependency_status IN ('waiting','responded','resolved')),
+  requested_at TEXT NOT NULL,
+  expected_date TEXT,
+  next_followup TEXT,
+  owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  note TEXT NOT NULL DEFAULT '',
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS knowledge_articles (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  problem TEXT NOT NULL,
+  solution TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT '',
+  tags TEXT NOT NULL DEFAULT '',
+  source_entity_type TEXT NOT NULL DEFAULT '',
+  source_entity_id INTEGER,
+  status TEXT NOT NULL DEFAULT 'published' CHECK(status IN ('draft','published','archived')),
+  use_count INTEGER NOT NULL DEFAULT 0,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+) STRICT;
+
 CREATE INDEX IF NOT EXISTS idx_status_controller_status ON status_items(controller_id,status);
 CREATE INDEX IF NOT EXISTS idx_controller_groups_project ON controller_groups(project_id,parent_id,sort_order);
 CREATE INDEX IF NOT EXISTS idx_function_groups_controller ON function_groups(controller_id,sort_order);
@@ -709,3 +869,11 @@ CREATE INDEX IF NOT EXISTS idx_task_dependencies_task ON task_dependencies(proje
 CREATE INDEX IF NOT EXISTS idx_handovers_date ON shift_handovers(project_id,handover_date,status);
 CREATE INDEX IF NOT EXISTS idx_automation_rules_project ON automation_rules(project_id,active,trigger_type);
 CREATE INDEX IF NOT EXISTS idx_templates_project ON commissioning_templates(project_id,active,name);
+CREATE INDEX IF NOT EXISTS idx_note_sections_note ON daily_note_sections(note_id,sort_order);
+CREATE INDEX IF NOT EXISTS idx_campaigns_project ON test_campaigns(project_id,status,planned_start);
+CREATE INDEX IF NOT EXISTS idx_campaign_items_campaign ON test_campaign_items(campaign_id,result,sort_order);
+CREATE INDEX IF NOT EXISTS idx_readiness_gates_project ON readiness_gates(project_id,stage_order,scope_type,scope_id);
+CREATE INDEX IF NOT EXISTS idx_meetings_project ON project_meetings(project_id,meeting_date DESC);
+CREATE INDEX IF NOT EXISTS idx_requirement_status_entity ON entity_requirement_status(project_id,entity_type,entity_id);
+CREATE INDEX IF NOT EXISTS idx_external_dependencies_entity ON external_dependencies(project_id,entity_type,entity_id,dependency_status);
+CREATE INDEX IF NOT EXISTS idx_knowledge_project ON knowledge_articles(project_id,status,category);
