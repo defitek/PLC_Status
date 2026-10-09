@@ -437,13 +437,20 @@ function updateIdentity() {
 const navigationMedia = matchMedia('(max-width: 1024px)');
 
 function updateNavigationToggle() {
-  const mobile = navigationMedia.matches;
-  const expanded = mobile ? document.body.classList.contains('nav-open') : !document.body.classList.contains('sidebar-collapsed');
-  const label = expanded ? 'Zminimalizuj menu' : 'Rozwiń menu';
-  const toggle = $('#mobile-menu');
-  toggle.setAttribute('aria-expanded', String(expanded));
-  toggle.setAttribute('aria-label', label);
-  toggle.title = label;
+  const mobileExpanded = document.body.classList.contains('nav-open');
+  const desktopExpanded = !document.body.classList.contains('sidebar-collapsed');
+  const mobileToggle = $('#mobile-menu');
+  const mobileLabel = mobileExpanded ? 'Zamknij menu' : 'Otwórz menu';
+  mobileToggle.setAttribute('aria-expanded', String(mobileExpanded));
+  mobileToggle.setAttribute('aria-label', mobileLabel);
+  mobileToggle.title = mobileLabel;
+  const pin = $('#sidebar-pin');
+  const pinLabel = desktopExpanded ? 'Zminimalizuj menu' : 'Rozwiń menu na stałe';
+  pin.setAttribute('aria-expanded', String(desktopExpanded));
+  pin.setAttribute('aria-label', pinLabel);
+  pin.title = pinLabel;
+  pin.querySelector('.sidebar-pin-icon').textContent = desktopExpanded ? '«' : '»';
+  pin.querySelector('.sidebar-pin-label').textContent = desktopExpanded ? 'Zminimalizuj menu' : 'Rozwiń menu na stałe';
 }
 
 function bindShell() {
@@ -458,6 +465,11 @@ function bindShell() {
   $('#mobile-menu').addEventListener('click', () => {
     if (navigationMedia.matches) document.body.classList.toggle('nav-open');
     else { document.body.classList.toggle('sidebar-collapsed'); localStorage.setItem('sidebar-expanded', document.body.classList.contains('sidebar-collapsed') ? '0' : '1'); }
+    updateNavigationToggle();
+  });
+  $('#sidebar-pin').addEventListener('click', () => {
+    document.body.classList.toggle('sidebar-collapsed');
+    localStorage.setItem('sidebar-expanded', document.body.classList.contains('sidebar-collapsed') ? '0' : '1');
     updateNavigationToggle();
   });
   $('#sidebar-backdrop').addEventListener('click', () => { document.body.classList.remove('nav-open'); updateNavigationToggle(); });

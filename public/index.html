@@ -19,7 +19,10 @@
   <div class="layout">
     <button id="sidebar-backdrop" class="sidebar-backdrop" aria-label="Zamknij menu"></button>
     <aside class="sidebar">
-      <label class="select-label">Zakres danych
+      <button type="button" id="sidebar-pin" class="sidebar-pin" aria-controls="nav" aria-expanded="false" title="Rozwiń menu">
+        <span class="sidebar-pin-icon" aria-hidden="true">»</span><span class="sidebar-pin-label">Rozwiń menu</span>
+      </button>
+      <label class="select-label"><span>Zakres danych</span>
         <select id="controller"><option value="all">Cały projekt</option></select>
       </label>
       <nav id="nav">
