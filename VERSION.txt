@@ -1,4 +1,4 @@
-PLC Commissioning Hub V13.0.0
+PLC Commissioning Hub V14.0.0
 Release: 2026-10-09
 
-Po poprawnym wdrożeniu adres /api/health zwraca release 13.0.0 i version 13.
+Po poprawnym wdrożeniu adres /api/health zwraca release 14.0.0 i version 14.

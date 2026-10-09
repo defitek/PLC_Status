@@ -307,7 +307,7 @@ test('V5 data remains compatible with planner, calendar, weighted teamwork, cano
       assert.throws(() => repository.dailySummary('2026-01-01', '2026-01-15'), /14 dni/);
 
       const backup = repository.projectBackup();
-      assert.equal(backup.version, 13);
+      assert.equal(backup.version, 14);
       assert.ok(Array.isArray(backup.tables.planner_entries));
       assert.ok(Array.isArray(backup.tables.task_assignees));
       assert.ok(Array.isArray(backup.tables.calendar_annotations));
@@ -466,7 +466,7 @@ test('V7 supports canonical hierarchy IDs, area tasks, goal links and configurab
       assert.ok(overview.overall.goals.total >= 1);
       assert.ok(Array.isArray(overview.status_breakdown));
       assert.ok(overview.trends.week.every(point => point.goals && Number.isFinite(point.goals.total)));
-      assert.equal(repository.projectBackup().version, 13);
+      assert.equal(repository.projectBackup().version, 14);
     });
   } finally {
     repository.close();
@@ -525,7 +525,7 @@ test('V8 supports announcements, aggregated KPI trends, unified Planner requirem
       assert.ok(Array.isArray(rootTrend.trends.day));
       assert.ok(Array.isArray(rootTrend.trends.week));
       assert.ok(Array.isArray(rootTrend.trends.month));
-      assert.equal(repository.projectBackup().version, 13);
+      assert.equal(repository.projectBackup().version, 14);
 
       repository.deleteAnnouncement(announcement.id);
       assert.equal(repository.announcements(admin).some(item => item.id === announcement.id), false);
@@ -629,7 +629,7 @@ test('V9 supports requirements, guarded duplication, comments, pushes, calendar 
       assert.equal(workerPlanner.requirements.length, 0);
       assert.equal(workerPlanner.time_details, null);
 
-      assert.equal(repository.projectBackup().version, 13);
+      assert.equal(repository.projectBackup().version, 14);
       assert.ok(Array.isArray(repository.projectBackup().tables.completion_requirements));
       assert.ok(Array.isArray(repository.projectBackup().tables.entity_comments));
       assert.ok(Array.isArray(repository.projectBackup().tables.planner_absences));
@@ -686,7 +686,7 @@ test('V10 supports live-safe edits, scoped notes, targeted news, passwords and P
       assert.ok(verifyPassword('worker-password-10', repository.authenticate('v10worker').password_hash));
 
       const backup = repository.projectBackup();
-      assert.equal(backup.version, 13);
+      assert.equal(backup.version, 14);
       assert.ok(Array.isArray(backup.tables.announcement_labels));
       assert.ok(Array.isArray(backup.tables.planner_time_adjustments));
     });
@@ -723,7 +723,7 @@ test('V11 supports assignment visibility and manual working-time balance overrid
       assert.equal(detail.overtime_raw_cumulative, 7.5);
       assert.equal(detail.overtime_weighted_cumulative, 10.75);
       assert.equal(planner.time_details.users.find(item => item.user_id === worker.id).overtime_balance, 10.75);
-      assert.equal(repository.projectBackup().version, 13);
+      assert.equal(repository.projectBackup().version, 14);
     });
   } finally {
     repository.close();
@@ -781,7 +781,7 @@ test('V12 supports operational views, dependencies, handovers, automation and co
       assert.ok(applied.statuses_created >= template.check_count);
 
       const backup = repository.projectBackup();
-      assert.equal(backup.version, 13);
+      assert.equal(backup.version, 14);
       for (const table of ['saved_views', 'task_dependencies', 'shift_handovers', 'automation_rules', 'commissioning_templates']) assert.ok(Array.isArray(backup.tables[table]));
     });
   } finally {
@@ -873,7 +873,7 @@ test('V13 supports status handovers, campaigns, readiness gates, DoD approval, m
       assert.deepEqual(absences.map(item => item.absence_date), ['2026-10-12', '2026-10-13']);
 
       const backup = repository.projectBackup();
-      assert.equal(backup.version, 13);
+      assert.equal(backup.version, 14);
       for (const table of ['daily_note_sections', 'test_campaigns', 'readiness_gates', 'project_meetings', 'external_dependencies', 'knowledge_articles', 'entity_requirement_status']) assert.ok(Array.isArray(backup.tables[table]));
       const taskCount = repository.tasks('all', admin).length;
       repository.saveTask(null, { controller: controller.code, title: 'Tymczasowy rekord V13' }, admin);
@@ -884,6 +884,84 @@ test('V13 supports status handovers, campaigns, readiness gates, DoD approval, m
       assert.equal(repository.operations(admin).meetings.some(item => item.id === meeting.id), true);
       assert.equal(repository.similarKnowledge('task', task.id, admin).some(item => item.id === article.id), true);
     });
+  } finally {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
+test('V14 shares users across projects, exposes cross-project plans and supports monthly employee reviews', () => {
+  const temporary = temporaryDatabase();
+  const repository = openDatabase(temporary.path);
+  try {
+    const adminAccount = repository.authenticate('admin');
+    const admin = repository.me(adminAccount.id);
+    const worker = repository.saveUser(null, {
+      username: 'v14-worker', display_name: 'V14 Worker', password: 'worker-password', project_role: 'user', planner_enabled: 1, assignable: 1
+    });
+    const project = repository.saveProject(null, { code: 'V14', name: 'Projekt V14', description: 'Test globalnego zespołu', active: 1 });
+    assert.ok(repository.availableProjects(worker.id).some(item => item.id === project.id));
+
+    const planDate = new Date().toISOString().slice(0, 10);
+    let completedTask;
+    let note;
+    let review;
+    repository.withProject(project.id, () => {
+      const projectAdmin = repository.me(admin.id, project.id);
+      const area = repository.saveControllerGroup(null, { name: 'AREA-V14' });
+      const subarea = repository.saveControllerGroup(null, { name: 'CELL-V14', parent_id: area.id });
+      const controller = repository.saveController(null, { leaf_code: 'PLC1', group_id: subarea.id, area: 'V14' });
+      assert.equal(controller.code, 'AREA-V14-CELL-V14-PLC1');
+
+      repository.savePlannerDay({
+        user_id: worker.id, plan_date: planDate, entries: [
+          { activity_type: 'work', controller_group_id: area.id, work_mode: 'online', shift: 'Dzień', note: 'Praca V14' },
+          { activity_type: 'transport', controller_group_id: area.id, shift: 'Dzień', note: 'Dojazd V14' }
+        ]
+      }, projectAdmin);
+      const day = repository.planner(planDate, planDate, projectAdmin);
+      assert.deepEqual(day.entries.map(item => item.activity_type).sort(), ['transport', 'work']);
+      const transport = day.entries.find(item => item.activity_type === 'transport');
+      repository.deletePlannerEntry(transport.id, projectAdmin);
+      assert.equal(repository.planner(planDate, planDate, projectAdmin).entries.filter(item => item.user_id === worker.id).length, 1);
+
+      completedTask = repository.saveTask(null, {
+        controller: controller.code, title: 'Rezultat do oceny V14', status: 'Done', priority: 'High', direct_assignee_user_ids: [worker.id]
+      }, projectAdmin);
+      note = repository.saveNote(null, {
+        note_date: planDate, shift: 'Dzień', title: 'Przekazanie V14', sections: [{
+          information_type: 'Postęp', content: 'Zamknięto zakres testowy.',
+          scopes: [{ scope_type: 'group', scope_id: area.id }], links: [{ entity_type: 'task', entity_id: completedTask.id }]
+        }]
+      }, projectAdmin);
+      assert.equal(note.sections[0].information_type, 'Postęp');
+      const noteType = repository.config().options.find(item => item.kind === 'note_type' && item.value === 'Postęp');
+      repository.saveOption(noteType.id, { kind: 'note_type', value: 'Aktualizacja postępu' });
+      assert.equal(repository.notes('all', null, null, projectAdmin).find(item => item.id === note.id).sections[0].information_type, 'Aktualizacja postępu');
+
+      const period = planDate.slice(0, 7);
+      review = repository.createMonthlyEmployeeReview({ user_id: worker.id, period }, projectAdmin);
+      assert.ok(review.items.some(item => item.entity_type === 'task' && item.entity_id === completedTask.id));
+      review = repository.saveMonthlyEmployeeReview(review.id, {
+        delivery_score: 5, quality_score: 4, timeliness_score: 4, communication_score: 5, collaboration_score: 4,
+        manager_summary: 'Bardzo dobry miesiąc', items: review.items.map(item => ({ ...item, difficulty: 4, effort: 4, impact: 5, quality: 4, contribution_share: 100 }))
+      }, projectAdmin);
+      assert.ok(review.overall_score > 0);
+      assert.equal(repository.monthlyEmployeeReviews(period).find(item => item.user_id === worker.id).review_id, review.id);
+      assert.ok(repository.projectBackup().tables.monthly_employee_reviews.some(item => item.id === review.id));
+
+      repository.saveUser(worker.id, { project_active: 0 });
+      assert.equal(repository.planner(planDate, planDate, projectAdmin).users.some(item => item.id === worker.id), false);
+      repository.saveUser(worker.id, { project_active: 1 });
+    });
+
+    const currentPlanner = repository.planner(planDate, planDate, admin);
+    assert.ok(currentPlanner.cross_project_entries.some(item => item.project_id === project.id && item.user_id === worker.id));
+    const workerInCurrentProject = repository.me(worker.id, admin.current_project.id);
+    const summary = repository.mySummary(workerInCurrentProject);
+    assert.ok(summary.projects_in_scope.some(item => item.id === project.id));
+    assert.ok(summary.assigned_tasks.some(item => item.project_id === project.id && item.id === completedTask.id));
+    assert.equal(repository.projectBackup().version, 14);
   } finally {
     repository.close();
     rmSync(temporary.directory, { recursive: true, force: true });

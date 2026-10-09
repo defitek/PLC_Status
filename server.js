@@ -66,6 +66,12 @@ function broadcastProjectChange(projectId, payload) {
     try { client.response.write(body); } catch { liveClients.delete(client); }
   }
 }
+function broadcastPlannerChange(payload) {
+  const body = `event: change\ndata: ${JSON.stringify({ ...payload, global_planner: true })}\n\n`;
+  for (const client of liveClients) {
+    try { client.response.write(body); } catch { liveClients.delete(client); }
+  }
+}
 
 async function handleProjectApi(request, response, url, user) {
   const method = request.method || 'GET';
@@ -163,9 +169,32 @@ async function handleProjectApi(request, response, url, user) {
     if (method === 'PATCH') return json(response, 200, repository.saveCommissioningTemplate(commissioningTemplateId, await readJson(request), user));
     if (method === 'DELETE') { repository.deleteCommissioningTemplate(commissioningTemplateId); response.writeHead(204); return response.end(); }
   }
+  if (method === 'GET' && path === '/api/monthly-reviews') {
+    requireRole(user, 'moderator');
+    return json(response, 200, repository.monthlyEmployeeReviews(url.searchParams.get('period')));
+  }
+  if (method === 'POST' && path === '/api/monthly-reviews') {
+    requireRole(user, 'moderator');
+    return json(response, 201, repository.createMonthlyEmployeeReview(await readJson(request), user));
+  }
+  const monthlyReviewAction = path.match(/^\/api\/monthly-reviews\/(\d+)\/action$/);
+  if (monthlyReviewAction && method === 'POST') {
+    requireRole(user, 'moderator');
+    const body = await readJson(request);
+    if (['lock', 'reopen'].includes(body.action)) requireRole(user, 'project_admin');
+    return json(response, 200, repository.actionMonthlyEmployeeReview(Number(monthlyReviewAction[1]), body, user));
+  }
+  const monthlyReviewId = numericId(path, '/api/monthly-reviews');
+  if (monthlyReviewId !== null) {
+    requireRole(user, 'moderator');
+    if (method === 'GET') return json(response, 200, repository.monthlyEmployeeReview(monthlyReviewId));
+    if (method === 'PATCH') return json(response, 200, repository.saveMonthlyEmployeeReview(monthlyReviewId, await readJson(request), user));
+  }
   if (method === 'GET' && path === '/api/planner') return json(response, 200, repository.planner(url.searchParams.get('from'), url.searchParams.get('to'), user));
   if (method === 'PUT' && path === '/api/planner/day') { requireRole(user, 'moderator'); return json(response, 200, repository.savePlannerDay(await readJson(request), user)); }
   if (method === 'POST' && path === '/api/planner/move') { requireRole(user, 'moderator'); return json(response, 200, repository.movePlannerEntry(await readJson(request), user)); }
+  const plannerEntryId = numericId(path, '/api/planner/entries');
+  if (plannerEntryId !== null && method === 'DELETE') { requireRole(user, 'moderator'); return json(response, 200, repository.deletePlannerEntry(plannerEntryId, user)); }
   if (method === 'POST' && path === '/api/planner/move-day') { requireRole(user, 'moderator'); return json(response, 200, repository.movePlannerDay(await readJson(request), user)); }
   if (method === 'PUT' && path === '/api/planner/requirements') { requireRole(user, 'moderator'); return json(response, 200, repository.setPlannerRequirements(await readJson(request), user)); }
   if (method === 'PUT' && path === '/api/planner/requirements/batch') { requireRole(user, 'moderator'); return json(response, 200, repository.setPlannerRequirementsBatch(await readJson(request), user)); }
@@ -355,7 +384,7 @@ async function handleProjectApi(request, response, url, user) {
 
 async function handleApi(request, response, url) {
   const method = request.method || 'GET'; const path = url.pathname;
-  if (method === 'GET' && path === '/api/health') return json(response, 200, { status: 'ok', version: 13, release: '13.0.0' });
+  if (method === 'GET' && path === '/api/health') return json(response, 200, { status: 'ok', version: 14, release: '14.0.0' });
   if (method === 'POST' && path === '/api/login') {
     const input = await readJson(request); const account = repository.authenticate(input.username);
     if (!account || !verifyPassword(input.password || '', account.password_hash)) return json(response, 401, { error: 'Nieprawidłowy login lub hasło' });
@@ -392,9 +421,11 @@ async function handleApi(request, response, url) {
   if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
     const projectIdForEvent = active.session.projectId;
     response.once('finish', () => {
-      if (response.statusCode < 400) broadcastProjectChange(projectIdForEvent, {
-        method, path, at: new Date().toISOString(), client_id: String(request.headers['x-client-id'] || ''), user_id: user.id
-      });
+      if (response.statusCode < 400) {
+        const payload = { method, path, at: new Date().toISOString(), client_id: String(request.headers['x-client-id'] || ''), user_id: user.id };
+        if (path.startsWith('/api/planner')) broadcastPlannerChange(payload);
+        else broadcastProjectChange(projectIdForEvent, payload);
+      }
     });
   }
   return repository.withProject(active.session.projectId, () => handleProjectApi(request, response, url, user));
@@ -431,7 +462,7 @@ function runScheduledAutomations() {
   }
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) server.listen(port, '0.0.0.0', () => {
-  console.log(`PLC Commissioning Hub V13.0.0 running on port ${port}`);
+  console.log(`PLC Commissioning Hub V14.0.0 running on port ${port}`);
   automationStartupTimer = setTimeout(runScheduledAutomations, 5000); automationStartupTimer.unref();
   automationTimer = setInterval(runScheduledAutomations, 5 * 60 * 1000); automationTimer.unref();
 });

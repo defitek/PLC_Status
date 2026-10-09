@@ -5,14 +5,14 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#172554">
   <title>PLC Commissioning Hub</title>
-  <link rel="stylesheet" href="/styles.css?v=13.0.0">
-  <script type="module" src="/app.js?v=13.0.0"></script>
+  <link rel="stylesheet" href="/styles.css?v=14.0.0">
+  <script type="module" src="/app.js?v=14.0.0"></script>
 </head>
 <body>
   <header class="topbar">
     <button id="mobile-menu" class="ghost mobile-menu" aria-label="Otwórz menu">☰</button>
     <div class="logo">PLC</div>
-    <div class="brand"><strong>Commissioning Hub</strong><span>Multi-project status & team workspace · V13.0</span></div>
+    <div class="brand"><strong>Commissioning Hub</strong><span>Multi-project status & team workspace · V14.0</span></div>
     <div id="top-news" class="top-news" aria-label="Najnowsze wiadomości projektu"></div>
     <div class="top-actions"><button id="notification-open" class="ghost notification-button" title="Powiadomienia">● <span>Powiadomienia</span><b id="notification-count">0</b></button><button id="daily-summary-open" class="ghost" title="Podsumowanie zmian">☀ Podsumowanie</button><button id="project-switch" class="ghost project-chip">Wybierz projekt</button><button id="theme-switch" class="ghost" title="Zmień wygląd">◐ Motyw</button><div class="userbox"><span id="me"></span><button id="password-change" class="ghost" title="Zmień hasło">Hasło</button><button id="logout" class="ghost">Wyloguj</button></div></div>
   </header>
@@ -29,6 +29,7 @@
         <button data-view="operations"><span>⌁</span><span>Centrum operacyjne</span><b id="n-operations">0</b></button>
         <button data-view="commissioning"><span>◈</span><span>Uruchomienie</span></button>
         <button data-view="planner"><span>▥</span><span>Planner</span></button>
+        <button data-view="reviews" id="reviews-nav"><span>★</span><span>Oceny miesięczne</span></button>
         <button data-view="calendar"><span>▣</span><span>Kalendarz</span></button>
         <button data-view="status"><span>▦</span><span>Status</span><b id="n-status">0</b></button>
         <button data-view="tasks"><span>✓</span><span>Zadania</span><b id="n-tasks">0</b></button>
@@ -184,7 +185,8 @@
       <div class="status-transfer-head"><label class="field"><span>Tytuł *</span><input id="status-transfer-title" required></label><label class="field"><span>Data *</span><input id="status-transfer-date" type="date" required></label><label class="field"><span>Zmiana *</span><select id="status-transfer-shift"></select></label></div>
       <div id="status-transfer-sections" class="status-transfer-sections"></div>
       <button type="button" id="status-transfer-add-section" class="secondary">+ Dodaj kolejną informację</button>
-      <footer class="dialog-actions"><button type="button" id="status-transfer-delete" class="danger">Usuń wpis</button><span></span><button type="button" class="secondary" id="status-transfer-cancel">Anuluj</button><button class="primary">Zapisz przekazanie</button></footer>
+      <button type="button" id="status-transfer-audit" class="secondary audit-toggle" hidden>Pokaż historię edycji</button>
+      <footer class="dialog-actions"><button type="button" id="status-transfer-delete" class="danger">Usuń wpis</button><span></span><button type="button" class="secondary" id="status-transfer-cancel">Anuluj</button><button class="primary" id="status-transfer-save">Zapisz przekazanie</button></footer>
     </form>
   </dialog>
 

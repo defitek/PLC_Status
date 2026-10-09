@@ -687,10 +687,70 @@ CREATE TABLE IF NOT EXISTS daily_note_sections (
   id INTEGER PRIMARY KEY,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   note_id INTEGER NOT NULL REFERENCES daily_notes(id) ON DELETE CASCADE,
+  information_type TEXT NOT NULL DEFAULT 'Aktualizacja',
   content TEXT NOT NULL,
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS monthly_employee_reviews (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  period TEXT NOT NULL,
+  reviewer_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  review_status TEXT NOT NULL DEFAULT 'draft' CHECK(review_status IN ('draft','approved','locked')),
+  delivery_score INTEGER NOT NULL DEFAULT 3 CHECK(delivery_score BETWEEN 1 AND 5),
+  quality_score INTEGER NOT NULL DEFAULT 3 CHECK(quality_score BETWEEN 1 AND 5),
+  timeliness_score INTEGER NOT NULL DEFAULT 3 CHECK(timeliness_score BETWEEN 1 AND 5),
+  communication_score INTEGER NOT NULL DEFAULT 3 CHECK(communication_score BETWEEN 1 AND 5),
+  collaboration_score INTEGER NOT NULL DEFAULT 3 CHECK(collaboration_score BETWEEN 1 AND 5),
+  overall_score REAL NOT NULL DEFAULT 0,
+  manager_summary TEXT NOT NULL DEFAULT '',
+  strengths TEXT NOT NULL DEFAULT '',
+  improvement_areas TEXT NOT NULL DEFAULT '',
+  development_plan TEXT NOT NULL DEFAULT '',
+  snapshot_json TEXT NOT NULL DEFAULT '{}',
+  approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  approved_at TEXT,
+  locked_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  locked_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(project_id,user_id,period)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS monthly_employee_review_items (
+  id INTEGER PRIMARY KEY,
+  review_id INTEGER NOT NULL REFERENCES monthly_employee_reviews(id) ON DELETE CASCADE,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  entity_type TEXT NOT NULL CHECK(entity_type IN ('task','status','point','note','campaign')),
+  entity_id INTEGER NOT NULL,
+  title_snapshot TEXT NOT NULL,
+  scope_snapshot TEXT NOT NULL DEFAULT '',
+  role_snapshot TEXT NOT NULL DEFAULT '',
+  completed_at TEXT,
+  difficulty INTEGER NOT NULL DEFAULT 3 CHECK(difficulty BETWEEN 1 AND 5),
+  effort INTEGER NOT NULL DEFAULT 3 CHECK(effort BETWEEN 1 AND 5),
+  impact INTEGER NOT NULL DEFAULT 3 CHECK(impact BETWEEN 1 AND 5),
+  quality INTEGER NOT NULL DEFAULT 3 CHECK(quality BETWEEN 1 AND 5),
+  contribution_share INTEGER NOT NULL DEFAULT 100 CHECK(contribution_share BETWEEN 0 AND 100),
+  excluded INTEGER NOT NULL DEFAULT 0,
+  reviewer_note TEXT NOT NULL DEFAULT '',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(review_id,entity_type,entity_id)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS monthly_employee_review_audit (
+  id INTEGER PRIMARY KEY,
+  review_id INTEGER NOT NULL REFERENCES monthly_employee_reviews(id) ON DELETE CASCADE,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  action TEXT NOT NULL,
+  changes_json TEXT NOT NULL DEFAULT '{}',
+  changed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS daily_note_section_scopes (
@@ -870,6 +930,9 @@ CREATE INDEX IF NOT EXISTS idx_handovers_date ON shift_handovers(project_id,hand
 CREATE INDEX IF NOT EXISTS idx_automation_rules_project ON automation_rules(project_id,active,trigger_type);
 CREATE INDEX IF NOT EXISTS idx_templates_project ON commissioning_templates(project_id,active,name);
 CREATE INDEX IF NOT EXISTS idx_note_sections_note ON daily_note_sections(note_id,sort_order);
+CREATE INDEX IF NOT EXISTS idx_monthly_reviews_project_period ON monthly_employee_reviews(project_id,period,user_id);
+CREATE INDEX IF NOT EXISTS idx_monthly_review_items_review ON monthly_employee_review_items(review_id,sort_order,id);
+CREATE INDEX IF NOT EXISTS idx_monthly_review_audit_review ON monthly_employee_review_audit(review_id,changed_at DESC,id DESC);
 CREATE INDEX IF NOT EXISTS idx_campaigns_project ON test_campaigns(project_id,status,planned_start);
 CREATE INDEX IF NOT EXISTS idx_campaign_items_campaign ON test_campaign_items(campaign_id,result,sort_order);
 CREATE INDEX IF NOT EXISTS idx_readiness_gates_project ON readiness_gates(project_id,stage_order,scope_type,scope_id);

@@ -1,10 +1,27 @@
-# PLC Commissioning Hub V13.0.0
+# PLC Commissioning Hub V14.0.0
 
 Samodzielna aplikacja WWW do zarządzania uruchomieniem PLC, zespołem i kilkoma projektami. Działa na Node.js 24 oraz SQLite, bez zewnętrznych usług i bez zależności npm.
 
-## Najważniejsze zmiany V13
+## Najważniejsze zmiany V14
 
-V13 łączy warstwę uruchomieniową, przepływ informacji i zarządzanie gotowością projektu, zachowując dotychczasową konfigurację Railway i automatyczną migrację danych:
+V14 rozwija zarządzanie globalnym zespołem, ocenę rezultatów oraz codzienną pracę na wielu projektach, zachowując konfigurację Railway i automatyczną migrację istniejącej bazy:
+
+- nowy, poufny moduł **Oceny miesięczne**, dostępny wyłącznie Managerom projektu i administratorom; zbiera snapshot planu, czasu, zamkniętych zadań, Statusu, Otwartych punktów, przekazań i aktualizacji;
+- manager ocenia każdy rezultat pod kątem trudności, nakładu, wpływu, jakości oraz procentowego udziału pracownika, a wynik łączy tę ocenę z kompetencjami, terminowością, komunikacją i współpracą;
+- ocena przechodzi przez etapy przygotowania, zatwierdzenia i zamknięcia miesiąca, ma plan rozwoju oraz własną historię zmian;
+- wszystkie aktywne konta są współdzielone między projektami, przy zachowaniu niezależnych ról, dostępności w listach wyboru i udziału w Plannerze dla każdego projektu;
+- Planner pokazuje w jednym wierszu bieżący projekt i read-only plan tej samej osoby z pozostałych projektów; Praca oraz Transport są niezależnymi aktywnościami, a pojedynczy wpis można usunąć bez kasowania całego dnia;
+- **Moje podsumowanie** automatycznie agreguje elementy ze wszystkich projektów, na których pracownik jest zaplanowany w najbliższych 14 dniach, i umożliwia bezpośrednie przejście do właściwego projektu;
+- Overview otrzymał wybór poziomu Obszary / Podobszary / Sterowniki oraz pełny czteromodułowy rozkład realizacji bezpośrednio na liście;
+- Status i Zadania mają zwijane grupy z wyrównanym procentem realizacji oraz szybką edycję statusu bez otwierania całego formularza;
+- Kalendarz wyróżnia święta tak samo jak Planner; filtry tabel są pływające, nie przesuwają list i mają jednoznaczne etykiety;
+- **Przekazanie statusu** zachowuje konfigurowalny typ każdej informacji, wielokrotny zakres i czytelny, dwuetapowy wybór powiązań; edycja jest ograniczona do autora lub Managera;
+- tworzenie projektu jest transakcyjne i od razu udostępnia go globalnym użytkownikom, eliminując wcześniejszy pozorny błąd klucza obcego;
+- backup projektu i schemat bazy mają wersję `14.0`; testy obejmują przepływy wieloprojektowe, Planner i oceny miesięczne.
+
+## Poprzednie zmiany V13
+
+V13 połączył warstwę uruchomieniową, przepływ informacji i zarządzanie gotowością projektu:
 
 - szczegółowa **Realizacja według obszarów** z procentem, liczbą wszystkich, otwartych, wykonanych, zamkniętych i zablokowanych elementów osobno dla Statusu, Zadań, Otwartych punktów i Celów;
 - większy, rozwijalny widok **Szczegółowych KPI według hierarchii**, bez wewnętrznego pionowego scrolla poszczególnych obszarów;
@@ -282,9 +299,9 @@ Po redeployu trzeba zalogować się ponownie, ponieważ sesje są przechowywane 
 
 ## Aktualizacja istniejącej bazy
 
-V13 automatycznie migruje bazy ze starszych wydań, nie kasując rekordów. Dawne Przekazania zmian są jednorazowo przenoszone do modułu **Przekazanie statusu**. Migracja dodaje sekcje i zakresy przekazań, kampanie testowe, bramy gotowości, status realizacji Definition of Done, odprawy, zależności zewnętrzne oraz bazę rozwiązań. Dotychczasowe relacje, dane Plannera i konfiguracja projektów pozostają zachowane.
+V14 automatycznie migruje bazy ze starszych wydań, nie kasując rekordów. Dawne Przekazania zmian są jednorazowo przenoszone do modułu **Przekazanie statusu**. Migracja dodaje sekcje i zakresy przekazań, kampanie testowe, bramy gotowości, status realizacji Definition of Done, odprawy, zależności zewnętrzne, bazę rozwiązań oraz oceny miesięczne. Dotychczasowe relacje, dane Plannera i konfiguracja projektów pozostają zachowane.
 
-Przed wdrożeniem produkcyjnym zalecany jest snapshot Railway Volume lub kopia pliku `/app/data/plc-status.db`. Po uruchomieniu V13 można też używać kopii projektowych w **Konfiguracja → Backup projektu**.
+Przed wdrożeniem produkcyjnym zalecany jest snapshot Railway Volume lub kopia pliku `/app/data/plc-status.db`. Po uruchomieniu V14 można też używać kopii projektowych w **Konfiguracja → Backup projektu**.
 
 Jeśli w fazie koncepcyjnej potrzebny jest czysty start, usuń wyłącznie pliki:
 
@@ -296,7 +313,7 @@ Jeśli w fazie koncepcyjnej potrzebny jest czysty start, usuń wyłącznie pliki
 
 Następnie wykonaj redeploy. Nie usuwaj całego Volume, jeśli znajdują się na nim inne pliki.
 
-## Uprawnienia prototypowe V13
+## Uprawnienia prototypowe V14
 
 | Czynność | Administrator systemu | Administrator projektu | Manager projektu | Użytkownik |
 |---|:---:|:---:|:---:|:---:|
@@ -308,6 +325,7 @@ Następnie wykonaj redeploy. Nie usuwaj całego Volume, jeśli znajdują się na
 | Planner — edycja planu | ✓ | ✓ | ✓ | — |
 | Planner — zapotrzebowanie, święta i czas pracy | ✓ | ✓ | ✓ | — |
 | Informator — publikowanie i edycja | ✓ | ✓ | ✓ | — |
+| Oceny miesięczne — podgląd i ocena | ✓ | ✓ | ✓ | — |
 | Kalendarz — adnotacje koordynacyjne | ✓ | ✓ | ✓ | — |
 | Triage — zmiany zbiorcze | ✓ | ✓ | ✓ | — |
 | Reguły automatyzacji i szablony uruchomieniowe | ✓ | ✓ | ✓ | podgląd |
@@ -338,7 +356,7 @@ Kontrola zdrowia i wersji:
 curl http://localhost:8080/api/health
 ```
 
-Oczekiwany release: `13.0.0`.
+Oczekiwany release: `14.0.0`.
 
 ## Testy automatyczne
 
@@ -348,4 +366,4 @@ W Node.js 24 lub nowszym:
 npm test
 ```
 
-Testy obejmują tworzenie nowej bazy, migracje, kolejność konfiguracji, grupy funkcyjne, izolację i zabezpieczone usuwanie projektów, pełne identyfikatory hierarchii, zadania obszarowe, backup/restore V13, wymagania i Definition of Done, projektową widoczność użytkowników, bezpieczne duplikowanie, komentarze i powiadomienia, Informator, wielosekcyjne Przekazanie statusu, Kalendarz, urlopy, święta, kopiowanie nieobecności, godziny pracy i nadgodziny, Planner, ważone zadania, wieloosobowy Status, trendy KPI, cele, zapisane widoki, triage, jakość danych, zależności, kampanie testowe, bramy gotowości, odprawy, radar ryzyka, bazę rozwiązań, automatyzacje, szablony uruchomieniowe i podsumowanie dnia.
+Testy obejmują tworzenie nowej bazy, migracje, kolejność konfiguracji, grupy funkcyjne, izolację i zabezpieczone usuwanie projektów, pełne identyfikatory hierarchii, zadania obszarowe, backup/restore V14, globalnych użytkowników i planowanie między projektami, oceny miesięczne, wymagania i Definition of Done, bezpieczne duplikowanie, komentarze i powiadomienia, Informator, wielosekcyjne Przekazanie statusu, Kalendarz, urlopy, święta, kopiowanie nieobecności, godziny pracy i nadgodziny, Planner, ważone zadania, wieloosobowy Status, trendy KPI, cele, zapisane widoki, triage, jakość danych, zależności, kampanie testowe, bramy gotowości, odprawy, radar ryzyka, bazę rozwiązań, automatyzacje, szablony uruchomieniowe i podsumowanie dnia.
