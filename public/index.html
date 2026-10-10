@@ -124,6 +124,13 @@
     <div id="insight-content" class="insight-content"></div>
   </dialog>
 
+  <dialog id="bulk-choice-dialog" class="wide-dialog bulk-choice-dialog">
+    <header class="dialog-head"><div><h2 id="bulk-choice-title">Wybierz elementy</h2><p id="bulk-choice-description"></p></div><button type="button" class="x" id="bulk-choice-close">×</button></header>
+    <div class="bulk-choice-tools"><input id="bulk-choice-search" type="search" placeholder="Szukaj…"><button type="button" class="mini" id="bulk-choice-select-visible">Zaznacz widoczne</button><button type="button" class="mini" id="bulk-choice-clear-visible">Odznacz widoczne</button></div>
+    <div id="bulk-choice-list" class="bulk-choice-list"></div>
+    <footer class="dialog-actions"><span id="bulk-choice-count">0 wybranych</span><span></span><button type="button" class="secondary" id="bulk-choice-cancel">Anuluj</button><button type="button" class="primary" id="bulk-choice-apply">Zastosuj wybór</button></footer>
+  </dialog>
+
   <dialog id="link-picker-dialog" class="wide-dialog">
     <header class="dialog-head"><div><h2>Wybierz powiązane elementy</h2><p>Lista blokuje powtórne wskazanie tego samego rekordu.</p></div><button type="button" class="x" id="link-picker-close">×</button></header>
     <div class="picker-tools"><input id="link-picker-search" type="search" placeholder="Szukaj po nazwie, sterowniku lub statusie…"><select id="link-picker-type"><option value="all">Wszystkie typy</option><option value="status">Status</option><option value="task">Zadania</option><option value="point">Otwarte punkty</option><option value="goal">Cele</option><option value="note">Przekazanie statusu</option></select><select id="link-picker-sort"><option value="hierarchy">Hierarchia projektu</option><option value="label">Nazwa</option><option value="status">Status</option></select></div>
@@ -138,9 +145,13 @@
 
   <dialog id="planner-requirements-dialog" class="wide-dialog planner-requirements-dialog">
     <header class="dialog-head"><div><h2>Zapotrzebowanie kadrowe</h2><p>Kalendarz wymaganej obsady ON/OFF.</p></div><button type="button" class="x" id="planner-requirements-close">×</button></header>
-    <div class="requirement-calendar-toolbar"><label>Poziom <select id="requirement-level"><option value="root">Główne obszary</option><option value="all">Cała hierarchia</option></select></label><span>Wpisz liczbę osób w polach ON/OFF i zapisz cały widoczny zakres.</span></div>
+    <div class="requirement-calendar-toolbar">
+      <div class="requirement-range-controls"><button type="button" class="mini requirement-shift" data-days="previous" title="Poprzedni zakres">←</button><button type="button" class="mini" id="requirement-today">Dzisiaj</button><button type="button" class="mini requirement-shift" data-days="next" title="Następny zakres">→</button><label>Zakres <select id="requirement-days"><option value="7">7 dni</option><option value="14">14 dni</option><option value="28">28 dni</option><option value="31">31 dni</option><option value="90">Kwartał</option><option value="365">Rok</option></select></label><strong id="requirement-date-range"></strong></div>
+      <div class="requirement-view-controls"><label>Hierarchia <select id="requirement-level"><option value="areas">Obszary</option><option value="subareas">Obszary + podobszary</option><option value="all">Cała hierarchia</option></select></label><button type="button" class="mini" id="requirement-collapse-all">Zwiń</button><button type="button" class="mini" id="requirement-expand-all">Rozwiń</button></div>
+      <div class="requirement-sheet-controls"><button type="button" class="mini" id="requirement-copy">Kopiuj</button><button type="button" class="mini" id="requirement-paste">Wklej</button><span id="requirement-selection-count">Kliknij lub przeciągnij, aby zaznaczyć komórki.</span></div>
+    </div>
     <div id="planner-requirements-calendar" class="requirement-calendar"></div>
-    <footer class="dialog-actions"><span></span><button type="button" class="primary" id="planner-requirements-save">Zapisz kalendarz zapotrzebowania</button></footer>
+    <footer class="dialog-actions"><span id="requirement-dirty-count">Brak niezapisanych zmian</span><span></span><button type="button" class="primary" id="planner-requirements-save">Zapisz zmiany</button></footer>
   </dialog>
 
   <dialog id="planner-hours-dialog" class="wide-dialog"><header class="dialog-head"><div><h2>Planowana kalkulacja czasu pracy</h2><p>Godziny, nadgodziny ważone, urlopy i wolne z nadgodzin w wybranym zakresie.</p></div><button type="button" class="x" id="planner-hours-close">×</button></header><div id="planner-hours-content"></div></dialog>

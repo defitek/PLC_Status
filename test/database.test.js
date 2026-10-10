@@ -264,7 +264,7 @@ test('V4 isolates projects, supports hierarchy, immutable IDs, elements, links a
       }, admin);
       assert.match(status.test_id, /^W371-ST-/);
       assert.notEqual(status.test_id, 'EDIT-ME');
-      const editedStatus = repository.saveStatus(status.id, { ...status, test_id: 'HACKED-ID', status: 'In progress' }, admin);
+      const editedStatus = repository.saveStatus(status.id, { ...status, test_id: 'HACKED-ID', status: 'In progress', status_change_comment: 'Rozpoczęto weryfikację sygnału.' }, admin);
       assert.equal(editedStatus.test_id, status.test_id);
 
       const task = repository.saveTask(null, {
@@ -862,9 +862,17 @@ test('dependency queue spans tasks, status and open points and rejects cross-mod
 
       assert.equal(repository.tasks('all', admin).find(item => item.id === task.id).queue_state, 'ready');
       assert.equal(repository.status('all', admin).find(item => item.id === status.id).queue_state, 'blocked');
+      assert.equal(repository.status('all', admin).find(item => item.id === status.id).status, 'Blocked');
       assert.equal(repository.points('all', admin).find(item => item.id === point.id).queue_state, 'blocked');
       assert.equal(repository.tasks('all', admin).find(item => item.id === finalTask.id).blocked_by_dependencies, 2);
       assert.throws(() => repository.savePoint(point.id, { ...point, controller, status: 'In progress' }, admin), /Najpierw ukończ/i);
+      const blockedStatus = repository.status('all', admin).find(item => item.id === status.id);
+      assert.throws(() => repository.saveStatus(status.id, { ...blockedStatus, controller, status: 'In progress' }, admin), /komentarza/i);
+      const overriddenStatus = repository.saveStatus(status.id, { ...blockedStatus, controller, status: 'In progress', status_change_comment: 'Kontynuacja na podstawie zatwierdzonego obejścia.' }, admin);
+      assert.equal(overriddenStatus.queue_state, 'in_progress');
+      assert.equal(overriddenStatus.dependency_override, 1);
+      assert.match(overriddenStatus.comments.at(-1).content, /pominięcie blokady/i);
+      repository.saveStatus(status.id, { ...overriddenStatus, controller, status: 'Blocked' }, admin);
       assert.throws(() => repository.saveTask(task.id, {
         ...task, controller, dependency_refs: [{ entity_type: 'point', entity_id: point.id }]
       }, admin), /cykl/i);
@@ -872,6 +880,7 @@ test('dependency queue spans tasks, status and open points and rejects cross-mod
       repository.saveTask(task.id, { ...task, controller, status: 'Done' }, admin);
       const readyStatus = repository.status('all', admin).find(item => item.id === status.id);
       assert.equal(readyStatus.queue_state, 'ready');
+      assert.equal(readyStatus.status, 'Ready to test');
       assert.equal(readyStatus.unblocks_count, 2);
 
       repository.saveStatus(status.id, { ...readyStatus, controller, status: 'Done' }, admin);

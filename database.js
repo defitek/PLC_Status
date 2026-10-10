@@ -17,6 +17,7 @@ const TABLES = {
 const AUDIT_IGNORED = new Set(['updated_at']);
 
 const clean = value => typeof value === 'string' ? value.trim() : '';
+const normalizeStatusWorkflow = value => ({ 'Not started': 'Ready to test', 'NOK / Rework': 'NOK / Retest required', 'Retest required': 'NOK / Retest required' })[clean(value)] || clean(value);
 const nullableDate = value => /^\d{4}-\d{2}-\d{2}$/.test(clean(value)) ? clean(value) : null;
 const nullableTime = value => /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(clean(value)) ? clean(value) : null;
 const nullableNumber = value => value === '' || value === null || value === undefined || !Number.isFinite(Number(value)) ? null : Number(value);
@@ -55,6 +56,7 @@ export function openDatabase(databasePath) {
   migrateToV12(db);
   migrateToV13(db);
   migrateToV14(db);
+  migrateStatusWorkflow(db);
   migrateEntityDependencies(db);
   const defaultProjectId = primaryProjectId(db);
   db.exec('CREATE INDEX IF NOT EXISTS idx_status_function_group ON status_items(function_group_id,function_group_check_id)');
@@ -70,6 +72,7 @@ export function openDatabase(databasePath) {
   migrateToV12(db);
   migrateToV13(db);
   migrateToV14(db);
+  migrateStatusWorkflow(db);
   migrateEntityDependencies(db);
   migrateGlobalPlannerData(db);
   syncProjectMemberships(db);
@@ -98,6 +101,14 @@ function migrateEntityDependencies(db) {
   db.exec(`INSERT OR IGNORE INTO entity_dependencies(
     project_id,dependent_type,dependent_id,prerequisite_type,prerequisite_id,created_by,created_at
   ) SELECT project_id,'task',task_id,'task',prerequisite_task_id,created_by,created_at FROM task_dependencies`);
+}
+
+function migrateStatusWorkflow(db) {
+  ensureColumn(db, 'status_items', 'dependency_override', 'INTEGER NOT NULL DEFAULT 0');
+  db.exec(`
+    UPDATE status_items SET status='Ready to test' WHERE status='Not started';
+    UPDATE status_items SET status='NOK / Retest required' WHERE status IN ('NOK / Rework','Retest required');
+  `);
 }
 
 const globalPlannerSettingKeys = [
@@ -689,7 +700,7 @@ function seedSecondProject(db, hashPassword) {
     const controllerRow = controllers[index % controllers.length];
     const owner = activeUsers[(index + 1) % activeUsers.length];
     const [category, subcategory] = statusPairs[index % statusPairs.length];
-    const status = ['Not started','In progress','Ready to test','Done','Done','Blocked'][index % 6];
+    const status = ['Ready to test','In progress','Ready to test','Done','Done','Blocked'][index % 6];
     const result = addStatus.run(project.id, controllerRow.id, `W520-${controllerRow.code}-${String(index + 1).padStart(3,'0')}`, `${String((index % 12) + 1).padStart(3,'0')}VR_001`, `Weryfikacja ${subcategory}`, category, subcategory, ['Low','Medium','High','Critical'][index % 4], owner.display_name, owner.id, status, 'Dane testowe drugiego projektu.', owner.id);
     if (result.changes) statusIds.push(Number(result.lastInsertRowid));
   }
@@ -1409,16 +1420,44 @@ function createRepository(db, defaultProjectId) {
       const legacyInsert = db.prepare('INSERT INTO task_dependencies(project_id,task_id,prerequisite_task_id,created_by) VALUES(?,?,?,?)');
       refs.filter(ref => ref.entity_type === 'task').forEach(ref => legacyInsert.run(activeProjectId(), id, ref.entity_id, currentUser?.id || null));
     }
+    if (type === 'status') syncStatusDependencyState(id, currentUser);
     return refs;
   }
 
-  function assertDependencyTransition(type, previousStatus, nextStatus, requested) {
+  function unresolvedDependencies(requested) {
+    return normalizedDependencyRefs(requested).map(ref => dependencyEntity(ref.entity_type, ref.entity_id)).filter(item => item && !item.is_complete);
+  }
+
+  function syncStatusDependencyState(id, currentUser, hadDependency = false) {
+    const row = one('SELECT * FROM status_items WHERE id=? AND project_id=?', asId(id), activeProjectId());
+    if (!row || ['Done', 'N/A'].includes(row.status) || Number(row.dependency_override)) return false;
+    const dependencies = dependencyRefs('status', row.id, 'prerequisites');
+    const blockers = dependencies.filter(item => !item.is_complete);
+    let nextStatus = row.status;
+    if (blockers.length && row.status !== 'Blocked') nextStatus = 'Blocked';
+    else if (!blockers.length && (dependencies.length || hadDependency) && row.status === 'Blocked') nextStatus = 'Ready to test';
+    if (nextStatus === row.status) return false;
+    const before = baseSnapshot('status', row.id);
+    db.prepare("UPDATE status_items SET status=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?").run(nextStatus, row.id, activeProjectId());
+    const after = baseSnapshot('status', row.id);
+    writeAudit('status', row.id, 'update', currentUser, before, after);
+    return true;
+  }
+
+  function refreshDependentStatusItems(sourceType, sourceId, currentUser) {
+    const ids = all(`SELECT dependent_id FROM entity_dependencies
+      WHERE project_id=? AND prerequisite_type=? AND prerequisite_id=? AND dependent_type='status'`, activeProjectId(), sourceType, asId(sourceId));
+    ids.forEach(item => syncStatusDependencyState(item.dependent_id, currentUser));
+  }
+
+  function assertDependencyTransition(type, previousStatus, nextStatus, requested, allowStatusOverride = false) {
     if (previousStatus === nextStatus) return;
     const guarded = type === 'task' ? ['In progress', 'Done']
       : type === 'status' ? ['Ready to test', 'In progress', 'Done']
         : type === 'point' ? ['In progress', 'Closed'] : [];
     if (!guarded.includes(nextStatus)) return;
-    const blockers = normalizedDependencyRefs(requested).map(ref => dependencyEntity(ref.entity_type, ref.entity_id)).filter(item => item && !item.is_complete);
+    const blockers = unresolvedDependencies(requested);
+    if (type === 'status' && allowStatusOverride) return;
     if (blockers.length) throw appError(`Najpierw ukończ wymagane elementy (${blockers.map(item => item.title).join(', ')})`);
   }
 
@@ -1429,7 +1468,7 @@ function createRepository(db, defaultProjectId) {
     const complete = dependencyComplete(type, row.status);
     const manuallyBlocked = (type === 'status' && row.status === 'Blocked') || (type === 'point' && row.status === 'Waiting');
     const active = type === 'task' ? row.status === 'In progress'
-      : type === 'status' ? ['Ready to test', 'In progress', 'NOK / Rework', 'Retest required'].includes(row.status)
+      : type === 'status' ? ['In progress', 'NOK / Retest required'].includes(row.status)
         : row.status === 'In progress';
     return {
       dependencies,
@@ -1438,7 +1477,7 @@ function createRepository(db, defaultProjectId) {
       blocked_by_dependencies: blockedBy.length,
       blocking_dependencies: blockedBy,
       unblocks_count: dependents.filter(item => !item.is_complete).length,
-      queue_state: complete ? 'completed' : blockedBy.length || manuallyBlocked ? 'blocked' : active ? 'in_progress' : 'ready'
+      queue_state: complete ? 'completed' : ((blockedBy.length && !Number(row.dependency_override)) || manuallyBlocked) ? 'blocked' : active ? 'in_progress' : 'ready'
     };
   }
 
@@ -1632,6 +1671,8 @@ function createRepository(db, defaultProjectId) {
     const table = TABLES[type];
     const before = baseSnapshot(type, id);
     if (!before) throw appError('Nie znaleziono rekordu', 404);
+    const dependentStatusIds = dependencyTypes.has(type) ? all(`SELECT dependent_id FROM entity_dependencies
+      WHERE project_id=? AND prerequisite_type=? AND prerequisite_id=? AND dependent_type='status'`, activeProjectId(), type, id).map(item => item.dependent_id) : [];
     if (dependencyTypes.has(type)) db.prepare(`DELETE FROM entity_dependencies WHERE project_id=? AND
       ((dependent_type=? AND dependent_id=?) OR (prerequisite_type=? AND prerequisite_id=?))`).run(activeProjectId(), type, id, type, id);
     db.prepare(`DELETE FROM ${table} WHERE id=?`).run(id);
@@ -1642,6 +1683,7 @@ function createRepository(db, defaultProjectId) {
     db.prepare('DELETE FROM entity_requirements WHERE project_id=? AND entity_type=? AND entity_id=?').run(activeProjectId(), type, id);
     if (['status', 'task', 'point'].includes(type)) db.prepare('DELETE FROM goal_links WHERE project_id=? AND entity_type=? AND entity_id=?').run(activeProjectId(), type, id);
     writeAudit(type, id, 'delete', user, before, null);
+    dependentStatusIds.forEach(statusId => syncStatusDependencyState(statusId, user, true));
   }
 
   function statusRows(code, currentUser) {
@@ -1788,7 +1830,7 @@ function createRepository(db, defaultProjectId) {
       goals: { total: 0, done: 0, in_progress: 0, overdue: 0, blocked: 0, open: 0, closed: 0, progress: 0 }
     };
     const placeholders = controllerIds.map(() => '?').join(',');
-    const status = one(`SELECT COUNT(*) total,SUM(status='Done') done,SUM(status='In progress') in_progress,SUM(status IN ('Blocked','NOK / Rework')) blocked FROM status_items WHERE project_id=? AND controller_id IN (${placeholders})`, activeProjectId(), ...controllerIds);
+    const status = one(`SELECT COUNT(*) total,SUM(status='Done') done,SUM(status='In progress') in_progress,SUM(status IN ('Blocked','NOK / Retest required')) blocked FROM status_items WHERE project_id=? AND controller_id IN (${placeholders})`, activeProjectId(), ...controllerIds);
     const tasks = taskMetrics(controllerIds);
     const points = one(`SELECT COUNT(*) total,SUM(status!='Closed') open,SUM(status='Waiting') waiting,SUM(status='Closed') closed,SUM(status!='Closed' AND reminder_date IS NOT NULL AND reminder_date<date('now')) reminders_overdue FROM open_points WHERE project_id=? AND controller_id IN (${placeholders})`, activeProjectId(), ...controllerIds);
     const goals = one(`SELECT COUNT(*) total,SUM(status='Done') done,SUM(status='In progress') in_progress,SUM(status!='Done' AND due_date IS NOT NULL AND due_date<date('now')) overdue FROM goals WHERE project_id=? AND controller_id IN (${placeholders})`, activeProjectId(), ...controllerIds);
@@ -1979,6 +2021,7 @@ function createRepository(db, defaultProjectId) {
         SELECT gl.project_id,gl.entity_type,gl.entity_id,'goal',gl.goal_id,g.created_by
         FROM goal_links gl JOIN goals g ON g.id=gl.goal_id AND g.project_id=gl.project_id WHERE gl.project_id=?`).run(projectId);
       migrateEntityDependencies(db);
+      migrateStatusWorkflow(db);
       db.exec('COMMIT');
     } catch (error) {
       db.exec('ROLLBACK');
@@ -2976,7 +3019,7 @@ function createRepository(db, defaultProjectId) {
     else if (row.due_date && row.due_date >= todayValue && row.due_date <= soon) signals.push('due_soon');
     if (type === 'point' && row.reminder_date && row.reminder_date <= todayValue) signals.push('reminder_due');
     if (!ownerIdsForEntity(type, row).length && type !== 'goal') signals.push('unassigned');
-    if (['Blocked', 'NOK / Rework', 'Waiting'].includes(row.status)) signals.push('blocked');
+    if (['Blocked', 'NOK / Retest required', 'Waiting'].includes(row.status)) signals.push('blocked');
     if (type === 'task' && Number(row.blocked_by_dependencies || 0) > 0) signals.push('dependency');
     return signals;
   }
@@ -3658,7 +3701,7 @@ function createRepository(db, defaultProjectId) {
             test_id: nextProjectIdentifier('status', 'ST', 'status_items', 'test_id'), station: groupName,
             function_detail: clean(subcategory.default_function) || title, category: categoryName, subcategory: subcategory.name || '',
             milestone: '', criticality: clean(source.criticality) || 'Medium', responsible: '', responsible_user_id: null,
-            status: 'Not started', checked_by: '', checked_on: null, environment: 'Factory', current_note: '', evidence_link: '',
+            status: 'Ready to test', checked_by: '', checked_on: null, environment: 'Factory', current_note: '', evidence_link: '',
             function_group_id: groupId, function_group_element_id: elementId, function_group_subcategory_id: groupSubcategoryId,
             function_group_check_id: checkId, created_by: currentUser.id
           });
@@ -3696,7 +3739,7 @@ function createRepository(db, defaultProjectId) {
       WHERE t.project_id=? AND ta.user_id=?`, period.from, period.to, period.to, activeProjectId(), userId) || {};
     const statuses = one(`SELECT COUNT(DISTINCT s.id) total,SUM(s.status IN ('Done','N/A')) done,
       SUM(s.status IN ('Done','N/A') AND date(s.updated_at) BETWEEN ? AND ?) completed_in_month,
-      SUM(s.status IN ('Blocked','NOK / Rework')) blocked
+      SUM(s.status IN ('Blocked','NOK / Retest required')) blocked
       FROM status_items s JOIN status_assignees sa ON sa.status_id=s.id AND sa.project_id=s.project_id
       WHERE s.project_id=? AND sa.user_id=?`, period.from, period.to, activeProjectId(), userId) || {};
     const points = one(`SELECT COUNT(*) total,SUM(status='Closed') done,
@@ -4257,7 +4300,7 @@ function createRepository(db, defaultProjectId) {
               if (Object.keys(changesBetween(before, after)).length) writeAudit('status', status.id, 'update', currentUser, before, after);
             } else {
               const statusId = insertRecord('status_items', {
-                ...statusValues, test_id: nextProjectIdentifier('status', 'ST', 'status_items', 'test_id'), status: 'Not started', environment: 'Factory', created_by: currentUser.id
+                ...statusValues, test_id: nextProjectIdentifier('status', 'ST', 'status_items', 'test_id'), status: 'Ready to test', environment: 'Factory', created_by: currentUser.id
               });
               writeAudit('status', statusId, 'create', currentUser, null, baseSnapshot('status', statusId));
             }
@@ -4554,6 +4597,25 @@ function createRepository(db, defaultProjectId) {
       if (groupSubcategoryId && (!selectedGroup || !one('SELECT 1 FROM function_group_subcategories WHERE id=? AND function_group_id=?', groupSubcategoryId, selectedGroup.id))) throw appError('Wybrana podkategoria nie należy do grupy funkcyjnej');
       const defaultFunction = clean(input.subcategory) ? one(`SELECT s.default_function FROM subcategories s JOIN categories c ON c.id=s.category_id
         WHERE c.project_id=? AND c.name=? COLLATE NOCASE AND s.name=? COLLATE NOCASE`, activeProjectId(), clean(input.category), clean(input.subcategory))?.default_function : '';
+      const requestedStatus = normalizeStatusWorkflow(input.status) || 'Ready to test';
+      const allowedStatuses = new Set(['Ready to test', 'In progress', 'Blocked', 'NOK / Retest required', 'Done', 'N/A']);
+      if (!allowedStatuses.has(requestedStatus)) throw appError('Nieprawidłowy status punktu');
+      const statusChanged = Boolean(before && requestedStatus !== before.status);
+      const blockers = unresolvedDependencies(requestedDependencies);
+      const statusComment = clean(input.status_change_comment);
+      const dependencyOverride = Boolean(statusChanged && blockers.length && requestedStatus !== 'Blocked');
+      if (statusChanged && ['In progress', 'NOK / Retest required'].includes(requestedStatus) && !statusComment) throw appError('Ta zmiana statusu wymaga komentarza');
+      if (dependencyOverride && !statusComment) throw appError('Pominięcie blokady zależności wymaga komentarza');
+      let effectiveStatus = requestedStatus;
+      let overrideFlag = Number(before?.dependency_override || 0);
+      if (blockers.length) {
+        if (dependencyOverride) overrideFlag = 1;
+        else if (requestedStatus === 'Blocked') overrideFlag = 0;
+        else if (!overrideFlag) { effectiveStatus = 'Blocked'; overrideFlag = 0; }
+      } else {
+        overrideFlag = 0;
+        if (before?.status === 'Blocked' && !Number(before.dependency_override) && (before.dependency_refs || []).length && requestedStatus === 'Blocked') effectiveStatus = 'Ready to test';
+      }
       const values = {
         project_id: activeProjectId(),
         controller_id: selectedGroup ? selectedGroup.controller_id : selectedController.id,
@@ -4563,11 +4625,11 @@ function createRepository(db, defaultProjectId) {
         station: selectedGroup?.name || clean(input.station), function_detail: defaultFunction || clean(input.function_detail) || `Sprawdź ${clean(input.subcategory) || clean(input.category) || 'punkt'}`,
         category: clean(input.category) || 'General', subcategory: clean(input.subcategory), milestone: '',
         criticality: clean(input.criticality) || 'Medium', responsible_user_id: ownerId, responsible: userName(ownerId),
-        status: clean(input.status) || 'Not started', checked_by: clean(input.checked_by), checked_on: nullableDate(input.checked_on),
+        status: effectiveStatus, dependency_override: overrideFlag, checked_by: clean(input.checked_by), checked_on: nullableDate(input.checked_on),
         current_note: clean(input.current_note), evidence_link: clean(input.evidence_link)
       };
       if (!values.function_detail) throw appError('Pole „Test / funkcja” jest wymagane');
-      assertDependencyTransition('status', before?.status || null, values.status, requestedDependencies);
+      assertDependencyTransition('status', before?.status || null, values.status, requestedDependencies, dependencyOverride);
       if (id && !['Done', 'N/A'].includes(before.status) && ['Done', 'N/A'].includes(values.status)) assertDefinitionOfDone('status', id, values.status);
       if (!id && ['Done', 'N/A'].includes(values.status) && (input.requirement_ids || []).length) throw appError('Nowy punkt z Definition of Done zapisz najpierw jako otwarty');
       if (id) values.test_id = before.test_id;
@@ -4588,7 +4650,14 @@ function createRepository(db, defaultProjectId) {
       setEntityDependencies('status', recordId, requestedDependencies, currentUser);
       const after = baseSnapshot('status', recordId);
       writeAudit('status', recordId, id ? 'update' : 'create', currentUser, before, after);
-      return decorateStatus(attachControllerMeta({ ...after, controller: one('SELECT code FROM controllers WHERE id=?', after.controller_id).code, created_by_name: userName(after.created_by), responsible_name: userName(after.responsible_user_id) }), currentUser);
+      if (statusChanged && statusComment) {
+        const statusNames = { 'Ready to test': 'Gotowe do sprawdzenia', 'In progress': 'W trakcie', Blocked: 'Zablokowany', 'NOK / Retest required': 'NOK / wymagany retest', Done: 'Gotowe', 'N/A': 'N/A' };
+        const context = dependencyOverride ? `Ręczne pominięcie blokady zależności przy zmianie statusu na „${statusNames[requestedStatus] || requestedStatus}”` : `Komentarz dodany ze względu na zmianę statusu na „${statusNames[requestedStatus] || requestedStatus}”`;
+        addComment({ entity_type: 'status', entity_id: recordId, content: `${context}:\n${statusComment}` }, currentUser);
+      }
+      refreshDependentStatusItems('status', recordId, currentUser);
+      const finalSnapshot = baseSnapshot('status', recordId);
+      return decorateStatus(attachControllerMeta({ ...finalSnapshot, controller: one('SELECT code FROM controllers WHERE id=?', finalSnapshot.controller_id).code, created_by_name: userName(finalSnapshot.created_by), responsible_name: userName(finalSnapshot.responsible_user_id) }), currentUser);
     },
     batchUpdateStatus(input, currentUser) {
       const items = Array.isArray(input.items) ? input.items : [];
@@ -4683,6 +4752,7 @@ function createRepository(db, defaultProjectId) {
       setEntityDependencies('task', recordId, requestedDependencies, currentUser);
       const after = baseSnapshot('task', recordId);
       writeAudit('task', recordId, id ? 'update' : 'create', currentUser, before, after);
+      refreshDependentStatusItems('task', recordId, currentUser);
       const previousAssignees = before ? [...(before.direct_assignee_user_ids || []), ...(before.checklist || []).map(item => item.owner_user_id).filter(Boolean)] : [];
       notifyNewTaskAssignees(recordId, previousAssignees, allAssignees, currentUser);
       const row = one(`SELECT t.*,c.code controller,creator.display_name created_by_name,owner.display_name owner_name FROM tasks t JOIN controllers c ON c.id=t.controller_id LEFT JOIN users creator ON creator.id=t.created_by LEFT JOIN users owner ON owner.id=t.owner_user_id WHERE t.id=?`, recordId);
@@ -4733,6 +4803,7 @@ function createRepository(db, defaultProjectId) {
       setEntityDependencies('point', recordId, requestedDependencies, currentUser);
       const after = baseSnapshot('point', recordId);
       writeAudit('point', recordId, id ? 'update' : 'create', currentUser, before, after);
+      refreshDependentStatusItems('point', recordId, currentUser);
       const row = one(`SELECT p.*,c.code controller,creator.display_name created_by_name,owner.display_name owner_name FROM open_points p JOIN controllers c ON c.id=p.controller_id LEFT JOIN users creator ON creator.id=p.created_by LEFT JOIN users owner ON owner.id=p.owner_user_id WHERE p.id=?`, recordId);
       return decoratePoint(row, currentUser);
     },
