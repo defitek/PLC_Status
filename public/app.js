@@ -2,7 +2,7 @@ const state = {
   view: 'mine', controller: 'all', me: null, projects: [], controllerGroups: [], controllers: [], users: [],
   config: { categories: [], task_categories: [], function_groups: [], options: [], announcement_labels: [], settings: {} },
   overview: null, announcements: [], notifications: [], mine: null, dashboard: {}, status: [], tasks: [], points: [], notes: [], goals: [], planner: null, calendar: null, history: [], savedViews: [], operations: null, commissioning: null, employeeReviews: [], reviewPeriod: new Date().toISOString().slice(0, 7),
-  dialog: null, dialogInitial: '', dirtyCloseAttempt: new WeakSet(), goalDraftLinks: [], goalPickerCollections: null, linkDraft: [], taskMode: 'board', taskShowCompleted: false, pointMode: 'list', trendPeriod: 'week',
+  dialog: null, dialogInitial: '', dirtyCloseAttempt: new WeakSet(), goalDraftLinks: [], goalPickerCollections: null, linkDraft: [], statusMode: 'list', taskMode: 'board', taskShowCompleted: false, pointMode: 'list', trendPeriod: 'week',
   functionGroupController: '', functionPointGroup: null, functionPointDraft: [], quickStatusDraft: [],
   notesFrom: '', notesTo: '', notesWeek: '', draggingTask: false, plannerFrom: '', plannerDays: 14,
   plannerCell: null, plannerClipboard: null, plannerDragEntry: null, plannerDragDay: null, calendarFrom: '', calendarTo: '', calendarMode: 'week', calendarTypes: ['task', 'point', 'status', 'goal', 'note', 'annotation'], calendarPriorities: ['Low', 'Medium', 'High', 'Critical'], calendarOnlyMine: false, calendarCategory: '',
@@ -11,7 +11,7 @@ const state = {
   announcementLabelFilter: '', announcementImportanceFilter: '', liveSource: null, liveRefreshTimer: null,
   categorySelection: { status: null, task: null },
   functionListManager: null,
-  operationsTab: 'triage', triageSelection: new Set(), savedViewApplying: false, activeSavedView: {}, taskDependencyOptions: [],
+  operationsTab: 'triage', triageSelection: new Set(), savedViewApplying: false, activeSavedView: {}, taskDependencyOptions: [], dependencyOptions: null,
   commissioningTab: 'campaigns', collapsedStatusGroups: new Set(), collapsedTaskGroups: new Set(), statusTransfer: null, overviewHierarchyLevel: 'areas',
   grouping: { status: 'category', tasks: '', notes: 'scope', history: 'hierarchy' },
   sort: { status: { key: '', direction: 1 }, tasks: { key: '', direction: 1 }, points: { key: '', direction: 1 } }
@@ -2207,8 +2207,75 @@ function bindInlineEntityEditors() {
 }
 
 
+const queueLabels = {
+  in_progress: ['W trakcie', 'Elementy już realizowane'],
+  ready: ['Gotowe do rozpoczęcia', 'Wszystkie wymagane wcześniejsze elementy są ukończone'],
+  blocked: ['Oczekujące', 'Najpierw trzeba ukończyć wskazane zależności'],
+  completed: ['Ukończone', 'Elementy zamknięte']
+};
+
+function queuePriority(item) {
+  return ({ Critical: 0, High: 1, Medium: 2, Low: 3 })[item.priority || item.criticality] ?? 4;
+}
+
+function queueRows(rows) {
+  return [...rows].sort((left, right) => queuePriority(left) - queuePriority(right)
+    || Number(!left.due_date) - Number(!right.due_date)
+    || String(left.due_date || '').localeCompare(String(right.due_date || ''))
+    || entityLabel(left.entity_type, left).localeCompare(entityLabel(right.entity_type, right), 'pl', { numeric: true }));
+}
+
+function dependencyQueueCard(type, item, readyPosition) {
+  const label = entityLabel(type, item);
+  const blockers = item.blocking_dependencies || [];
+  const typeLabel = ({ status: 'Status', task: 'Zadanie', point: 'Otwarty punkt' })[type];
+  const owner = item.owner_name || item.responsible_name || 'Nieprzypisane';
+  return `<article class="dependency-queue-card" data-queue-type="${type}" data-queue-id="${item.id}">
+    <header><span class="queue-entity-type">${typeLabel}</span>${readyPosition ? `<b class="queue-position">#${readyPosition}</b>` : ''}${badge(item.priority || item.criticality || item.status)}</header>
+    <h3>${escapeHtml(label)}</h3>
+    <p>${escapeHtml(controllerLabel(item) || item.scope_label || 'Cały projekt')} · ${escapeHtml(owner)}${item.due_date ? ` · ${displayDate(item.due_date)}` : ''}</p>
+    ${blockers.length ? `<div class="queue-blockers"><b>Oczekuje na:</b>${blockers.map(blocker => `<span>${escapeHtml(({ status: 'Status', task: 'Zadanie', point: 'Punkt' })[blocker.entity_type])} · ${escapeHtml(blocker.title)}</span>`).join('')}</div>` : ''}
+    <footer><span>${item.unblocks_count ? `Odblokowuje: ${item.unblocks_count}` : 'Nie blokuje kolejnych elementów'}</span>${item.queue_state === 'ready' ? '<button type="button" class="mini queue-start">Rozpocznij</button>' : ''}</footer>
+  </article>`;
+}
+
+function drawDependencyQueue(type, rows, targetSelector) {
+  const target = $(targetSelector);
+  if (!target) return;
+  const normalized = rows.map(item => ({ ...item, entity_type: type }));
+  let readyPosition = 0;
+  target.innerHTML = `<div class="dependency-queue">${['in_progress', 'ready', 'blocked', 'completed'].map(queueState => {
+    const items = queueRows(normalized.filter(item => item.queue_state === queueState));
+    return `<section class="dependency-queue-lane queue-${queueState}"><header><span><b>${queueLabels[queueState][0]}</b><small>${queueLabels[queueState][1]}</small></span><strong>${items.length}</strong></header><div>${items.map(item => dependencyQueueCard(type, item, queueState === 'ready' ? ++readyPosition : 0)).join('') || '<p class="empty">Brak elementów</p>'}</div></section>`;
+  }).join('')}</div>`;
+  $$(`${targetSelector} .dependency-queue-card`).forEach(card => card.addEventListener('click', event => {
+    if (event.target.closest('.queue-start')) return;
+    const item = rows.find(row => row.id === Number(card.dataset.queueId));
+    openRecord(({ status: 'status', task: 'tasks', point: 'points' })[type], item);
+  }));
+  $$(`${targetSelector} .queue-start`).forEach(button => button.addEventListener('click', async event => {
+    event.stopPropagation();
+    const card = button.closest('.dependency-queue-card');
+    const item = rows.find(row => row.id === Number(card.dataset.queueId));
+    if (!item) return;
+    button.disabled = true;
+    try {
+      const endpoint = ({ status: '/api/status', task: '/api/tasks', point: '/api/open-points' })[type];
+      await api(`${endpoint}/${item.id}`, { method: 'PATCH', body: JSON.stringify({ ...item, status: 'In progress' }) });
+      toast('Element został rozpoczęty');
+      await loadData(true);
+    } catch (error) { button.disabled = false; toast(error.message, true); }
+  }));
+}
+
 function renderStatus() {
   const d = state.dashboard;
+  if (state.statusMode === 'queue') {
+    $('#content').innerHTML = `<div class="panel compact-data-panel" id="status-panel"><div class="toolbar module-toolbar"><strong>Lista statusowa</strong><button id="status-list-mode" class="secondary">Lista</button><button id="status-queue-mode" class="secondary active-toggle">Kolejka</button><div class="status-inline-metrics"><span><b>${d.progress || 0}%</b> postęp</span><span><b>${d.in_progress || 0}</b> w trakcie</span><span class="${d.blocked ? 'danger-text' : ''}"><b>${d.blocked || 0}</b> blokady/NOK</span></div></div><div id="status-queue"></div></div>`;
+    $('#status-list-mode').addEventListener('click', () => { state.statusMode = 'list'; renderStatus(); });
+    drawDependencyQueue('status', state.status, '#status-queue');
+    return;
+  }
   const columns = [
     { key: 'function_group_name', label: 'Grupa funkcyjna', values: uniqueValues(state.status, 'function_group_name') }, { key: 'function_detail', label: 'Punkt / funkcja' },
     { key: 'function_group_subcategory_name', label: 'Podkategoria grupy', values: uniqueValues(state.status, 'function_group_subcategory_name') }, { key: 'function_group_element_name', label: 'Element', values: uniqueValues(state.status, 'function_group_element_name') }, { key: 'controller', label: 'PLC', filter: 'hierarchy' },
@@ -2218,9 +2285,10 @@ function renderStatus() {
     { key: 'responsible_name', label: 'Odpowiedzialni', values: uniqueValues(state.status, 'responsible_name', true) }, { key: 'requirement_names', label: 'Zapotrzebowanie', values: uniqueValues(state.status, 'requirement_names', true) }, { key: 'updated_at', label: 'Aktualizacja', filter: 'date' }
   ];
   state.statusColumns = columns;
-  $('#content').innerHTML = `<div class="panel compact-data-panel" id="status-panel"><div class="toolbar module-toolbar"><strong>Lista statusowa</strong><button id="quick-status-edit" class="secondary">Szybka edycja</button><button type="button" class="mini" data-clear-filters>Wyczyść filtry</button><label>Grupuj <select id="status-group"><option value="function_group_name">Grupa funkcyjna</option><option value="function_group_subcategory_name">Podkategoria grupy</option><option value="category">Kategoria</option><option value="subcategory">Podkategoria statusu</option><option value="status">Status</option><option value="">Bez grupowania</option></select></label><button type="button" class="mini" id="status-collapse-all">Zwiń wszystkie</button><button type="button" class="mini" id="status-expand-all">Rozwiń wszystkie</button>${savedViewsToolbar('status')}<div class="status-inline-metrics"><span><b>${d.progress || 0}%</b> postęp</span><span><b>${d.in_progress || 0}</b> w trakcie</span><span class="${d.blocked ? 'danger-text' : ''}"><b>${d.blocked || 0}</b> blokady/NOK</span></div></div>
+  $('#content').innerHTML = `<div class="panel compact-data-panel" id="status-panel"><div class="toolbar module-toolbar"><strong>Lista statusowa</strong><button id="status-list-mode" class="secondary active-toggle">Lista</button><button id="status-queue-mode" class="secondary">Kolejka</button><button id="quick-status-edit" class="secondary">Szybka edycja</button><button type="button" class="mini" data-clear-filters>Wyczyść filtry</button><label>Grupuj <select id="status-group"><option value="function_group_name">Grupa funkcyjna</option><option value="function_group_subcategory_name">Podkategoria grupy</option><option value="category">Kategoria</option><option value="subcategory">Podkategoria statusu</option><option value="status">Status</option><option value="">Bez grupowania</option></select></label><button type="button" class="mini" id="status-collapse-all">Zwiń wszystkie</button><button type="button" class="mini" id="status-expand-all">Rozwiń wszystkie</button>${savedViewsToolbar('status')}<div class="status-inline-metrics"><span><b>${d.progress || 0}%</b> postęp</span><span><b>${d.in_progress || 0}</b> w trakcie</span><span class="${d.blocked ? 'danger-text' : ''}"><b>${d.blocked || 0}</b> blokady/NOK</span></div></div>
   <div class="tablewrap"><table><thead><tr>${columns.map(column => `<th class="sortable" data-column="${column.key}" data-sort="${column.key}" data-label="${column.label}">${column.label}${sortMarker('status', column.key)}</th>`).join('')}</tr>${tableFilterRow(columns)}</thead><tbody id="status-body"></tbody></table></div></div>`;
   $('#status-group').value = state.grouping.status;
+  $('#status-queue-mode').addEventListener('click', () => { state.statusMode = 'queue'; renderStatus(); });
   $('#quick-status-edit').addEventListener('click', openQuickStatusEditor);
   $('#status-group').addEventListener('change', event => { state.grouping.status = event.target.value; state.collapsedStatusGroups.clear(); drawStatusRows(); });
   $('#status-collapse-all').addEventListener('click', () => { orderedGroups('status', state.grouping.status, filterRows(state.status, '#status-panel')).forEach(group => state.collapsedStatusGroups.add(String(group))); drawStatusRows(); });
@@ -2389,14 +2457,15 @@ async function saveBulkStatus(event) {
 function taskCard(item) {
   const time = taskTimeLabel(item);
   const allChecks = [...(item.checklist || []), ...(item.scope_checklist || [])];
-  return `<article class="task-card compact" draggable="true" data-task-id="${item.id}"><div class="task-card-head"><h3>${escapeHtml(item.title)}</h3><span class="progress-value ${item.progress >= 100 ? 'done' : item.progress > 0 ? 'active' : ''}"><b>${item.progress || 0}%</b><i><u style="width:${item.progress || 0}%"></u></i></span></div><p>${escapeHtml(controllerLabel(item))} · ${escapeHtml(item.function_group_name || item.other_object || (item.scope_is_group ? 'zadanie obszarowe' : 'bez grupy'))}${item.function_group_element_name ? ` → ${escapeHtml(item.function_group_element_name)}` : ''}</p><div class="cardmeta"><span>${escapeHtml(item.owner_name || 'Nieprzypisane')}</span><span>${item.due_date ? displayDate(item.due_date) : 'bez deadline’u'}</span></div>${item.blocked_by_dependencies ? `<span class="dependency-warning">Zablokowane przez ${item.blocked_by_dependencies} ${item.blocked_by_dependencies === 1 ? 'zadanie' : 'zadania'}</span>` : ''}${time ? `<span class="time-chip ${time.overdue ? 'overdue' : ''}">${escapeHtml(time.label)}</span>` : ''}<div class="checkbar"><i style="width:${item.progress || 0}%"></i></div><div class="task-card-foot"><button type="button" class="task-check-count" data-checklist-task="${item.id}">${allChecks.filter(entry => entry.done).length}/${allChecks.length} punktów kontroli</button><span>${escapeHtml(item.category || 'Bez kategorii')} · utworzył ${escapeHtml(item.created_by_name || 'dane historyczne')}</span></div></article>`;
+  return `<article class="task-card compact" draggable="true" data-task-id="${item.id}"><div class="task-card-head"><h3>${escapeHtml(item.title)}</h3><span class="progress-value ${item.progress >= 100 ? 'done' : item.progress > 0 ? 'active' : ''}"><b>${item.progress || 0}%</b><i><u style="width:${item.progress || 0}%"></u></i></span></div><p>${escapeHtml(controllerLabel(item))} · ${escapeHtml(item.function_group_name || item.other_object || (item.scope_is_group ? 'zadanie obszarowe' : 'bez grupy'))}${item.function_group_element_name ? ` → ${escapeHtml(item.function_group_element_name)}` : ''}</p><div class="cardmeta"><span>${escapeHtml(item.owner_name || 'Nieprzypisane')}</span><span>${item.due_date ? displayDate(item.due_date) : 'bez deadline’u'}</span></div>${item.blocked_by_dependencies ? `<span class="dependency-warning">Zablokowane przez ${item.blocked_by_dependencies} ${item.blocked_by_dependencies === 1 ? 'element' : 'elementy'}</span>` : ''}${time ? `<span class="time-chip ${time.overdue ? 'overdue' : ''}">${escapeHtml(time.label)}</span>` : ''}<div class="checkbar"><i style="width:${item.progress || 0}%"></i></div><div class="task-card-foot"><button type="button" class="task-check-count" data-checklist-task="${item.id}">${allChecks.filter(entry => entry.done).length}/${allChecks.length} punktów kontroli</button><span>${escapeHtml(item.category || 'Bez kategorii')} · utworzył ${escapeHtml(item.created_by_name || 'dane historyczne')}</span></div></article>`;
 }
 
 function renderTasks() {
   const listTools = state.taskMode === 'list' ? `<label>Grupuj <select id="task-group"><option value="">Bez grupowania</option><option value="function_group_name">Grupa funkcyjna</option><option value="function_group_element_name">Element grupy</option><option value="category">Kategoria</option><option value="subcategory">Podkategoria</option><option value="status">Status</option><option value="owner_name">Odpowiedzialny</option><option value="scope_label">Zakres hierarchii</option></select></label><button type="button" class="mini" id="task-collapse-all">Zwiń wszystkie</button><button type="button" class="mini" id="task-expand-all">Rozwiń wszystkie</button><button type="button" class="mini" id="task-table-clear">Wyczyść filtry tabeli</button><label class="toggle-line compact-toggle"><input type="checkbox" id="task-show-completed" ${state.taskShowCompleted ? 'checked' : ''}> Pokaż ukończone</label>` : '';
-  $('#content').innerHTML = `<div class="panel compact-data-panel task-filter-panel"><div class="toolbar module-toolbar" id="task-filter-bar"><strong>Zadania</strong><button id="task-board-mode" class="secondary ${state.taskMode === 'board' ? 'active-toggle' : ''}">Tablica</button><button id="task-list-mode" class="secondary ${state.taskMode === 'list' ? 'active-toggle' : ''}">Lista</button><input id="task-search" placeholder="Szukaj we wszystkich polach">${multiFilterControl('toolbar_category', taskCategories(), 'Kategorie · wszystkie')}${multiFilterControl('toolbar_requirement', (state.config.requirements || []).map(item => item.name), 'Zapotrzebowanie · każde')}${listTools}${savedViewsToolbar('tasks')}</div></div><div id="task-content"></div>`;
+  $('#content').innerHTML = `<div class="panel compact-data-panel task-filter-panel"><div class="toolbar module-toolbar" id="task-filter-bar"><strong>Zadania</strong><button id="task-board-mode" class="secondary ${state.taskMode === 'board' ? 'active-toggle' : ''}">Tablica</button><button id="task-list-mode" class="secondary ${state.taskMode === 'list' ? 'active-toggle' : ''}">Lista</button><button id="task-queue-mode" class="secondary ${state.taskMode === 'queue' ? 'active-toggle' : ''}">Kolejka</button><input id="task-search" placeholder="Szukaj we wszystkich polach">${multiFilterControl('toolbar_category', taskCategories(), 'Kategorie · wszystkie')}${multiFilterControl('toolbar_requirement', (state.config.requirements || []).map(item => item.name), 'Zapotrzebowanie · każde')}${listTools}${savedViewsToolbar('tasks')}</div></div><div id="task-content"></div>`;
   $('#task-board-mode').addEventListener('click', () => { state.taskMode = 'board'; renderTasks(); });
   $('#task-list-mode').addEventListener('click', () => { state.taskMode = 'list'; renderTasks(); });
+  $('#task-queue-mode').addEventListener('click', () => { state.taskMode = 'queue'; renderTasks(); });
   $('#task-search').addEventListener('input', drawTasks);
   bindTableFilters('#task-filter-bar', drawTasks);
   bindSavedViews('tasks', '#task-filter-bar', drawTasks);
@@ -2420,6 +2489,7 @@ function filteredTasks() {
 
 function drawTasks() {
   if (state.taskMode === 'board') drawTaskBoard();
+  else if (state.taskMode === 'queue') drawDependencyQueue('task', filteredTasks(), '#task-content');
   else drawTaskList();
 }
 
@@ -2518,13 +2588,23 @@ function renderGoals() {
 }
 
 function renderPoints() {
-  $('#content').innerHTML = `<div class="panel compact-data-panel"><div class="toolbar module-toolbar" id="point-filter-bar"><strong>Otwarte punkty</strong><button id="point-list-mode" class="secondary ${state.pointMode === 'list' ? 'active-toggle' : ''}">Pełna lista</button><button id="point-reminder-mode" class="secondary ${state.pointMode === 'reminders' ? 'active-toggle' : ''}">Przypomnienia</button>${state.pointMode === 'list' ? '<input id="point-search" type="search" placeholder="Szukaj we wszystkich informacjach"><button type="button" class="mini" id="point-clear-filters">Wyczyść filtry</button>' : ''}${savedViewsToolbar('points')}</div></div><div id="point-content"></div>`;
+  const searchable = ['list', 'queue'].includes(state.pointMode);
+  $('#content').innerHTML = `<div class="panel compact-data-panel"><div class="toolbar module-toolbar" id="point-filter-bar"><strong>Otwarte punkty</strong><button id="point-list-mode" class="secondary ${state.pointMode === 'list' ? 'active-toggle' : ''}">Pełna lista</button><button id="point-reminder-mode" class="secondary ${state.pointMode === 'reminders' ? 'active-toggle' : ''}">Przypomnienia</button><button id="point-queue-mode" class="secondary ${state.pointMode === 'queue' ? 'active-toggle' : ''}">Kolejka</button>${searchable ? '<input id="point-search" type="search" placeholder="Szukaj we wszystkich informacjach">' : ''}${state.pointMode === 'list' ? '<button type="button" class="mini" id="point-clear-filters">Wyczyść filtry</button>' : ''}${savedViewsToolbar('points')}</div></div><div id="point-content"></div>`;
   $('#point-list-mode').addEventListener('click', () => { state.pointMode = 'list'; renderPoints(); });
   $('#point-reminder-mode').addEventListener('click', () => { state.pointMode = 'reminders'; renderPoints(); });
-  if (state.pointMode === 'reminders') drawReminderView(); else drawPointList();
+  $('#point-queue-mode').addEventListener('click', () => { state.pointMode = 'queue'; renderPoints(); });
+  if (state.pointMode === 'reminders') drawReminderView();
+  else if (state.pointMode === 'queue') drawDependencyQueue('point', filteredPoints(), '#point-content');
+  else drawPointList();
   if (state.pointMode === 'reminders') bindSavedViews('points', '#point-filter-bar', drawReminderView);
-  $('#point-search')?.addEventListener('input', drawPointRows);
+  if (state.pointMode === 'queue') bindSavedViews('points', '#point-filter-bar', () => drawDependencyQueue('point', filteredPoints(), '#point-content'));
+  $('#point-search')?.addEventListener('input', state.pointMode === 'queue' ? () => drawDependencyQueue('point', filteredPoints(), '#point-content') : drawPointRows);
   $('#point-clear-filters')?.addEventListener('click', () => { $('#point-search').value = ''; $$('#points-panel input[data-filter-text], #points-panel input[data-filter-date], #points-panel input[data-filter-min], #points-panel input[data-filter-max]').forEach(input => { input.value = ''; }); $$('#points-panel [data-filter-kind] input[type="checkbox"]').forEach(input => { input.checked = false; }); updateFilterSummaries('#points-panel'); drawPointRows(); });
+}
+
+function filteredPoints() {
+  const search = ($('#point-search')?.value || '').trim().toLowerCase();
+  return state.points.filter(item => !search || JSON.stringify(item).toLowerCase().includes(search));
 }
 
 function drawPointList() {
@@ -2542,8 +2622,7 @@ function drawPointList() {
 }
 
 function drawPointRows() {
-  const search = ($('#point-search')?.value || '').trim().toLowerCase();
-  const rows = sortRows(filterRows(state.points, '#points-panel').filter(item => !search || JSON.stringify(item).toLowerCase().includes(search)), state.sort.points);
+  const rows = sortRows(filterRows(filteredPoints(), '#points-panel'), state.sort.points);
   $('#points-body').innerHTML = rows.map(item => `<tr data-id="${item.id}"><td data-column="title" class="maincell">${escapeHtml(item.title)}<span class="sub">${escapeHtml(item.description)}</span><span class="sub">Utworzył: ${escapeHtml(item.created_by_name || 'dane historyczne')} · ${displayDate((item.created_at || '').slice(0, 10))}</span></td><td data-column="controller">${escapeHtml(controllerLabel(item))}</td><td data-column="category">${escapeHtml(item.category || '—')}</td><td data-column="subcategory">${escapeHtml(item.subcategory || '—')}</td><td data-column="status">${inlineEntityField('points', 'status', item, badge(item.status), 'priority')}</td><td data-column="waiting_for">${inlineEntityField('points', 'waiting_for', item, escapeHtml(item.waiting_for || '—'), 'textual')}</td><td data-column="owner_name">${inlineEntityField('points', 'owner_user_id', item, escapeHtml(item.owner_name || '—'), 'textual')}</td><td data-column="requirement_names">${inlineEntityField('points', 'requirement_ids', item, escapeHtml(item.requirement_names || '—'), 'textual')}</td><td data-column="due_date">${inlineEntityField('points', 'due_date', item, displayDate(item.due_date), 'date')}</td><td data-column="reminder_date">${inlineEntityField('points', 'reminder_date', item, displayDate(item.reminder_date), 'date')}</td></tr>`).join('') || '<tr><td colspan="10" class="empty">Brak wyników</td></tr>';
   $$('#points-body tr[data-id]').forEach(row => {
     const item = state.points.find(value => value.id === Number(row.dataset.id));
@@ -3309,12 +3388,12 @@ const formDefinitions = {
     ['controller', 'Sterownik', 'controller'], ['function_group_id', 'Grupa funkcyjna', 'function-group'], ['function_group_subcategory_id', 'Podkategoria grupy funkcyjnej', 'function-subcategory'], ['function_group_element_id', 'Obiekt / element grupy', 'function-element'], ['function_detail', 'Test / funkcja (instrukcja)', 'textarea'],
     ['category', 'Kategoria', 'category', 'status'], ['subcategory', 'Podkategoria', 'subcategory', 'status'],
     ['status', 'Status', 'select', ['Not started', 'Ready to test', 'In progress', 'Blocked', 'NOK / Rework', 'Retest required', 'Done', 'N/A']],
-    ['criticality', 'Krytyczność', 'select', ['Low', 'Medium', 'High', 'Critical']], ['responsible_user_ids', 'Osoby odpowiedzialne', 'users'],
+    ['criticality', 'Krytyczność', 'select', ['Low', 'Medium', 'High', 'Critical']], ['responsible_user_ids', 'Osoby odpowiedzialne', 'users'], ['dependency_refs', 'Zależności — elementy wymagane wcześniej', 'dependencies'],
     ['requirement_ids', 'Dodatkowe zapotrzebowanie', 'requirements'], ['current_note', 'Aktualna notatka', 'textarea'], ['evidence_link', 'Dodatkowe informacje / link'], ['links', 'Powiązane elementy', 'multi-links', ['task', 'point', 'note', 'goal']]
   ] },
   tasks: { endpoint: '/api/tasks', title: 'zadanie', fields: [
     ['hierarchy_target', 'Zakres w hierarchii projektu', 'hierarchy-target'], ['title', 'Tytuł', 'wide-text'], ['description', 'Opis', 'textarea'], ['info_link', 'Dodatkowe informacje / link', 'wide-text'],
-    ['direct_assignee_user_ids', 'Odpowiedzialni', 'users'], ['dependency_task_ids', 'Zależności — zadania wymagane wcześniej', 'task-dependencies'], ['checklist', 'Lista kontrolna', 'checklist'], ['scope_checklist', 'Kontrola sterowników w zakresie', 'scope-checklist'],
+    ['direct_assignee_user_ids', 'Odpowiedzialni', 'users'], ['dependency_refs', 'Zależności — elementy wymagane wcześniej', 'dependencies'], ['checklist', 'Lista kontrolna', 'checklist'], ['scope_checklist', 'Kontrola sterowników w zakresie', 'scope-checklist'],
     ['function_group_id', 'Grupa funkcyjna', 'function-group'], ['function_group_element_id', 'Element grupy funkcyjnej', 'function-element'], ['other_object', 'Inne (gdy nie dotyczy grupy)'],
     ['status', 'Status', 'select', ['To do', 'In progress', 'Done']], ['priority', 'Priorytet', 'select', ['Low', 'Medium', 'High', 'Critical']],
     ['start_date', 'Planowany start', 'date'], ['due_date', 'Deadline', 'date'], ['category', 'Kategoria zadania', 'category', 'task'], ['subcategory', 'Podkategoria zadania', 'subcategory', 'task'], ['requirement_ids', 'Dodatkowe zapotrzebowanie', 'requirements'],
@@ -3322,7 +3401,7 @@ const formDefinitions = {
   ] },
   points: { endpoint: '/api/open-points', title: 'otwarty punkt', fields: [
     ['controller', 'Sterownik', 'controller'], ['title', 'Temat'], ['owner_user_id', 'Odpowiedzialny', 'user'],
-    ['status', 'Status', 'select', ['Open', 'Waiting', 'In progress', 'Closed']], ['priority', 'Priorytet', 'select', ['Low', 'Medium', 'High', 'Critical']],
+    ['status', 'Status', 'select', ['Open', 'Waiting', 'In progress', 'Closed']], ['priority', 'Priorytet', 'select', ['Low', 'Medium', 'High', 'Critical']], ['dependency_refs', 'Zależności — elementy wymagane wcześniej', 'dependencies'],
     ['start_date', 'Planowany start', 'date'], ['due_date', 'Deadline', 'date'], ['reminder_date', 'Przypomnienie', 'date'],
     ['category', 'Kategoria', 'category', 'status'], ['subcategory', 'Podkategoria', 'subcategory', 'status'], ['waiting_for', 'Oczekiwanie na', 'options', 'waiting_for'], ['requirement_ids', 'Dodatkowe zapotrzebowanie', 'requirements'],
     ['links', 'Powiązane elementy', 'multi-links', ['status', 'task', 'point', 'note']], ['info_link', 'Dodatkowe informacje / link'],
@@ -3357,9 +3436,15 @@ async function openRecord(type, record = null, prefill = null, duplicateSource =
       state.goalPickerCollections = { status, task, point };
     } catch { state.goalPickerCollections = { status: state.status, task: state.tasks, point: state.points }; }
   }
-  if (type === 'tasks') {
-    try { state.taskDependencyOptions = await api('/api/tasks?controller=all'); }
-    catch { state.taskDependencyOptions = state.tasks; }
+  if (['status', 'tasks', 'points'].includes(type)) {
+    try {
+      const [status, task, point] = await Promise.all([api('/api/status?controller=all'), api('/api/tasks?controller=all'), api('/api/open-points?controller=all')]);
+      state.dependencyOptions = { status, task, point };
+      state.taskDependencyOptions = task;
+    } catch {
+      state.dependencyOptions = { status: state.status, task: state.tasks, point: state.points };
+      state.taskDependencyOptions = state.tasks;
+    }
   }
   state.dialog = { type, record, prefill, duplicateSource, auditLoaded: false };
   state.goalDraftLinks = source?.links ? source.links.map(link => ({ entity_type: link.entity_type, entity_id: Number(link.entity_id) })) : [];
@@ -3533,7 +3618,7 @@ function fieldHtml([name, label, type = 'text', extra], record, formType = '') {
   if (type === 'multi-links') return multiLinksField(extra);
   if (type === 'mentions') return mentionsField(record);
   if (type === 'requirements') return requirementsField(record, name, label);
-  if (type === 'task-dependencies') return taskDependenciesField(record);
+  if (type === 'dependencies') return dependenciesField(record, typeToEntity(formType));
   if (type === 'checklist') return checklistField(record);
   if (type === 'scope-checklist') return scopeChecklistField(record);
   if (type === 'goal-links') return goalLinksField();
@@ -3598,12 +3683,24 @@ function requirementsField(record, name = 'requirement_ids', label = 'Dodatkowe 
   return `<div class="field full requirement-field"><label>${escapeHtml(label)}</label><details class="multi-user-select" data-empty-label="Brak dodatkowych wymagań"><summary>${selectedNames.length ? `${selectedNames.length} · ${escapeHtml(selectedNames.join(', '))}` : 'Brak dodatkowych wymagań'}</summary><div class="mentions requirement-picks">${items.map(item => `<label class="mention" title="${escapeHtml(item.description || '')}"><input type="checkbox" name="${name}" value="${item.id}" ${selected.has(item.id) ? 'checked' : ''}><span><b>${escapeHtml(item.name)}</b>${item.description ? `<small>${escapeHtml(item.description)}</small>` : ''}</span></label>`).join('') || '<span class="form-hint">Lista jest pusta. Dodaj wymagania w Konfiguracji.</span>'}</div></details></div>`;
 }
 
-function taskDependenciesField(record) {
-  const selected = new Set((record?.dependency_task_ids || []).map(Number));
-  const tasks = (state.taskDependencyOptions.length ? state.taskDependencyOptions : state.tasks).filter(item => Number(item.id) !== Number(record?.id));
-  const selectedNames = tasks.filter(item => selected.has(Number(item.id))).map(item => item.title);
-  const rows = [...tasks].sort((a, b) => controllerHierarchyOrder(a) - controllerHierarchyOrder(b) || String(a.title).localeCompare(String(b.title), 'pl', { numeric: true }));
-  return `<div class="field full task-dependency-field"><label>Zależności — zadania wymagane wcześniej</label><details class="multi-user-select" data-empty-label="Brak zależności"><summary>${selectedNames.length ? `${selectedNames.length} · ${escapeHtml(selectedNames.join(', '))}` : 'Brak zależności'}</summary><div class="dependency-picks">${rows.map(item => `<label class="mention"><input type="checkbox" name="dependency_task_ids" value="${item.id}" ${selected.has(Number(item.id)) ? 'checked' : ''}><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(controllerLabel(item) || 'Cały projekt')} · ${escapeHtml(item.status)}</small></span></label>`).join('') || '<span class="form-hint">Brak innych zadań w projekcie.</span>'}</div></details></div>`;
+function dependenciesField(record, currentType) {
+  const collections = state.dependencyOptions || { status: state.status, task: state.tasks, point: state.points };
+  const selected = new Set((record?.dependency_refs || []).map(item => `${item.entity_type}:${Number(item.entity_id)}`));
+  const typeLabels = { status: 'Status', task: 'Zadania', point: 'Otwarte punkty' };
+  const rows = ['status', 'task', 'point'].flatMap(entityType => (collections[entityType] || [])
+    .filter(item => !(entityType === currentType && Number(item.id) === Number(record?.id)))
+    .map(item => ({ entityType, item })))
+    .sort((left, right) => left.entityType.localeCompare(right.entityType) || controllerHierarchyOrder(left.item) - controllerHierarchyOrder(right.item) || entityLabel(left.entityType, left.item).localeCompare(entityLabel(right.entityType, right.item), 'pl', { numeric: true }));
+  const selectedNames = rows.filter(({ entityType, item }) => selected.has(`${entityType}:${Number(item.id)}`)).map(({ entityType, item }) => `${typeLabels[entityType]} · ${entityLabel(entityType, item)}`);
+  const groups = ['status', 'task', 'point'].map(entityType => {
+    const items = rows.filter(row => row.entityType === entityType);
+    if (!items.length) return '';
+    return `<div class="dependency-group-label">${typeLabels[entityType]}</div>${items.map(({ item }) => {
+      const key = `${entityType}:${item.id}`;
+      return `<label class="mention"><input type="checkbox" name="dependency_refs" value="${key}" ${selected.has(key) ? 'checked' : ''}><span><b>${escapeHtml(entityLabel(entityType, item))}</b><small>${escapeHtml(controllerLabel(item) || 'Cały projekt')} · ${escapeHtml(item.status)}</small></span></label>`;
+    }).join('')}`;
+  }).join('');
+  return `<div class="field full task-dependency-field"><label>Zależności — elementy wymagane wcześniej</label><details class="multi-user-select" data-empty-label="Brak zależności"><summary>${selectedNames.length ? `${selectedNames.length} · ${escapeHtml(selectedNames.join(', '))}` : 'Brak zależności'}</summary><div class="dependency-picks">${groups || '<span class="form-hint">Brak innych elementów w projekcie.</span>'}</div></details><small class="form-hint">Element trafi do kolejki „Gotowe” dopiero po ukończeniu wszystkich wskazanych pozycji. Cykle są blokowane automatycznie.</small></div>`;
 }
 
 function multiLinksField(allowedTypes) {
@@ -3937,7 +4034,7 @@ function fieldLabel(field) { return ({
   due_date: 'Deadline', reminder_date: 'Przypomnienie', start_date: 'Planowany start', note_date: 'Data wpisu', checked_on: 'Data sprawdzenia', checked_by: 'Sprawdził',
   current_note: 'Aktualna notatka', environment: 'Środowisko', criticality: 'Krytyczność', evidence_link: 'Dowód / link', info_link: 'Dodatkowe informacje / link',
   impact: 'Wpływ', waiting_for: 'Oczekiwanie na', next_action: 'Następny krok', shift: 'Zmiana', type: 'Typ wpisu', content: 'Treść', author: 'Autor', comment: 'Dodany komentarz',
-  linked_entity_id: 'Powiązany element', linked_entity_type: 'Typ powiązania', checklist: 'Lista kontrolna / podzadania', scope_checklist: 'Kontrola sterowników w zakresie', links: 'Powiązania', requirement_ids: 'Dodatkowe zapotrzebowanie', dependency_task_ids: 'Zależności zadania'
+  linked_entity_id: 'Powiązany element', linked_entity_type: 'Typ powiązania', checklist: 'Lista kontrolna / podzadania', scope_checklist: 'Kontrola sterowników w zakresie', links: 'Powiązania', requirement_ids: 'Dodatkowe zapotrzebowanie', dependency_task_ids: 'Zależności zadania', dependency_refs: 'Zależności kolejki'
 })[field] || field.replaceAll('_', ' '); }
 
 function auditUserName(id) { return state.users.find(user => user.id === Number(id))?.display_name || 'Nieprzypisane'; }
@@ -3955,6 +4052,7 @@ function formatAuditValue(field, value) {
   if (field === 'links') return (value || []).map(auditLinkName).join(', ') || '—';
   if (field === 'requirement_ids') return (value || []).map(id => (state.config.requirements || []).find(item => item.id === Number(id))?.name || `Usunięte wymaganie`).join(', ') || '—';
   if (field === 'dependency_task_ids') return (value || []).map(id => (state.taskDependencyOptions.length ? state.taskDependencyOptions : state.tasks).find(item => item.id === Number(id))?.title || 'Usunięte zadanie').join(', ') || '—';
+  if (field === 'dependency_refs') return (value || []).map(link => auditLinkName(link)).join(', ') || '—';
   if (['due_date', 'reminder_date', 'start_date', 'note_date', 'checked_on'].includes(field)) return displayDate(String(value).slice(0, 10));
   if (Array.isArray(value)) return value.map(item => typeof item === 'object' ? Object.values(item).filter(part => typeof part !== 'object' && part !== null).join(' · ') : String(item)).join(', ') || '—';
   if (typeof value === 'object') return Object.entries(value).map(([key, item]) => `${fieldLabel(key)}: ${String(item ?? '—')}`).join('; ');
@@ -4000,6 +4098,10 @@ async function saveRecord(event) {
   input.mentioned_user_ids = formData.getAll('mentioned_user_ids').map(Number);
   input.direct_assignee_user_ids = formData.getAll('direct_assignee_user_ids').map(Number);
   input.dependency_task_ids = formData.getAll('dependency_task_ids').map(Number);
+  input.dependency_refs = formData.getAll('dependency_refs').map(value => {
+    const [entity_type, entityId] = value.split(':');
+    return { entity_type, entity_id: Number(entityId) };
+  }).filter(item => ['status', 'task', 'point'].includes(item.entity_type) && item.entity_id);
   input.responsible_user_ids = formData.getAll('responsible_user_ids').map(Number);
   input.requirement_ids = formData.getAll('requirement_ids').map(Number);
   input.scope_group_ids = formData.getAll('scope_group_ids').map(Number);

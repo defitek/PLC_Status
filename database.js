@@ -55,6 +55,7 @@ export function openDatabase(databasePath) {
   migrateToV12(db);
   migrateToV13(db);
   migrateToV14(db);
+  migrateEntityDependencies(db);
   const defaultProjectId = primaryProjectId(db);
   db.exec('CREATE INDEX IF NOT EXISTS idx_status_function_group ON status_items(function_group_id,function_group_check_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_status_project ON status_items(project_id,controller_id,status)');
@@ -69,6 +70,7 @@ export function openDatabase(databasePath) {
   migrateToV12(db);
   migrateToV13(db);
   migrateToV14(db);
+  migrateEntityDependencies(db);
   syncProjectMemberships(db);
   removeEmptyDuplicateControllerRoots(db);
   backfillV3(db);
@@ -89,6 +91,12 @@ function columnNames(db, table) {
 
 function ensureColumn(db, table, name, definition) {
   if (!columnNames(db, table).has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+}
+
+function migrateEntityDependencies(db) {
+  db.exec(`INSERT OR IGNORE INTO entity_dependencies(
+    project_id,dependent_type,dependent_id,prerequisite_type,prerequisite_id,created_by,created_at
+  ) SELECT project_id,'task',task_id,'task',prerequisite_task_id,created_by,created_at FROM task_dependencies`);
 }
 
 function primaryProjectId(db) {
@@ -1127,7 +1135,11 @@ function createRepository(db, defaultProjectId) {
       row.dependency_task_ids = all('SELECT prerequisite_task_id FROM task_dependencies WHERE project_id=? AND task_id=? ORDER BY prerequisite_task_id', activeProjectId(), id).map(item => item.prerequisite_task_id);
     }
     if (type === 'status') row.responsible_user_ids = all('SELECT user_id FROM status_assignees WHERE project_id=? AND status_id=? ORDER BY user_id', activeProjectId(), id).map(item => item.user_id);
-    if (['status', 'task', 'point'].includes(type)) row.requirement_ids = all('SELECT requirement_id FROM entity_requirements WHERE project_id=? AND entity_type=? AND entity_id=? ORDER BY requirement_id', activeProjectId(), type, id).map(item => item.requirement_id);
+    if (['status', 'task', 'point'].includes(type)) {
+      row.requirement_ids = all('SELECT requirement_id FROM entity_requirements WHERE project_id=? AND entity_type=? AND entity_id=? ORDER BY requirement_id', activeProjectId(), type, id).map(item => item.requirement_id);
+      row.dependency_refs = all(`SELECT prerequisite_type entity_type,prerequisite_id entity_id FROM entity_dependencies
+        WHERE project_id=? AND dependent_type=? AND dependent_id=? ORDER BY prerequisite_type,prerequisite_id`, activeProjectId(), type, id);
+    }
     row.mentioned_user_ids = all('SELECT user_id FROM entity_mentions WHERE project_id=? AND entity_type=? AND entity_id=? ORDER BY user_id', activeProjectId(), type, id).map(item => item.user_id);
     if (type === 'goal') row.links = all('SELECT entity_type,entity_id FROM goal_links WHERE project_id=? AND goal_id=? ORDER BY entity_type,entity_id', activeProjectId(), id);
     if (['status', 'task', 'point', 'note'].includes(type)) row.links = entityLinkRows(type, id);
@@ -1228,13 +1240,14 @@ function createRepository(db, defaultProjectId) {
     const source = baseSnapshot(type, asId(sourceId));
     if (!source) throw appError('Nie znaleziono elementu źródłowego do duplikacji', 404);
     const fields = {
-      status: ['controller_id', 'function_group_id', 'function_group_element_id', 'function_group_subcategory_id', 'station', 'function_detail', 'category', 'subcategory', 'criticality', 'status', 'checked_by', 'checked_on', 'current_note', 'evidence_link', 'responsible_user_ids', 'requirement_ids', 'links'],
-      task: ['controller_id', 'controller_group_id', 'title', 'description', 'station', 'function_group_id', 'function_group_element_id', 'other_object', 'priority', 'status', 'start_date', 'due_date', 'category', 'subcategory', 'info_link', 'direct_assignee_user_ids', 'checklist', 'scope_checklist', 'dependency_task_ids', 'requirement_ids', 'links'],
-      point: ['controller_id', 'title', 'description', 'impact', 'priority', 'owner_user_id', 'status', 'waiting_for', 'next_action', 'start_date', 'due_date', 'reminder_date', 'category', 'subcategory', 'info_link', 'requirement_ids', 'links'],
+      status: ['controller_id', 'function_group_id', 'function_group_element_id', 'function_group_subcategory_id', 'station', 'function_detail', 'category', 'subcategory', 'criticality', 'status', 'checked_by', 'checked_on', 'current_note', 'evidence_link', 'responsible_user_ids', 'dependency_refs', 'requirement_ids', 'links'],
+      task: ['controller_id', 'controller_group_id', 'title', 'description', 'station', 'function_group_id', 'function_group_element_id', 'other_object', 'priority', 'status', 'start_date', 'due_date', 'category', 'subcategory', 'info_link', 'direct_assignee_user_ids', 'checklist', 'scope_checklist', 'dependency_refs', 'requirement_ids', 'links'],
+      point: ['controller_id', 'title', 'description', 'impact', 'priority', 'owner_user_id', 'status', 'waiting_for', 'next_action', 'start_date', 'due_date', 'reminder_date', 'category', 'subcategory', 'info_link', 'dependency_refs', 'requirement_ids', 'links'],
       goal: ['controller_id', 'title', 'description', 'status', 'priority', 'due_date', 'links']
     }[type] || [];
     const normalize = (field, value) => {
       if (field === 'links') return normalizedLinks(value);
+      if (field === 'dependency_refs') return normalizedDependencyRefs(value).sort((a, b) => `${a.entity_type}:${a.entity_id}`.localeCompare(`${b.entity_type}:${b.entity_id}`));
       if (field === 'checklist') return (value || []).map((item, index) => ({ text: clean(item.text), done: item.done ? 1 : 0, weight: Number(item.weight || 1), owner_user_id: asId(item.owner_user_id), sort_order: index }));
       if (field === 'scope_checklist') return (value || []).map((item, index) => ({ controller_id: asId(item.controller_id), done: item.done ? 1 : 0, sort_order: index }));
       if (field.endsWith('_ids')) return [...new Set((value || []).map(Number).filter(Boolean))].sort((a, b) => a - b);
@@ -1295,36 +1308,112 @@ function createRepository(db, defaultProjectId) {
     return one(`SELECT status FROM ${table} WHERE id=? AND project_id=?`, link.entity_id, activeProjectId())?.status || null;
   }
 
-  function taskDependencyRows(taskId, direction = 'prerequisites') {
-    const prerequisite = direction === 'prerequisites';
-    const joinField = prerequisite ? 'td.prerequisite_task_id' : 'td.task_id';
-    const whereField = prerequisite ? 'td.task_id' : 'td.prerequisite_task_id';
-    return all(`SELECT t.id,t.title,t.status,t.priority,t.start_date,t.due_date,c.code controller,c.id controller_id,
-      td.lag_days,creator.display_name created_by_name,owner.display_name owner_name
-      FROM task_dependencies td JOIN tasks t ON t.id=${joinField}
-      JOIN controllers c ON c.id=t.controller_id
-      LEFT JOIN users creator ON creator.id=t.created_by LEFT JOIN users owner ON owner.id=t.owner_user_id
-      WHERE td.project_id=? AND ${whereField}=? ORDER BY t.due_date IS NULL,t.due_date,t.title`, activeProjectId(), taskId)
-      .map(row => attachControllerMeta(row));
+  const dependencyTypes = new Set(['status', 'task', 'point']);
+
+  function dependencyEntity(type, id) {
+    let row;
+    if (type === 'status') row = one(`SELECT s.id,s.function_detail title,s.status,s.criticality priority,NULL start_date,NULL due_date,
+      c.code controller,c.id controller_id,responsible.display_name owner_name
+      FROM status_items s JOIN controllers c ON c.id=s.controller_id
+      LEFT JOIN users responsible ON responsible.id=s.responsible_user_id
+      WHERE s.id=? AND s.project_id=?`, id, activeProjectId());
+    if (type === 'task') row = one(`SELECT t.id,t.title,t.status,t.priority,t.start_date,t.due_date,
+      c.code controller,c.id controller_id,owner.display_name owner_name
+      FROM tasks t JOIN controllers c ON c.id=t.controller_id LEFT JOIN users owner ON owner.id=t.owner_user_id
+      WHERE t.id=? AND t.project_id=?`, id, activeProjectId());
+    if (type === 'point') row = one(`SELECT p.id,p.title,p.status,p.priority,p.start_date,p.due_date,
+      c.code controller,c.id controller_id,owner.display_name owner_name
+      FROM open_points p JOIN controllers c ON c.id=p.controller_id LEFT JOIN users owner ON owner.id=p.owner_user_id
+      WHERE p.id=? AND p.project_id=?`, id, activeProjectId());
+    return row ? { ...attachControllerMeta(row), entity_type: type, entity_id: Number(row.id), is_complete: dependencyComplete(type, row.status) } : null;
   }
 
-  function setTaskDependencies(taskId, requested, currentUser) {
-    const ids = [...new Set((Array.isArray(requested) ? requested : []).map(asId).filter(Boolean))];
-    if (ids.includes(Number(taskId))) throw appError('Zadanie nie może zależeć od samego siebie');
-    for (const dependencyId of ids) {
-      if (!one('SELECT 1 FROM tasks WHERE id=? AND project_id=?', dependencyId, activeProjectId())) throw appError('Wybrane zadanie zależne nie należy do projektu');
+  function dependencyComplete(type, status) {
+    return type === 'task' ? status === 'Done' : type === 'status' ? ['Done', 'N/A'].includes(status) : type === 'point' ? status === 'Closed' : false;
+  }
+
+  function normalizedDependencyRefs(requested) {
+    return [...new Map((Array.isArray(requested) ? requested : []).map(item => {
+      const entityType = clean(item?.entity_type || item?.type);
+      const entityId = asId(item?.entity_id || item?.id);
+      return [`${entityType}:${entityId}`, { entity_type: entityType, entity_id: entityId }];
+    })).values()].filter(item => dependencyTypes.has(item.entity_type) && item.entity_id);
+  }
+
+  function dependencyRefs(type, id, direction = 'prerequisites') {
+    const prerequisite = direction === 'prerequisites';
+    const rows = prerequisite
+      ? all(`SELECT prerequisite_type entity_type,prerequisite_id entity_id FROM entity_dependencies
+          WHERE project_id=? AND dependent_type=? AND dependent_id=?`, activeProjectId(), type, id)
+      : all(`SELECT dependent_type entity_type,dependent_id entity_id FROM entity_dependencies
+          WHERE project_id=? AND prerequisite_type=? AND prerequisite_id=?`, activeProjectId(), type, id);
+    return rows.map(item => dependencyEntity(item.entity_type, item.entity_id)).filter(Boolean)
+      .sort((left, right) => Number(Boolean(left.due_date)) - Number(Boolean(right.due_date)) || String(left.due_date || '').localeCompare(String(right.due_date || '')) || left.title.localeCompare(right.title, 'pl'));
+  }
+
+  function validateEntityDependencies(type, id, requested) {
+    if (!dependencyTypes.has(type)) return [];
+    const refs = normalizedDependencyRefs(requested);
+    if (refs.some(item => item.entity_type === type && Number(item.entity_id) === Number(id))) throw appError('Element nie może zależeć od samego siebie');
+    for (const ref of refs) {
+      if (!dependencyEntity(ref.entity_type, ref.entity_id)) throw appError('Wybrany element zależny nie należy do projektu');
+      const cycle = one(`WITH RECURSIVE chain(entity_type,entity_id) AS (
+        SELECT prerequisite_type,prerequisite_id FROM entity_dependencies
+          WHERE project_id=? AND dependent_type=? AND dependent_id=?
+        UNION
+        SELECT ed.prerequisite_type,ed.prerequisite_id FROM entity_dependencies ed
+          JOIN chain c ON ed.dependent_type=c.entity_type AND ed.dependent_id=c.entity_id
+          WHERE ed.project_id=?
+      ) SELECT 1 found FROM chain WHERE entity_type=? AND entity_id=? LIMIT 1`,
+      activeProjectId(), ref.entity_type, ref.entity_id, activeProjectId(), type, id);
+      if (cycle) throw appError('Ta zależność utworzyłaby cykl w kolejce pracy');
     }
-    for (const dependencyId of ids) {
-      const cycle = one(`WITH RECURSIVE chain(id) AS (
-        SELECT prerequisite_task_id FROM task_dependencies WHERE project_id=? AND task_id=?
-        UNION SELECT td.prerequisite_task_id FROM task_dependencies td JOIN chain c ON td.task_id=c.id WHERE td.project_id=?
-      ) SELECT 1 found FROM chain WHERE id=? LIMIT 1`, activeProjectId(), dependencyId, activeProjectId(), taskId);
-      if (cycle) throw appError('Ta zależność utworzyłaby cykl pomiędzy zadaniami');
+    return refs;
+  }
+
+  function setEntityDependencies(type, id, requested, currentUser) {
+    if (!dependencyTypes.has(type)) return [];
+    const refs = validateEntityDependencies(type, id, requested);
+    db.prepare('DELETE FROM entity_dependencies WHERE project_id=? AND dependent_type=? AND dependent_id=?').run(activeProjectId(), type, id);
+    const insert = db.prepare(`INSERT INTO entity_dependencies(project_id,dependent_type,dependent_id,prerequisite_type,prerequisite_id,created_by)
+      VALUES(?,?,?,?,?,?)`);
+    refs.forEach(ref => insert.run(activeProjectId(), type, id, ref.entity_type, ref.entity_id, currentUser?.id || null));
+    if (type === 'task') {
+      db.prepare('DELETE FROM task_dependencies WHERE project_id=? AND task_id=?').run(activeProjectId(), id);
+      const legacyInsert = db.prepare('INSERT INTO task_dependencies(project_id,task_id,prerequisite_task_id,created_by) VALUES(?,?,?,?)');
+      refs.filter(ref => ref.entity_type === 'task').forEach(ref => legacyInsert.run(activeProjectId(), id, ref.entity_id, currentUser?.id || null));
     }
-    db.prepare('DELETE FROM task_dependencies WHERE project_id=? AND task_id=?').run(activeProjectId(), taskId);
-    const insert = db.prepare('INSERT INTO task_dependencies(project_id,task_id,prerequisite_task_id,created_by) VALUES(?,?,?,?)');
-    for (const dependencyId of ids) insert.run(activeProjectId(), taskId, dependencyId, currentUser?.id || null);
-    return ids;
+    return refs;
+  }
+
+  function assertDependencyTransition(type, previousStatus, nextStatus, requested) {
+    if (previousStatus === nextStatus) return;
+    const guarded = type === 'task' ? ['In progress', 'Done']
+      : type === 'status' ? ['Ready to test', 'In progress', 'Done']
+        : type === 'point' ? ['In progress', 'Closed'] : [];
+    if (!guarded.includes(nextStatus)) return;
+    const blockers = normalizedDependencyRefs(requested).map(ref => dependencyEntity(ref.entity_type, ref.entity_id)).filter(item => item && !item.is_complete);
+    if (blockers.length) throw appError(`Najpierw ukończ wymagane elementy (${blockers.map(item => item.title).join(', ')})`);
+  }
+
+  function dependencyState(type, row) {
+    const dependencies = dependencyRefs(type, row.id, 'prerequisites');
+    const dependents = dependencyRefs(type, row.id, 'dependents');
+    const blockedBy = dependencies.filter(item => !item.is_complete);
+    const complete = dependencyComplete(type, row.status);
+    const manuallyBlocked = (type === 'status' && row.status === 'Blocked') || (type === 'point' && row.status === 'Waiting');
+    const active = type === 'task' ? row.status === 'In progress'
+      : type === 'status' ? ['Ready to test', 'In progress', 'NOK / Rework', 'Retest required'].includes(row.status)
+        : row.status === 'In progress';
+    return {
+      dependencies,
+      dependents,
+      dependency_refs: dependencies.map(item => ({ entity_type: item.entity_type, entity_id: item.entity_id })),
+      blocked_by_dependencies: blockedBy.length,
+      blocking_dependencies: blockedBy,
+      unblocks_count: dependents.filter(item => !item.is_complete).length,
+      queue_state: complete ? 'completed' : blockedBy.length || manuallyBlocked ? 'blocked' : active ? 'in_progress' : 'ready'
+    };
   }
 
   function decorateStatus(row, currentUser) {
@@ -1342,7 +1431,8 @@ function createRepository(db, defaultProjectId) {
       responsible_name: assignees.map(item => item.display_name).join(', ') || row.responsible_name || '',
       mentioned_user_ids: [], comments: commentRows('status', row.id), requirements,
       requirement_ids: requirements.map(item => item.id), requirement_names: requirements.map(item => item.name).join(', '),
-      can_delete: ['system_admin', 'project_admin'].includes(currentUser.role)
+      can_delete: ['system_admin', 'project_admin'].includes(currentUser.role),
+      ...dependencyState('status', row)
     };
   }
 
@@ -1361,8 +1451,7 @@ function createRepository(db, defaultProjectId) {
     const totalWeight = checklist.reduce((sum, item) => sum + Number(item.weight || 1), 0) + scopeChecklist.length;
     const doneWeight = checklist.filter(item => item.done).reduce((sum, item) => sum + Number(item.weight || 1), 0) + scopeChecklist.filter(item => item.done).length;
     const progress = totalWeight ? Math.round(doneWeight * 100 / totalWeight) : row.status === 'Done' ? 100 : row.status === 'In progress' ? 50 : 0;
-    const dependencies = taskDependencyRows(row.id, 'prerequisites');
-    const dependents = taskDependencyRows(row.id, 'dependents');
+    const dependency = dependencyState('task', row);
     return {
       ...row,
       checklist,
@@ -1375,10 +1464,8 @@ function createRepository(db, defaultProjectId) {
       direct_assignee_user_ids: assignees.filter(item => item.assigned_directly).map(item => item.user_id),
       owner_name: assignees.map(item => item.display_name).join(', ') || row.owner_name || '',
       progress,
-      dependencies,
-      dependents,
-      dependency_task_ids: dependencies.map(item => item.id),
-      blocked_by_dependencies: dependencies.filter(item => item.status !== 'Done').length,
+      ...dependency,
+      dependency_task_ids: dependency.dependencies.filter(item => item.entity_type === 'task').map(item => item.id),
       links: entityLinkRows('task', row.id),
       mentioned_user_ids: [], comments: commentRows('task', row.id), requirements,
       requirement_ids: requirements.map(item => item.id), requirement_names: requirements.map(item => item.name).join(', '),
@@ -1388,7 +1475,7 @@ function createRepository(db, defaultProjectId) {
 
   function decoratePoint(row, currentUser) {
     const requirements = requirementRows('point', row.id);
-    return { ...row, links: entityLinkRows('point', row.id), mentioned_user_ids: mentionIds('point', row.id), comments: commentRows('point', row.id), requirements, requirement_ids: requirements.map(item => item.id), requirement_names: requirements.map(item => item.name).join(', '), can_delete: ['system_admin', 'project_admin'].includes(currentUser.role) };
+    return { ...row, links: entityLinkRows('point', row.id), mentioned_user_ids: mentionIds('point', row.id), comments: commentRows('point', row.id), requirements, requirement_ids: requirements.map(item => item.id), requirement_names: requirements.map(item => item.name).join(', '), can_delete: ['system_admin', 'project_admin'].includes(currentUser.role), ...dependencyState('point', row) };
   }
 
   function decorateNote(row, currentUser) {
@@ -1519,6 +1606,8 @@ function createRepository(db, defaultProjectId) {
     const table = TABLES[type];
     const before = baseSnapshot(type, id);
     if (!before) throw appError('Nie znaleziono rekordu', 404);
+    if (dependencyTypes.has(type)) db.prepare(`DELETE FROM entity_dependencies WHERE project_id=? AND
+      ((dependent_type=? AND dependent_id=?) OR (prerequisite_type=? AND prerequisite_id=?))`).run(activeProjectId(), type, id, type, id);
     db.prepare(`DELETE FROM ${table} WHERE id=?`).run(id);
     db.prepare('DELETE FROM entity_mentions WHERE project_id=? AND entity_type=? AND entity_id=?').run(activeProjectId(), type, id);
     db.prepare('DELETE FROM entity_links WHERE project_id=? AND ((source_type=? AND source_id=?) OR (target_type=? AND target_id=?))').run(activeProjectId(), type, id, type, id);
@@ -1654,9 +1743,7 @@ function createRepository(db, defaultProjectId) {
   function taskMetrics(controllerIds) {
     const rows = taskMetricRows(controllerIds);
     const todayValue = new Date().toISOString().slice(0, 10);
-    const unfinished = new Set(rows.filter(row => row.status !== 'Done').map(row => row.id));
-    const blocked = unfinished.size ? all(`SELECT DISTINCT td.task_id FROM task_dependencies td JOIN tasks prerequisite ON prerequisite.id=td.prerequisite_task_id
-      WHERE td.project_id=? AND prerequisite.status!='Done'`, activeProjectId()).filter(row => unfinished.has(Number(row.task_id))).length : 0;
+    const blocked = rows.filter(row => row.status !== 'Done' && dependencyRefs('task', row.id).some(item => !item.is_complete)).length;
     return {
       total: rows.length,
       todo: rows.filter(row => row.status === 'To do').length,
@@ -1765,7 +1852,7 @@ function createRepository(db, defaultProjectId) {
     ['task_scope_checklist', 'task_id IN (SELECT id FROM tasks WHERE project_id=?)'],
     ['task_assignees', 'project_id=?'], ['project_user_areas', 'project_id=?'], ['planner_entries', 'project_id=?'], ['planner_requirements', 'project_id=?'], ['planner_holidays', 'project_id=?'], ['planner_absences', 'project_id=?'], ['planner_time_adjustments', 'project_id=?'],
     ['calendar_annotations', 'project_id=?'], ['calendar_item_dates', 'project_id=?'],
-    ['open_points', 'project_id=?'], ['daily_notes', 'project_id=?'], ['goals', 'project_id=?'],
+    ['open_points', 'project_id=?'], ['entity_dependencies', 'project_id=?'], ['daily_notes', 'project_id=?'], ['goals', 'project_id=?'],
     ['daily_note_sections', 'project_id=?'], ['daily_note_section_scopes', 'section_id IN (SELECT id FROM daily_note_sections WHERE project_id=?)'],
     ['daily_note_section_links', 'section_id IN (SELECT id FROM daily_note_sections WHERE project_id=?)'],
     ['goal_links', 'project_id=?'], ['entity_mentions', 'project_id=?'], ['entity_links', 'project_id=?'], ['entity_requirements', 'project_id=?'], ['entity_comments', 'project_id=?'], ['notifications', 'project_id=?'],
@@ -1791,7 +1878,7 @@ function createRepository(db, defaultProjectId) {
   const projectRestoreOrder = [
     'controller_groups', 'controllers', 'categories', 'subcategories', 'task_categories', 'task_subcategories',
     'options', 'settings', 'completion_requirements', 'function_groups', 'function_group_elements', 'function_group_subcategories', 'function_group_checks',
-    'function_group_check_subcategories', 'status_items', 'status_assignees', 'tasks', 'task_dependencies', 'task_checklist', 'task_scope_checklist', 'task_assignees', 'open_points',
+    'function_group_check_subcategories', 'status_items', 'status_assignees', 'tasks', 'task_dependencies', 'task_checklist', 'task_scope_checklist', 'task_assignees', 'open_points', 'entity_dependencies',
     'daily_notes', 'daily_note_sections', 'daily_note_section_scopes', 'daily_note_section_links', 'goals', 'goal_links', 'entity_mentions', 'entity_links', 'entity_requirements', 'entity_requirement_status', 'entity_comments', 'notifications', 'audit_log',
     'export_templates', 'project_sequences', 'project_user_areas', 'planner_entries', 'planner_requirements', 'planner_holidays', 'planner_absences', 'planner_time_adjustments',
     'announcements', 'announcement_labels', 'announcement_scopes', 'announcement_users', 'announcement_links', 'announcement_label_links', 'announcement_reads', 'calendar_annotations', 'calendar_item_dates',
@@ -1865,6 +1952,7 @@ function createRepository(db, defaultProjectId) {
       db.prepare(`INSERT OR IGNORE INTO entity_links(project_id,source_type,source_id,target_type,target_id,created_by)
         SELECT gl.project_id,gl.entity_type,gl.entity_id,'goal',gl.goal_id,g.created_by
         FROM goal_links gl JOIN goals g ON g.id=gl.goal_id AND g.project_id=gl.project_id WHERE gl.project_id=?`).run(projectId);
+      migrateEntityDependencies(db);
       db.exec('COMMIT');
     } catch (error) {
       db.exec('ROLLBACK');
@@ -2888,6 +2976,7 @@ function createRepository(db, defaultProjectId) {
     const tasks = taskRows('all', currentUser).filter(task => task.status !== 'Done');
     const ids = new Set(tasks.map(task => task.id));
     const edges = all('SELECT * FROM task_dependencies WHERE project_id=? ORDER BY task_id,prerequisite_task_id', activeProjectId()).filter(edge => ids.has(edge.task_id) && ids.has(edge.prerequisite_task_id));
+    const totalEdges = Number(one('SELECT COUNT(*) count FROM entity_dependencies WHERE project_id=?', activeProjectId())?.count || 0);
     const prerequisites = new Map(tasks.map(task => [task.id, []]));
     const dependents = new Map(tasks.map(task => [task.id, []]));
     edges.forEach(edge => { prerequisites.get(edge.task_id).push(edge); dependents.get(edge.prerequisite_task_id).push(edge); });
@@ -2915,8 +3004,8 @@ function createRepository(db, defaultProjectId) {
     const critical_path = pathIds.map(id => {
       const task = tasks.find(item => item.id === id); return { entity_type: 'task', entity_id: id, title: task.title, scope_label: operationScope(task), status: task.status, priority: task.priority, duration_days: duration(task), cumulative_days: score.get(id) };
     });
-    const blocked_tasks = tasks.filter(task => Number(task.blocked_by_dependencies || 0) > 0).map(task => ({ entity_type: 'task', entity_id: task.id, title: task.title, scope_label: operationScope(task), blocked_by: task.dependencies.filter(item => item.status !== 'Done').map(item => ({ id: item.id, title: item.title, status: item.status })) }));
-    return { tasks: tasks.length, edges: edges.length, cycle_count, total_days: critical_path.at(-1)?.cumulative_days || 0, critical_path, blocked_tasks };
+    const blocked_tasks = tasks.filter(task => Number(task.blocked_by_dependencies || 0) > 0).map(task => ({ entity_type: 'task', entity_id: task.id, title: task.title, scope_label: operationScope(task), blocked_by: task.dependencies.filter(item => !item.is_complete).map(item => ({ id: item.id, entity_type: item.entity_type, title: item.title, status: item.status })) }));
+    return { tasks: tasks.length, edges: totalEdges, cycle_count, total_days: critical_path.at(-1)?.cumulative_days || 0, critical_path, blocked_tasks };
   }
 
   function scopeControllerIds(scopeType, scopeId) {
@@ -4371,6 +4460,8 @@ function createRepository(db, defaultProjectId) {
       const before = id ? baseSnapshot('status', id) : null;
       if (id && !before) throw appError('Nie znaleziono punktu statusu', 404);
       assertFresh('status', id, input.updated_at);
+      const requestedDependencies = Array.isArray(input.dependency_refs) ? input.dependency_refs : before?.dependency_refs || [];
+      if (id) validateEntityDependencies('status', id, requestedDependencies);
       const requestedOwners = Array.isArray(input.responsible_user_ids) ? input.responsible_user_ids
         : asId(input.responsible_user_id) ? [asId(input.responsible_user_id)] : before?.responsible_user_ids || [];
       const ownerIds = [...new Set(requestedOwners.map(asId).filter(Boolean))];
@@ -4396,11 +4487,12 @@ function createRepository(db, defaultProjectId) {
         current_note: clean(input.current_note), evidence_link: clean(input.evidence_link)
       };
       if (!values.function_detail) throw appError('Pole „Test / funkcja” jest wymagane');
+      assertDependencyTransition('status', before?.status || null, values.status, requestedDependencies);
       if (id && !['Done', 'N/A'].includes(before.status) && ['Done', 'N/A'].includes(values.status)) assertDefinitionOfDone('status', id, values.status);
       if (!id && ['Done', 'N/A'].includes(values.status) && (input.requirement_ids || []).length) throw appError('Nowy punkt z Definition of Done zapisz najpierw jako otwarty');
       if (id) values.test_id = before.test_id;
       if (id && before.function_group_id !== values.function_group_id) values.function_group_check_id = null;
-      ensureDuplicateChanged('status', input.duplicate_source_id, { ...values, responsible_user_ids: ownerIds, requirement_ids: input.requirement_ids || [], links: input.links || [] });
+      ensureDuplicateChanged('status', input.duplicate_source_id, { ...values, responsible_user_ids: ownerIds, dependency_refs: requestedDependencies, requirement_ids: input.requirement_ids || [], links: input.links || [] });
       let recordId = id;
       if (id) updateRecord('status_items', id, values, Object.keys(values));
       else {
@@ -4413,6 +4505,7 @@ function createRepository(db, defaultProjectId) {
       setMentions('status', recordId, []);
       setEntityRequirements('status', recordId, input.requirement_ids);
       if (Array.isArray(input.links)) setEntityLinks('status', recordId, input.links, currentUser);
+      setEntityDependencies('status', recordId, requestedDependencies, currentUser);
       const after = baseSnapshot('status', recordId);
       writeAudit('status', recordId, id ? 'update' : 'create', currentUser, before, after);
       return decorateStatus(attachControllerMeta({ ...after, controller: one('SELECT code FROM controllers WHERE id=?', after.controller_id).code, created_by_name: userName(after.created_by), responsible_name: userName(after.responsible_user_id) }), currentUser);
@@ -4454,7 +4547,10 @@ function createRepository(db, defaultProjectId) {
       if (id && !before) throw appError('Nie znaleziono zadania', 404);
       assertFresh('task', id, input.updated_at);
       const checklist = Array.isArray(input.checklist) ? input.checklist : before?.checklist || [];
-      const dependencyTaskIds = Array.isArray(input.dependency_task_ids) ? input.dependency_task_ids : before?.dependency_task_ids || [];
+      const requestedDependencies = Array.isArray(input.dependency_refs) && (input.dependency_refs.length || !Array.isArray(input.dependency_task_ids)) ? input.dependency_refs
+        : Array.isArray(input.dependency_task_ids) ? input.dependency_task_ids.map(entity_id => ({ entity_type: 'task', entity_id }))
+          : before?.dependency_refs || [];
+      if (id) validateEntityDependencies('task', id, requestedDependencies);
       const hierarchyTarget = clean(input.hierarchy_target);
       const scopeGroupId = hierarchyTarget.startsWith('group:') ? asId(hierarchyTarget.slice(6)) : asId(input.controller_group_id ?? before?.controller_group_id);
       let targetController;
@@ -4489,9 +4585,10 @@ function createRepository(db, defaultProjectId) {
         info_link: clean(input.info_link), linked_entity_type: clean(input.linked_entity_type), linked_entity_id: asId(input.linked_entity_id), linked_test_id: null
       };
       if (!values.title) throw appError('Tytuł zadania jest wymagany');
+      assertDependencyTransition('task', before?.status || null, values.status, requestedDependencies);
       if (id && before.status !== 'Done' && values.status === 'Done') assertDefinitionOfDone('task', id, values.status);
       if (!id && values.status === 'Done' && (input.requirement_ids || []).length) throw appError('Nowe zadanie z Definition of Done zapisz najpierw jako otwarte');
-      ensureDuplicateChanged('task', input.duplicate_source_id, { ...values, direct_assignee_user_ids: directUserIds, checklist, scope_checklist: input.scope_checklist || [], dependency_task_ids: dependencyTaskIds, requirement_ids: input.requirement_ids || [], links: input.links || [] });
+      ensureDuplicateChanged('task', input.duplicate_source_id, { ...values, direct_assignee_user_ids: directUserIds, checklist, scope_checklist: input.scope_checklist || [], dependency_refs: requestedDependencies, requirement_ids: input.requirement_ids || [], links: input.links || [] });
       let recordId = id;
       if (id) updateRecord('tasks', id, values, Object.keys(values));
       else recordId = insertRecord('tasks', { ...values, created_by: currentUser.id });
@@ -4503,7 +4600,7 @@ function createRepository(db, defaultProjectId) {
       setMentions('task', recordId, []);
       setEntityRequirements('task', recordId, input.requirement_ids);
       if (Array.isArray(input.links)) setEntityLinks('task', recordId, input.links, currentUser);
-      setTaskDependencies(recordId, dependencyTaskIds, currentUser);
+      setEntityDependencies('task', recordId, requestedDependencies, currentUser);
       const after = baseSnapshot('task', recordId);
       writeAudit('task', recordId, id ? 'update' : 'create', currentUser, before, after);
       const previousAssignees = before ? [...(before.direct_assignee_user_ids || []), ...(before.checklist || []).map(item => item.owner_user_id).filter(Boolean)] : [];
@@ -4523,6 +4620,8 @@ function createRepository(db, defaultProjectId) {
       const before = id ? baseSnapshot('point', id) : null;
       if (id && !before) throw appError('Nie znaleziono otwartego punktu', 404);
       assertFresh('point', id, input.updated_at);
+      const requestedDependencies = Array.isArray(input.dependency_refs) ? input.dependency_refs : before?.dependency_refs || [];
+      if (id) validateEntityDependencies('point', id, requestedDependencies);
       const ownerId = asId(input.owner_user_id);
       const defaultDays = Number(one("SELECT value FROM settings WHERE project_id=? AND key='default_reminder_days'", activeProjectId())?.value || 14);
       const defaultReminder = new Date();
@@ -4537,10 +4636,11 @@ function createRepository(db, defaultProjectId) {
         linked_entity_type: clean(input.linked_entity_type), linked_entity_id: asId(input.linked_entity_id), linked_test_id: null
       };
       if (!values.title) throw appError('Temat otwartego punktu jest wymagany');
+      assertDependencyTransition('point', before?.status || null, values.status, requestedDependencies);
       if (id && before.status !== 'Closed' && values.status === 'Closed') assertDefinitionOfDone('point', id, values.status);
       if (!id && values.status === 'Closed' && (input.requirement_ids || []).length) throw appError('Nowy punkt z Definition of Done zapisz najpierw jako otwarty');
       if (id) values.issue_id = before.issue_id;
-      ensureDuplicateChanged('point', input.duplicate_source_id, { ...values, requirement_ids: input.requirement_ids || [], links: input.links || [] });
+      ensureDuplicateChanged('point', input.duplicate_source_id, { ...values, dependency_refs: requestedDependencies, requirement_ids: input.requirement_ids || [], links: input.links || [] });
       let recordId = id;
       if (id) updateRecord('open_points', id, values, Object.keys(values));
       else {
@@ -4550,6 +4650,7 @@ function createRepository(db, defaultProjectId) {
       setMentions('point', recordId, input.mentioned_user_ids);
       setEntityRequirements('point', recordId, input.requirement_ids);
       if (Array.isArray(input.links)) setEntityLinks('point', recordId, input.links, currentUser);
+      setEntityDependencies('point', recordId, requestedDependencies, currentUser);
       const after = baseSnapshot('point', recordId);
       writeAudit('point', recordId, id ? 'update' : 'create', currentUser, before, after);
       const row = one(`SELECT p.*,c.code controller,creator.display_name created_by_name,owner.display_name owner_name FROM open_points p JOIN controllers c ON c.id=p.controller_id LEFT JOIN users creator ON creator.id=p.created_by LEFT JOIN users owner ON owner.id=p.owner_user_id WHERE p.id=?`, recordId);

@@ -620,6 +620,18 @@ CREATE TABLE IF NOT EXISTS task_dependencies (
   CHECK(task_id!=prerequisite_task_id)
 ) STRICT, WITHOUT ROWID;
 
+CREATE TABLE IF NOT EXISTS entity_dependencies (
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  dependent_type TEXT NOT NULL CHECK(dependent_type IN ('status','task','point')),
+  dependent_id INTEGER NOT NULL,
+  prerequisite_type TEXT NOT NULL CHECK(prerequisite_type IN ('status','task','point')),
+  prerequisite_id INTEGER NOT NULL,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(dependent_type,dependent_id,prerequisite_type,prerequisite_id),
+  CHECK(dependent_type!=prerequisite_type OR dependent_id!=prerequisite_id)
+) STRICT, WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS shift_handovers (
   id INTEGER PRIMARY KEY,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -926,6 +938,8 @@ CREATE INDEX IF NOT EXISTS idx_planner_absences_date ON planner_absences(project
 CREATE INDEX IF NOT EXISTS idx_planner_time_adjustments_date ON planner_time_adjustments(project_id,plan_date,user_id);
 CREATE INDEX IF NOT EXISTS idx_saved_views_owner ON saved_views(project_id,module,visibility,owner_user_id);
 CREATE INDEX IF NOT EXISTS idx_task_dependencies_task ON task_dependencies(project_id,task_id,prerequisite_task_id);
+CREATE INDEX IF NOT EXISTS idx_entity_dependencies_dependent ON entity_dependencies(project_id,dependent_type,dependent_id);
+CREATE INDEX IF NOT EXISTS idx_entity_dependencies_prerequisite ON entity_dependencies(project_id,prerequisite_type,prerequisite_id);
 CREATE INDEX IF NOT EXISTS idx_handovers_date ON shift_handovers(project_id,handover_date,status);
 CREATE INDEX IF NOT EXISTS idx_automation_rules_project ON automation_rules(project_id,active,trigger_type);
 CREATE INDEX IF NOT EXISTS idx_templates_project ON commissioning_templates(project_id,active,name);

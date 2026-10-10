@@ -830,7 +830,55 @@ test('V12 supports operational views, dependencies, handovers, automation and co
 
       const backup = repository.projectBackup();
       assert.equal(backup.version, 14);
-      for (const table of ['saved_views', 'task_dependencies', 'shift_handovers', 'automation_rules', 'commissioning_templates']) assert.ok(Array.isArray(backup.tables[table]));
+      for (const table of ['saved_views', 'task_dependencies', 'entity_dependencies', 'shift_handovers', 'automation_rules', 'commissioning_templates']) assert.ok(Array.isArray(backup.tables[table]));
+    });
+  } finally {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
+test('dependency queue spans tasks, status and open points and rejects cross-module cycles', () => {
+  const temporary = temporaryDatabase();
+  const repository = openDatabase(temporary.path);
+  try {
+    const account = repository.authenticate('admin');
+    const admin = repository.me(account.id);
+    repository.withProject(1, () => {
+      const controller = repository.controllers()[0].code;
+      const task = repository.saveTask(null, { controller, title: 'Kolejka · przygotowanie', status: 'To do' }, admin);
+      const status = repository.saveStatus(null, {
+        controller, function_detail: 'Kolejka · test', category: 'General', status: 'Not started',
+        dependency_refs: [{ entity_type: 'task', entity_id: task.id }]
+      }, admin);
+      const point = repository.savePoint(null, {
+        controller, title: 'Kolejka · odbiór', status: 'Open',
+        dependency_refs: [{ entity_type: 'status', entity_id: status.id }]
+      }, admin);
+      const finalTask = repository.saveTask(null, {
+        controller, title: 'Kolejka · zamknięcie', status: 'To do',
+        dependency_refs: [{ entity_type: 'status', entity_id: status.id }, { entity_type: 'point', entity_id: point.id }]
+      }, admin);
+
+      assert.equal(repository.tasks('all', admin).find(item => item.id === task.id).queue_state, 'ready');
+      assert.equal(repository.status('all', admin).find(item => item.id === status.id).queue_state, 'blocked');
+      assert.equal(repository.points('all', admin).find(item => item.id === point.id).queue_state, 'blocked');
+      assert.equal(repository.tasks('all', admin).find(item => item.id === finalTask.id).blocked_by_dependencies, 2);
+      assert.throws(() => repository.savePoint(point.id, { ...point, controller, status: 'In progress' }, admin), /Najpierw ukończ/i);
+      assert.throws(() => repository.saveTask(task.id, {
+        ...task, controller, dependency_refs: [{ entity_type: 'point', entity_id: point.id }]
+      }, admin), /cykl/i);
+
+      repository.saveTask(task.id, { ...task, controller, status: 'Done' }, admin);
+      const readyStatus = repository.status('all', admin).find(item => item.id === status.id);
+      assert.equal(readyStatus.queue_state, 'ready');
+      assert.equal(readyStatus.unblocks_count, 2);
+
+      repository.saveStatus(status.id, { ...readyStatus, controller, status: 'Done' }, admin);
+      const readyPoint = repository.points('all', admin).find(item => item.id === point.id);
+      assert.equal(readyPoint.queue_state, 'ready');
+      repository.savePoint(point.id, { ...readyPoint, controller, status: 'Closed' }, admin);
+      assert.equal(repository.tasks('all', admin).find(item => item.id === finalTask.id).queue_state, 'ready');
     });
   } finally {
     repository.close();
