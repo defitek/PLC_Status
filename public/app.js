@@ -5,8 +5,8 @@ const state = {
   dialog: null, dialogInitial: '', dirtyCloseAttempt: new WeakSet(), goalDraftLinks: [], goalPickerCollections: null, linkDraft: [], statusMode: 'list', taskMode: 'board', taskShowCompleted: false, pointMode: 'list', trendPeriod: 'week',
   functionGroupController: '', functionPointGroup: null, functionPointDraft: [], quickStatusDraft: [],
   notesFrom: '', notesTo: '', notesWeek: '', draggingTask: false, plannerFrom: '', plannerDays: 14, plannerShowHours: false,
-  plannerCell: null, plannerClipboard: null, plannerDragEntry: null, plannerDragDay: null, plannerDragging: false, plannerSelectionMode: false, plannerSelection: new Set(), plannerSelectionAbort: null, calendarFrom: '', calendarTo: '', calendarMode: 'week', calendarTypes: ['task', 'point', 'status', 'goal', 'note', 'annotation'], calendarPriorities: ['Low', 'Medium', 'High', 'Critical'], calendarOnlyMine: false, calendarCategory: '',
-  requirementFrom: '', requirementDays: 14, requirementData: null, requirementDraft: new Map(), requirementBaseline: new Map(), requirementDirty: new Set(), requirementSelection: null, requirementCollapsedGroups: new Set(), requirementGridAbort: null, requirementPointerSelecting: false, requirementFill: null,
+  plannerCell: null, plannerClipboard: null, plannerDragEntry: null, plannerDragDay: null, plannerDragging: false, plannerSelection: new Set(), plannerEntrySelection: new Set(), plannerSelectionAbort: null, calendarFrom: '', calendarTo: '', calendarMode: 'week', calendarTypes: ['task', 'point', 'status', 'goal', 'note', 'annotation'], calendarPriorities: ['Low', 'Medium', 'High', 'Critical'], calendarOnlyMine: false, calendarCategory: '',
+  plannerRequirementEdit: false, requirementProjectId: null, requirementLevel: 'areas', requirementFrom: '', requirementDays: 14, requirementData: null, requirementDraft: new Map(), requirementBaseline: new Map(), requirementDirty: new Set(), requirementSelection: null, requirementCollapsedGroups: new Set(), requirementGridAbort: null, requirementPointerSelecting: false, requirementFill: null,
   kpiModules: ['status', 'tasks', 'points', 'goals'], globalTrendMode: 'combined', overviewDetailed: false, detailedKpiMode: 'combined', detailedKpiPeriod: 'week', linkPickerAllowed: [], linkPickerDraft: [], linkPickerCollections: null, actionResolve: null, actionDialogGeneration: 0, actionClosingGeneration: 0, configPanel: null, configScroll: 0, hierarchySelection: null, dailySummaryOpening: false,
   selectionContext: null, selectionDraft: [], selectionCollections: null, duplicateSource: null, checklistTask: null, notificationSeen: new Set(),
   announcementLabelFilter: '', announcementImportanceFilter: '', liveSource: null, liveRefreshTimer: null,
@@ -579,7 +579,7 @@ function bindShell() {
   $('#planner-form').addEventListener('submit', savePlannerCell);
   $('#planner-day-kind').addEventListener('change', updatePlannerDayKind);
   $('#planner-requirements-close').addEventListener('click', () => $('#planner-requirements-dialog').close());
-  $('#requirement-level').addEventListener('change', () => { state.requirementSelection = null; renderPlannerRequirementsCalendar(); });
+  $('#requirement-level').addEventListener('change', event => { state.requirementLevel = event.target.value; state.requirementSelection = null; renderPlannerRequirementsCalendar(); });
   $('#requirement-days').addEventListener('change', async event => { state.requirementDays = Number(event.target.value); await loadPlannerRequirementRange(); });
   $$('.requirement-shift').forEach(button => button.addEventListener('click', async () => { state.requirementFrom = addDays(state.requirementFrom, button.dataset.days === 'previous' ? -state.requirementDays : state.requirementDays); await loadPlannerRequirementRange(); }));
   $('#requirement-today').addEventListener('click', async () => { state.requirementFrom = mondayOf(today()); await loadPlannerRequirementRange(); });
@@ -622,6 +622,7 @@ function bindShell() {
     if (!event.target.closest('#context-menu')) $('#context-menu').classList.add('hidden');
     document.querySelectorAll('details.table-filter-menu[open]').forEach(menu => { if (!menu.contains(event.target)) menu.open = false; });
   });
+  document.addEventListener('keydown', handlePlannerClipboardShortcut);
   installDropdownLayers();
   installDialogOutsideClose();
 }
@@ -695,6 +696,8 @@ function openProjectDialog(mandatory = false) {
       state.controller = 'all';
       state.view = 'mine';
       state.activeSavedView = {};
+      clearPlannerSelections(false);
+      state.plannerRequirementEdit = false; state.requirementProjectId = null; state.requirementDirty = new Set();
       updateIdentity();
       dialog.close();
       await loadData();
@@ -1306,7 +1309,7 @@ function renderMine() {
   const projectLabels = (data.projects_in_scope || []).map(project => project.code).join(', ') || state.me.current_project?.code || '';
   $('#content').innerHTML = `<section class="personal-command compact"><div><span class="eyebrow">Plan pracy · ${escapeHtml(state.me.display_name)}</span><h2>${overdue.length ? `${overdue.length} pozycji wymaga reakcji` : 'Plan jest pod kontrolą'}</h2><p>Zakres z Plannera: <b>${escapeHtml(projectLabels)}</b> · ${(data.assigned_areas || []).map(item => `${item.project_code ? `${escapeHtml(item.project_code)} · ` : ''}${escapeHtml(item.path_label || item.name)}`).join(', ') || 'brak przypisania na 14 dni'}</p></div><div class="personal-stats compact"><span><b>${taskProgress}%</b>Zadania</span><span><b>${pointProgress}%</b>Punkty</span><span><b>${statusProgress}%</b>Status</span><span><b>${data.metrics.notes_mentions}</b>Wzmianki</span></div></section>
   ${overdue.length ? `<section class="urgent-lane"><header><strong>Do pilnego działania</strong><span>${overdue.length} zaległych</span></header><div>${overdue.slice(0, 12).map(({ type, item }) => `<button data-jump="${type}" data-id="${item.id}" data-project-id="${item.project_id || ''}"><span>!</span><b>${item.project_code ? `<em class="project-prefix">${escapeHtml(item.project_code)}</em>` : ''}${escapeHtml(entityLabel(typeToEntity(type), item))}</b><small>${displayDate(item.due_date || item.reminder_date)}</small></button>`).join('')}</div></section>` : ''}
-  <section class="personal-plan-calendar"><header><div><strong>Mój plan manpoweru</strong><small>Wszystkie projekty · najbliższe 14 dni</small></div><span>${(data.planner || []).length} wpisów</span></header><div class="personal-plan-days">${planDays.map(date => { const entries = plannerByDate.get(date) || []; return `<article class="personal-plan-day ${date === today() ? 'today' : ''}"><header><b>${date.slice(8, 10)}</b><small>${new Intl.DateTimeFormat('pl-PL', { weekday: 'short', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`))}</small></header><div>${entries.map(entry => `<span class="mini-plan-chip ${entry.activity_type === 'transport' ? 'transport' : entry.work_mode || 'online'}"><b>${entry.activity_type === 'transport' ? 'T' : entry.work_mode === 'offline' ? 'OFF' : 'ON'}</b><em>${escapeHtml(entry.project_code || '')}</em>${escapeHtml(entry.area_path || entry.area_name || 'Transport')}<small>${escapeHtml(entry.shift)}</small></span>`).join('') || '<i>—</i>'}</div></article>`; }).join('')}</div></section>
+  <section class="personal-plan-calendar"><header><div><strong>Mój plan manpoweru</strong><small>Wszystkie projekty · najbliższe 14 dni</small></div><span>${(data.planner || []).length} wpisów</span></header><div class="personal-plan-days">${planDays.map(date => { const entries = plannerByDate.get(date) || []; return `<article class="personal-plan-day ${date === today() ? 'today' : ''}"><header><b>${date.slice(8, 10)}</b><small>${new Intl.DateTimeFormat('pl-PL', { weekday: 'short', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`))}</small></header><div>${entries.map(entry => { const label = entry.area_path || entry.area_name || 'Transport'; return `<span class="mini-plan-chip ${entry.activity_type === 'transport' ? 'transport' : entry.work_mode || 'online'}" title="${escapeHtml(`${entry.project_code || ''} · ${label} · ${entry.shift || ''}`)}"><b>${entry.activity_type === 'transport' ? 'T' : entry.work_mode === 'offline' ? 'OFF' : 'ON'}</b><em>${escapeHtml(entry.project_code || '')}</em><span>${escapeHtml(label)}</span><small>${escapeHtml(entry.shift)}</small></span>`; }).join('') || '<i>—</i>'}</div></article>`; }).join('')}</div></section>
   <div class="workbench-grid compact"><section class="focus-lane"><header><div><strong>Moje aktywne zadania</strong><small>Bez ukończonych podzadań przypisanych tylko do Ciebie</small></div><span>${data.assigned_tasks.filter(item => item.status !== 'Done').length}</span></header>${data.assigned_tasks.filter(item => item.status !== 'Done').slice(0, 20).map(item => personalTaskRow(item)).join('') || '<div class="empty">Nie masz aktywnych zadań.</div>'}</section>
   <section class="focus-lane"><header><div><strong>Najbliższe z mojego planu</strong><small>Wszystkie zaplanowane projekty · następne 14 dni</small></div><span>${upcoming.length}</span></header>${upcoming.slice(0, 20).map(({ type, item, date }) => `<button class="focus-row" data-jump="${type}" data-id="${item.id}" data-project-id="${item.project_id || ''}"><span class="type-dot ${typeToEntity(type)}"></span><span><b>${item.project_code ? `<em class="project-prefix">${escapeHtml(item.project_code)}</em>` : ''}${escapeHtml(entityLabel(typeToEntity(type), item))}</b><small>${escapeHtml(controllerLabel(item))} · ${escapeHtml(badgeText(item.status))}</small></span><time>${date ? displayDate(date) : '→'}</time></button>`).join('') || '<div class="empty">Brak zbliżających się pozycji.</div>'}</section>
   ${summarySection('Otwarte punkty i wzmianki', data.points.filter(item => item.status !== 'Closed'), 'points', item => item.title)}
@@ -1617,6 +1620,7 @@ function canCoordinate() { return ['moderator', 'project_admin', 'system_admin']
 
 function renderPlanner() {
   const data = state.planner || { users: [], entries: [], work: [], summary: [], area_summary: [], shift_summary: [] };
+  if (state.plannerRequirementEdit && (state.requirementProjectId !== Number(state.me.current_project?.id || 0) || state.requirementData !== data || state.requirementFrom !== state.plannerFrom || state.requirementDays !== state.plannerDays)) prepareInlinePlannerRequirements();
   const days = dateRange(state.plannerFrom, addDays(state.plannerFrom, state.plannerDays - 1));
   const entryMap = new Map();
   for (const entry of [...(data.entries || []), ...(data.cross_project_entries || [])]) { const key = `${entry.user_id}:${entry.plan_date}`; if (!entryMap.has(key)) entryMap.set(key, []); entryMap.get(key).push(entry); }
@@ -1627,18 +1631,17 @@ function renderPlanner() {
   const overlapMap = new Map((data.overlap_reviews || []).map(item => [`${item.user_id}:${item.plan_date}`, item]));
   const summaryMap = new Map((data.summary || []).map(item => [item.plan_date, item]));
   const mode = data.mode_summary || {};
-  $('#content').innerHTML = `<section class="planner-command compact"><div class="planner-controls"><button class="mini planner-shift" data-days="-${state.plannerDays}">←</button><button class="mini" id="planner-today">Dzisiaj</button><button class="mini planner-shift" data-days="${state.plannerDays}">→</button><label>Zakres <select id="planner-days"><option value="7">7 dni</option><option value="14">14 dni</option><option value="28">28 dni</option><option value="31">31 dni</option><option value="90">Kwartał</option><option value="365">Rok</option></select></label>${canCoordinate() ? `<button class="mini ${state.plannerSelectionMode ? 'active-toggle' : ''}" id="planner-selection-toggle" aria-pressed="${state.plannerSelectionMode}">Zaznacz wiele dni</button>` : ''}${['project_admin', 'system_admin'].includes(state.me.role) ? '<button class="mini" id="planner-participants">Uczestnicy Plannera</button>' : ''}${data.can_manage_requirements ? '<button class="mini requirement-button" id="planner-requirements-open">Zapotrzebowanie</button><button class="mini" id="planner-config-open">Konfiguracja</button>' : ''}${data.can_manage_time ? `<button class="mini" id="planner-hours-toggle">${state.plannerShowHours ? 'Ukryj sumy godzin' : 'Pokaż sumy godzin'}</button><button class="mini" id="planner-hours-open">Czas pracy i nadgodziny</button>` : ''}<span>${displayDate(days[0])} – ${displayDate(days.at(-1))}</span></div><div class="planner-summary mode-summary"><span><b>${data.summary?.find(item => item.plan_date === today())?.headcount || 0}</b> osób dzisiaj</span><span class="online"><b>${mode.today_online || 0}</b> ON · fabryka<small>${mode.online_planned_days || 0} zaplanowanych dni</small></span><span class="offline"><b>${mode.today_offline || 0}</b> OFF · biuro<small>${mode.offline_planned_days || 0} zaplanowanych dni</small></span><span><b>${data.users.length}</b> uczestników</span>${data.can_manage_time ? `<span><b>${(data.time_details?.users || []).reduce((sum, item) => sum + item.actual_hours + item.credited_hours, 0).toFixed(1)}</b> h w zakresie</span>` : ''}${(data.shift_summary || []).map(item => `<span><b>${item.assignments}</b> ${escapeHtml(item.shift)}</span>`).join('')}</div></section>
-  ${state.plannerSelectionMode ? plannerBulkToolbar() : ''}
+  $('#content').innerHTML = `<section class="planner-command compact"><div class="planner-controls"><button class="mini planner-shift" data-days="-${state.plannerDays}">←</button><button class="mini" id="planner-today">Dzisiaj</button><button class="mini planner-shift" data-days="${state.plannerDays}">→</button><label>Zakres <select id="planner-days"><option value="7">7 dni</option><option value="14">14 dni</option><option value="28">28 dni</option><option value="31">31 dni</option><option value="90">Kwartał</option><option value="365">Rok</option></select></label>${['project_admin', 'system_admin'].includes(state.me.role) ? '<button class="mini" id="planner-participants">Uczestnicy Plannera</button>' : ''}${data.can_manage_requirements ? `<button class="mini requirement-button ${state.plannerRequirementEdit ? 'active-toggle' : ''}" id="planner-requirements-open" aria-pressed="${state.plannerRequirementEdit}">Zapotrzebowanie${state.requirementDirty.size ? ` · ${state.requirementDirty.size}` : ''}</button><button class="mini" id="planner-config-open">Konfiguracja</button>` : ''}${data.can_manage_time ? `<button class="mini" id="planner-hours-toggle">${state.plannerShowHours ? 'Ukryj sumy godzin' : 'Pokaż sumy godzin'}</button><button class="mini" id="planner-hours-open">Czas pracy i nadgodziny</button>` : ''}<span>${displayDate(days[0])} – ${displayDate(days.at(-1))}</span></div><div class="planner-summary mode-summary"><span><b>${data.summary?.find(item => item.plan_date === today())?.headcount || 0}</b> osób dzisiaj</span><span class="online"><b>${mode.today_online || 0}</b> ON · fabryka<small>${mode.online_planned_days || 0} zaplanowanych dni</small></span><span class="offline"><b>${mode.today_offline || 0}</b> OFF · biuro<small>${mode.offline_planned_days || 0} zaplanowanych dni</small></span><span><b>${data.users.length}</b> uczestników</span>${data.can_manage_time ? `<span><b>${(data.time_details?.users || []).reduce((sum, item) => sum + item.actual_hours + item.credited_hours, 0).toFixed(1)}</b> h w zakresie</span>` : ''}${(data.shift_summary || []).map(item => `<span><b>${item.assignments}</b> ${escapeHtml(item.shift)}</span>`).join('')}</div></section>
+  ${canCoordinate() ? plannerBulkToolbar() : ''}
   ${plannerUnifiedSection(data.users || [], days, entryMap, workMap, summaryMap, data.area_day_summary || [], data.can_manage_requirements, absenceMap, timeMap, holidayMap, data.can_manage_time && state.plannerShowHours, overlapMap)}
   ${(data.available_today_users || []).length && days.includes(today()) && canCoordinate() ? `<section class="planner-unassigned"><strong>Dostępni tylko na dzisiaj</strong><small>Te osoby należą do projektu, ale nie są stałymi uczestnikami Plannera.</small><div>${data.available_today_users.map(user => `<button class="mini planner-today-user" data-user-id="${user.id}">+ ${escapeHtml(user.display_name)}</button>`).join('')}</div></section>` : ''}
   <p class="planner-legend"><span class="mode-dot online"></span> ON · fabryka <span class="mode-dot offline"></span> OFF · biuro <span><b>T</b> transport jako osobna aktywność <span class="other-project-key"></span> plan w innym projekcie <span class="workload-dot"></span> zadania / punkty / status / notatki${data.can_manage_requirements ? '<span class="requirement-shortage-key"></span> obsada poniżej zapotrzebowania' : ''}</p>`;
   $('#planner-days').value = String(state.plannerDays);
-  $('#planner-days').addEventListener('change', async event => { state.plannerDays = Number(event.target.value); state.plannerSelection.clear(); await reloadPlanner(); });
-  $$('.planner-shift').forEach(button => button.addEventListener('click', async () => { state.plannerFrom = addDays(state.plannerFrom, Number(button.dataset.days)); state.plannerSelection.clear(); await reloadPlanner(); }));
-  $('#planner-today').addEventListener('click', async () => { state.plannerFrom = mondayOf(today()); state.plannerSelection.clear(); await reloadPlanner(); });
-  $('#planner-selection-toggle')?.addEventListener('click', () => { state.plannerSelectionMode = !state.plannerSelectionMode; if (!state.plannerSelectionMode) state.plannerSelection.clear(); renderPlanner(); });
+  $('#planner-days').addEventListener('change', async event => { state.plannerDays = Number(event.target.value); clearPlannerSelections(false); await reloadPlanner(); });
+  $$('.planner-shift').forEach(button => button.addEventListener('click', async () => { state.plannerFrom = addDays(state.plannerFrom, Number(button.dataset.days)); clearPlannerSelections(false); await reloadPlanner(); }));
+  $('#planner-today').addEventListener('click', async () => { state.plannerFrom = mondayOf(today()); clearPlannerSelections(false); await reloadPlanner(); });
   $('#planner-participants')?.addEventListener('click', openPlannerParticipants);
-  $('#planner-requirements-open')?.addEventListener('click', () => openPlannerRequirements(today()));
+  $('#planner-requirements-open')?.addEventListener('click', togglePlannerRequirementsEditor);
   $('#planner-config-open')?.addEventListener('click', () => openConfigPanel('planner'));
   $('#planner-hours-toggle')?.addEventListener('click', () => { state.plannerShowHours = !state.plannerShowHours; renderPlanner(); });
   $('#planner-hours-open')?.addEventListener('click', openPlannerHours);
@@ -1648,14 +1651,19 @@ function renderPlanner() {
     let selectionPaint = true; let selecting = false;
     $$('.planner-cell').forEach(cell => {
       cell.addEventListener('pointerdown', event => {
-        if (!state.plannerSelectionMode || event.button !== 0 || cell.dataset.editable !== '1' || event.target.closest('[data-overlap-action]')) return;
-        event.preventDefault(); selecting = true; const key = plannerSelectionKey(cell.dataset.userId, cell.dataset.date); selectionPaint = !state.plannerSelection.has(key); setPlannerCellSelected(cell, selectionPaint);
+        if (event.button !== 0 || cell.dataset.editable !== '1' || event.target.closest('.plan-chip,.absence-chip,[data-overlap-action]')) return;
+        event.preventDefault();
+        const additive = event.ctrlKey || event.metaKey;
+        if (!additive) clearPlannerSelections(false);
+        else if (state.plannerEntrySelection.size) { state.plannerEntrySelection.clear(); $$('.plan-chip.entry-selected').forEach(chip => chip.classList.remove('entry-selected')); }
+        selecting = true;
+        const key = plannerSelectionKey(cell.dataset.userId, cell.dataset.date);
+        selectionPaint = additive ? !state.plannerSelection.has(key) : true;
+        setPlannerCellSelected(cell, selectionPaint);
       });
-      cell.addEventListener('pointerenter', () => { if (state.plannerSelectionMode && selecting && cell.dataset.editable === '1') setPlannerCellSelected(cell, selectionPaint); });
+      cell.addEventListener('pointerenter', event => { if (selecting && (event.buttons & 1) && cell.dataset.editable === '1') setPlannerCellSelected(cell, selectionPaint); });
       cell.addEventListener('click', event => {
-        if (state.plannerSelectionMode) { event.preventDefault(); return; }
-        if ((event.ctrlKey || event.metaKey || event.shiftKey) && cell.dataset.editable === '1') { event.preventDefault(); state.plannerSelectionMode = true; setPlannerCellSelected(cell, true); return renderPlanner(); }
-        if (!state.plannerDragging && !event.target.closest('[data-overlap-action]') && cell.dataset.editable === '1') openPlannerCell(Number(cell.dataset.userId), cell.dataset.date);
+        if (cell.dataset.editable === '1' && !event.target.closest('[data-overlap-action]')) event.preventDefault();
       });
       cell.addEventListener('contextmenu', event => {
         const chip = event.target.closest('.plan-chip');
@@ -1673,23 +1681,47 @@ function renderPlanner() {
     document.addEventListener('pointerup', () => { selecting = false; updatePlannerBulkCount(); }, { signal: selectionSignal });
     bindPlannerBulkToolbar();
     $$('.plan-chip[draggable="true"]').forEach(chip => {
+      chip.addEventListener('pointerdown', event => {
+        if (event.button !== 0) return;
+        event.stopPropagation();
+        const id = Number(chip.dataset.entryId); const additive = event.ctrlKey || event.metaKey;
+        if (!additive) clearPlannerSelections(false);
+        else if (state.plannerSelection.size) { state.plannerSelection.clear(); $$('.planner-cell.multi-selected').forEach(cell => cell.classList.remove('multi-selected')); }
+        setPlannerEntrySelected(chip, additive ? !state.plannerEntrySelection.has(id) : true);
+      });
       chip.addEventListener('dragstart', event => { state.plannerDragging = true; state.plannerDragEntry = Number(chip.dataset.entryId); event.dataTransfer.effectAllowed = 'copyMove'; event.dataTransfer.setData('text/planner-entry', chip.dataset.entryId); chip.classList.add('dragging'); });
       chip.addEventListener('dragend', () => { state.plannerDragEntry = null; chip.classList.remove('dragging'); $$('.planner-cell').forEach(cell => cell.classList.remove('drag-over')); setTimeout(() => { state.plannerDragging = false; }, 0); });
     });
     $$('.absence-chip[draggable="true"]').forEach(chip => {
+      chip.addEventListener('pointerdown', event => {
+        if (event.button !== 0) return;
+        event.stopPropagation();
+        const cell = chip.closest('.planner-cell'); const additive = event.ctrlKey || event.metaKey;
+        if (!additive) clearPlannerSelections(false);
+        else if (state.plannerEntrySelection.size) { state.plannerEntrySelection.clear(); $$('.plan-chip.entry-selected').forEach(item => item.classList.remove('entry-selected')); }
+        setPlannerCellSelected(cell, additive ? !state.plannerSelection.has(plannerSelectionKey(cell.dataset.userId, cell.dataset.date)) : true);
+      });
       chip.addEventListener('dragstart', event => { state.plannerDragging = true; const cell = chip.closest('.planner-cell'); state.plannerDragDay = { userId: Number(cell.dataset.userId), date: cell.dataset.date }; event.dataTransfer.effectAllowed = 'copyMove'; event.dataTransfer.setData('text/planner-day', JSON.stringify(state.plannerDragDay)); chip.classList.add('dragging'); });
       chip.addEventListener('dragend', () => { state.plannerDragDay = null; chip.classList.remove('dragging'); $$('.planner-cell').forEach(cell => cell.classList.remove('drag-over')); setTimeout(() => { state.plannerDragging = false; }, 0); });
     });
     $$('[data-overlap-action]').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); decidePlannerOverlap(Number(button.dataset.userId), button.dataset.date, button.dataset.overlapAction); }));
     $$('.planner-today-user').forEach(button => button.addEventListener('click', () => openPlannerCell(Number(button.dataset.userId), today())));
   }
-  requestAnimationFrame(positionPlannerTodayOutline);
+  if (state.plannerRequirementEdit) bindInlinePlannerRequirements();
 }
 
 function plannerSelectionKey(userId, date) { return `${Number(userId)}:${date}`; }
 
+function plannerClipboardLabel() {
+  if (!state.plannerClipboard) return 'zawartość';
+  if (state.plannerClipboard.kind === 'day') return 'skopiowany dzień';
+  if (state.plannerClipboard.kind === 'days') return `${state.plannerClipboard.days?.length || 0} skopiowanych dni`;
+  return state.plannerClipboard.entries?.length === 1 ? 'skopiowaną aktywność' : `${state.plannerClipboard.entries?.length || 0} skopiowanych aktywności`;
+}
+
 function plannerBulkToolbar() {
-  return `<section class="planner-bulk-toolbar"><span><b id="planner-selection-count">${state.plannerSelection.size}</b> zaznaczonych dni</span><button type="button" class="primary" id="planner-bulk-add">+ Dodaj obszar pracy</button><button type="button" class="mini" id="planner-bulk-remove">Usuń obszar pracy</button><button type="button" class="mini" id="planner-bulk-paste" ${state.plannerClipboard ? '' : 'disabled'}>Wklej ${state.plannerClipboard?.kind === 'day' ? 'skopiowany dzień' : 'skopiowaną aktywność'}</button><button type="button" class="mini" id="planner-bulk-approve">✓ Zatwierdź kolizje</button><button type="button" class="mini" id="planner-selection-clear">Wyczyść zaznaczenie</button><button type="button" class="mini" id="planner-selection-exit">Zakończ wybór</button></section>`;
+  const hidden = !state.plannerSelection.size && !state.plannerEntrySelection.size;
+  return `<section class="planner-bulk-toolbar ${hidden ? 'hidden' : ''}" id="planner-bulk-toolbar"><span><b id="planner-selection-count">${state.plannerSelection.size}</b> dni · <b id="planner-entry-selection-count">${state.plannerEntrySelection.size}</b> aktywności</span><button type="button" class="primary" id="planner-bulk-add">+ Dodaj obszar pracy</button><button type="button" class="mini" id="planner-bulk-remove">Usuń obszar pracy</button><button type="button" class="mini" id="planner-bulk-copy">Kopiuj zaznaczenie</button><button type="button" class="mini" id="planner-bulk-paste" ${state.plannerClipboard ? '' : 'disabled'}>Wklej ${plannerClipboardLabel()}</button><button type="button" class="mini" id="planner-bulk-approve">✓ Zatwierdź kolizje</button><button type="button" class="mini" id="planner-selection-clear">Wyczyść zaznaczenie</button></section>`;
 }
 
 function setPlannerCellSelected(cell, selected) {
@@ -1699,18 +1731,40 @@ function setPlannerCellSelected(cell, selected) {
   updatePlannerBulkCount();
 }
 
+function setPlannerEntrySelected(chip, selected) {
+  const id = Number(chip.dataset.entryId);
+  if (selected) state.plannerEntrySelection.add(id); else state.plannerEntrySelection.delete(id);
+  chip.classList.toggle('entry-selected', selected);
+  updatePlannerBulkCount();
+}
+
+function clearPlannerSelections(update = true) {
+  state.plannerSelection.clear(); state.plannerEntrySelection.clear();
+  $$('.planner-cell.multi-selected').forEach(cell => cell.classList.remove('multi-selected'));
+  $$('.plan-chip.entry-selected').forEach(chip => chip.classList.remove('entry-selected'));
+  if (update) updatePlannerBulkCount();
+}
+
 function selectedPlannerTargets() {
-  const cells = new Map($$('.planner-cell[data-editable="1"]').map(cell => [plannerSelectionKey(cell.dataset.userId, cell.dataset.date), cell]));
-  return [...state.plannerSelection].filter(key => cells.has(key)).map(key => {
+  return $$('.planner-cell[data-editable="1"]').filter(cell => state.plannerSelection.has(plannerSelectionKey(cell.dataset.userId, cell.dataset.date))).map(cell => {
+    const key = plannerSelectionKey(cell.dataset.userId, cell.dataset.date);
     const separator = key.indexOf(':'); return { userId: Number(key.slice(0, separator)), date: key.slice(separator + 1) };
   });
 }
 
+function selectedPlannerEntries() {
+  const selected = state.plannerEntrySelection;
+  return (state.planner?.entries || []).filter(entry => selected.has(Number(entry.id)));
+}
+
 function updatePlannerBulkCount() {
-  const count = state.plannerSelection.size;
-  if ($('#planner-selection-count')) $('#planner-selection-count').textContent = String(count);
-  const disabled = !count;
-  ['#planner-bulk-add', '#planner-bulk-remove', '#planner-bulk-paste', '#planner-bulk-approve'].forEach(selector => { const button = $(selector); if (button) button.disabled = disabled || (selector === '#planner-bulk-paste' && !state.plannerClipboard); });
+  const dayCount = state.plannerSelection.size; const entryCount = state.plannerEntrySelection.size;
+  $('#planner-bulk-toolbar')?.classList.toggle('hidden', !dayCount && !entryCount);
+  if ($('#planner-selection-count')) $('#planner-selection-count').textContent = String(dayCount);
+  if ($('#planner-entry-selection-count')) $('#planner-entry-selection-count').textContent = String(entryCount);
+  ['#planner-bulk-add', '#planner-bulk-remove', '#planner-bulk-approve'].forEach(selector => { const button = $(selector); if (button) button.disabled = !dayCount; });
+  if ($('#planner-bulk-copy')) $('#planner-bulk-copy').disabled = !dayCount && !entryCount;
+  if ($('#planner-bulk-paste')) { $('#planner-bulk-paste').disabled = !dayCount || !state.plannerClipboard; $('#planner-bulk-paste').textContent = `Wklej ${plannerClipboardLabel()}`; }
 }
 
 function plannerEntryPayload(entry) {
@@ -1731,7 +1785,7 @@ async function savePlannerBulkRequests(requests, message) {
   if (!requests.length) return toast('Brak dni, do których można zastosować tę operację', true);
   try {
     for (let index = 0; index < requests.length; index += 12) await Promise.all(requests.slice(index, index + 12).map(body => api('/api/planner/day', { method: 'PUT', body: JSON.stringify(body) })));
-    state.plannerSelection.clear();
+    state.plannerSelection.clear(); state.plannerEntrySelection.clear();
     toast(`${message} · ${requests.length} ${requests.length === 1 ? 'dzień' : 'dni'}`);
     await reloadPlanner();
   } catch (error) { toast(error.message, true); }
@@ -1763,12 +1817,41 @@ async function removeWorkFromPlannerSelection() {
   await savePlannerBulkRequests(targets.map(target => { const day = plannerDaySnapshot(target.userId, target.date); const entries = day.entries.filter(item => { const work = (item.activity_type || (item.transport_mode === 'transport_only' ? 'transport' : 'work')) === 'work'; return !(work && (!areaId || Number(item.controller_group_id) === areaId)); }); return plannerDayRequest(target, entries, day); }), 'Usunięto obszar pracy');
 }
 
+function copyPlannerSelection() {
+  const entries = selectedPlannerEntries();
+  if (entries.length) {
+    state.plannerClipboard = { kind: 'entry', entries: entries.map(plannerEntryPayload) };
+    toast(`Skopiowano ${entries.length} ${entries.length === 1 ? 'aktywność' : entries.length < 5 ? 'aktywności' : 'aktywności'}`);
+    updatePlannerBulkCount();
+    return true;
+  }
+  const targets = selectedPlannerTargets();
+  if (!targets.length) { toast('Najpierw zaznacz dni lub aktywności.', true); return false; }
+  if (targets.length === 1) {
+    state.plannerClipboard = { kind: 'day', ...plannerDaySnapshot(targets[0].userId, targets[0].date) };
+  } else {
+    state.plannerClipboard = { kind: 'days', days: targets.map(target => ({ ...plannerDaySnapshot(target.userId, target.date) })) };
+  }
+  toast(targets.length === 1 ? 'Skopiowano cały dzień' : `Skopiowano ${targets.length} dni`);
+  updatePlannerBulkCount();
+  return true;
+}
+
 async function pastePlannerSelection() {
   const targets = selectedPlannerTargets(); const clipboard = state.plannerClipboard;
   if (!targets.length || !clipboard) return;
   if (clipboard.kind === 'day') return savePlannerBulkRequests(targets.map(target => plannerDayRequest(target, clipboard.entries || [], clipboard)), 'Wklejono skopiowany dzień');
+  if (clipboard.kind === 'days') return savePlannerBulkRequests(targets.map((target, index) => { const source = clipboard.days[index % clipboard.days.length]; return plannerDayRequest(target, source.entries || [], source); }), 'Wklejono skopiowany zakres dni');
   const usable = targets.filter(target => !plannerDaySnapshot(target.userId, target.date).absence_type);
   await savePlannerBulkRequests(usable.map(target => { const day = plannerDaySnapshot(target.userId, target.date); return plannerDayRequest(target, [...day.entries, ...(clipboard.entries || [])], day); }), 'Wklejono skopiowaną aktywność');
+}
+
+function handlePlannerClipboardShortcut(event) {
+  if (state.view !== 'planner' || !(event.ctrlKey || event.metaKey) || event.altKey || document.querySelector('dialog[open]')) return;
+  if (event.target.closest('input,textarea,select,[contenteditable="true"]')) return;
+  const key = event.key.toLowerCase();
+  if (key === 'c' && (state.plannerSelection.size || state.plannerEntrySelection.size)) { event.preventDefault(); copyPlannerSelection(); }
+  if (key === 'v' && state.plannerSelection.size && state.plannerClipboard) { event.preventDefault(); pastePlannerSelection(); }
 }
 
 async function approvePlannerSelectionOverlaps() {
@@ -1777,42 +1860,46 @@ async function approvePlannerSelectionOverlaps() {
   if (!reviews.length) return toast('W zaznaczeniu nie ma kolizji oczekujących na decyzję');
   try {
     for (let index = 0; index < reviews.length; index += 15) await Promise.all(reviews.slice(index, index + 15).map(item => api('/api/planner/overlaps/action', { method: 'POST', body: JSON.stringify({ user_id: item.user_id, plan_date: item.plan_date, action: 'approve' }) })));
-    toast(`Zatwierdzono ${reviews.length} nakładających się dni`); state.plannerSelection.clear(); await reloadPlanner();
+    toast(`Zatwierdzono ${reviews.length} nakładających się dni`); state.plannerSelection.clear(); state.plannerEntrySelection.clear(); await reloadPlanner();
   } catch (error) { toast(error.message, true); }
 }
 
 function bindPlannerBulkToolbar() {
-  if (!state.plannerSelectionMode) return;
   $('#planner-bulk-add')?.addEventListener('click', addWorkToPlannerSelection);
   $('#planner-bulk-remove')?.addEventListener('click', removeWorkFromPlannerSelection);
+  $('#planner-bulk-copy')?.addEventListener('click', copyPlannerSelection);
   $('#planner-bulk-paste')?.addEventListener('click', pastePlannerSelection);
   $('#planner-bulk-approve')?.addEventListener('click', approvePlannerSelectionOverlaps);
-  $('#planner-selection-clear')?.addEventListener('click', () => { state.plannerSelection.clear(); $$('.planner-cell').forEach(cell => cell.classList.remove('multi-selected')); updatePlannerBulkCount(); });
-  $('#planner-selection-exit')?.addEventListener('click', () => { state.plannerSelection.clear(); state.plannerSelectionMode = false; renderPlanner(); });
+  $('#planner-selection-clear')?.addEventListener('click', clearPlannerSelections);
   updatePlannerBulkCount();
-}
-
-function positionPlannerTodayOutline() {
-  const scroll = document.querySelector('.planner-scroll');
-  const table = scroll?.querySelector('.planner-table');
-  const header = table?.querySelector('thead tr:last-child th.today');
-  if (!scroll || !table || !header) return;
-  scroll.querySelector('.planner-today-column-outline')?.remove();
-  const scrollRect = scroll.getBoundingClientRect(); const headerRect = header.getBoundingClientRect(); const tableRect = table.getBoundingClientRect();
-  const outline = document.createElement('i'); outline.className = 'planner-today-column-outline'; outline.setAttribute('aria-hidden', 'true');
-  outline.style.left = `${headerRect.left - scrollRect.left + scroll.scrollLeft}px`;
-  outline.style.top = `${tableRect.top - scrollRect.top + scroll.scrollTop}px`;
-  outline.style.width = `${headerRect.width}px`; outline.style.height = `${table.offsetHeight}px`;
-  scroll.append(outline);
 }
 
 function plannerUnifiedSection(users, days, entryMap, workMap, summaryMap, areaDaySummary, showRequirements, absenceMap, timeMap, holidayMap, showTime, overlapMap) {
   const segments = (source, label) => { const result = []; let current; source.forEach(date => { const value = label(date); if (!current || current.value !== value) { current = { value, count: 0 }; result.push(current); } current.count += 1; }); return result; };
   const months = segments(days, date => new Intl.DateTimeFormat('pl-PL', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`)));
   const weeks = segments(days, date => isoWeek(date).label);
-  const areaRows = showRequirements ? areaDaySummary.map(area => `<tr class="area-day-row"><th class="person-col">${escapeHtml(area.name)}</th>${days.map(date => plannerHeadcountCell(area.days.find(item => item.date === date), true, date)).join('')}</tr>`).join('') : '';
+  const areaRows = showRequirements ? state.plannerRequirementEdit ? plannerInlineRequirementRows(days) : areaDaySummary.map(area => `<tr class="area-day-row"><th class="person-col">${escapeHtml(area.name)}</th>${days.map(date => plannerHeadcountCell(area.days.find(item => item.date === date), true, date)).join('')}</tr>`).join('') : '';
+  const requirementTools = showRequirements && state.plannerRequirementEdit ? `<div class="planner-inline-requirement-toolbar"><span><b>Edycja zapotrzebowania</b><small>ON/OFF, np. 4/2 · zaznaczaj, kopiuj i przeciągaj zakresy jak w arkuszu</small></span><label>Hierarchia <select id="planner-requirement-level-inline"><option value="areas">Obszary</option><option value="subareas">Obszary + podobszary</option><option value="all">Cała hierarchia</option></select></label><button type="button" class="mini" id="planner-requirement-collapse-inline">Zwiń</button><button type="button" class="mini" id="planner-requirement-expand-inline">Rozwiń</button><button type="button" class="mini" id="planner-requirement-copy-inline">Kopiuj</button><button type="button" class="mini" id="planner-requirement-paste-inline">Wklej</button><span class="requirement-selection-meta" id="requirement-selection-count-inline">Brak zaznaczenia</span><span class="requirement-dirty-meta" id="requirement-dirty-count-inline">Brak niezapisanych zmian</span><button type="button" class="primary" id="planner-requirements-save-inline">Zapisz zapotrzebowanie</button></div>` : '';
   const dayHeader = (date, number = false) => { const weekend = [0, 6].includes(new Date(`${date}T12:00:00Z`).getUTCDay()); const holiday = holidayMap.get(date); return `<th class="${date === today() ? 'today' : ''} ${holiday ? 'holiday' : ''} ${weekend ? 'weekend' : ''}" title="${escapeHtml(holiday?.name || '')}">${number ? date.slice(8, 10) : new Intl.DateTimeFormat('pl-PL', { weekday: 'short', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`))}${holiday && !number ? `<span class="holiday-info" title="${escapeHtml(holiday.name)}">i</span>` : ''}</th>`; };
-  return `<section class="planner-shell planner-unified"><header><div><strong>Plan zespołu</strong><small>ON i OFF w jednym widoku · przeciągnij aktywność, urlop lub wolne na inny dzień albo osobę</small></div><span>${users.length} uczestników</span></header><div class="planner-scroll"><table class="planner-table compact" style="--planner-days:${days.length}"><thead><tr><th class="person-col" rowspan="4">Pracownik</th>${months.map(item => `<th colspan="${item.count}">${escapeHtml(item.value)}</th>`).join('')}</tr><tr>${weeks.map(item => `<th colspan="${item.count}">${escapeHtml(item.value)}</th>`).join('')}</tr><tr>${days.map(date => dayHeader(date)).join('')}</tr><tr>${days.map(date => dayHeader(date, true)).join('')}</tr></thead><tbody>${users.map(user => `<tr class="${user.planner_enabled ? '' : 'temporary-planner-user'}"><th class="person-col"><b>${escapeHtml(user.display_name)}</b><small>${escapeHtml(user.configured_areas || 'bez obszaru')}${user.planner_enabled ? '' : ' · tylko dzisiaj'}</small>${showTime ? `<em>${Number((state.planner.time_details?.users || []).find(item => item.user_id === user.id)?.actual_hours || 0).toFixed(1)} h</em>` : ''}</th>${days.map(date => plannerCell(user, date, entryMap.get(`${user.id}:${date}`) || [], workMap.get(`${user.id}:${date}`), absenceMap.get(`${user.id}:${date}`), timeMap.get(`${user.id}:${date}`), holidayMap.get(date), showTime, overlapMap.get(`${user.id}:${date}`))).join('')}</tr>`).join('') || `<tr><td colspan="${days.length + 1}" class="empty compact-empty">Brak uczestników Plannera.</td></tr>`}</tbody><tfoot><tr class="total-headcount-row"><th class="person-col">Obsada razem</th>${days.map(date => { const summary = summaryMap.get(date); return `<td class="${date === today() ? 'today' : ''}"><b>${summary?.headcount || 0}</b><small><i class="on-tag">ON ${summary?.online_headcount || 0}</i><i class="off-tag">OFF ${summary?.offline_headcount || 0}</i></small></td>`; }).join('')}</tr>${areaRows}</tfoot></table></div></section>`;
+  return `<section class="planner-shell planner-unified ${state.plannerRequirementEdit ? 'requirements-editing' : ''}" ${state.plannerRequirementEdit ? 'id="planner-inline-requirements"' : ''}><header><div><strong>Plan zespołu</strong><small>ON i OFF w jednym widoku · zaznaczaj lewym przyciskiem, edytuj z menu pod prawym przyciskiem</small></div><span>${users.length} uczestników</span></header>${requirementTools}<div class="planner-scroll"><table class="planner-table compact" style="--planner-days:${days.length};--requirement-days:${days.length}"><thead><tr><th class="person-col" rowspan="4">Pracownik</th>${months.map(item => `<th colspan="${item.count}">${escapeHtml(item.value)}</th>`).join('')}</tr><tr>${weeks.map(item => `<th colspan="${item.count}">${escapeHtml(item.value)}</th>`).join('')}</tr><tr>${days.map(date => dayHeader(date)).join('')}</tr><tr>${days.map(date => dayHeader(date, true)).join('')}</tr></thead><tbody>${users.map(user => `<tr class="${user.planner_enabled ? '' : 'temporary-planner-user'}"><th class="person-col"><b>${escapeHtml(user.display_name)}</b><small>${escapeHtml(user.configured_areas || 'bez obszaru')}${user.planner_enabled ? '' : ' · tylko dzisiaj'}</small>${showTime ? `<em>${Number((state.planner.time_details?.users || []).find(item => item.user_id === user.id)?.actual_hours || 0).toFixed(1)} h</em>` : ''}</th>${days.map(date => plannerCell(user, date, entryMap.get(`${user.id}:${date}`) || [], workMap.get(`${user.id}:${date}`), absenceMap.get(`${user.id}:${date}`), timeMap.get(`${user.id}:${date}`), holidayMap.get(date), showTime, overlapMap.get(`${user.id}:${date}`))).join('')}</tr>`).join('') || `<tr><td colspan="${days.length + 1}" class="empty compact-empty">Brak uczestników Plannera.</td></tr>`}</tbody><tfoot><tr class="total-headcount-row"><th class="person-col">Obsada razem</th>${days.map(date => { const summary = summaryMap.get(date); return `<td class="${date === today() ? 'today' : ''}"><b>${summary?.headcount || 0}</b><small><i class="on-tag">ON ${summary?.online_headcount || 0}</i><i class="off-tag">OFF ${summary?.offline_headcount || 0}</i></small></td>`; }).join('')}</tr>${areaRows}</tfoot></table></div></section>`;
+}
+
+function plannerInlineRequirementRows(days) {
+  const groups = state.requirementData?.areas || []; const groupById = new Map(groups.map(group => [Number(group.id), group]));
+  const actuals = new Map();
+  for (const entry of state.planner?.entries || []) {
+    if (entry.activity_type === 'transport' || entry.transport_mode === 'transport_only') continue;
+    const target = groupById.get(Number(entry.controller_group_id)); if (!target) continue;
+    for (const group of groups) {
+      const path = group.path_names || []; const targetPath = target.path_names || [];
+      if (path.length > targetPath.length || path.some((name, index) => name !== targetPath[index])) continue;
+      const key = `${group.id}:${entry.plan_date}:${entry.work_mode || 'online'}`;
+      if (!actuals.has(key)) actuals.set(key, new Set());
+      actuals.get(key).add(Number(entry.user_id));
+    }
+  }
+  const { rows } = requirementHierarchy();
+  return rows.map(({ group, depth, hasChildren }, rowIndex) => `<tr class="area-day-row requirement-edit-row"><th class="person-col requirement-area"><div class="requirement-tree-node" style="--requirement-depth:${depth}">${hasChildren ? `<button type="button" class="requirement-tree-toggle" data-requirement-toggle-inline="${group.id}" aria-label="${state.requirementCollapsedGroups.has(Number(group.id)) ? 'Rozwiń' : 'Zwiń'} ${escapeHtml(group.name)}">${state.requirementCollapsedGroups.has(Number(group.id)) ? '›' : '⌄'}</button>` : '<i></i>'}<span><b>${escapeHtml(group.name)}</b>${depth ? `<small>${escapeHtml((group.path_names || []).slice(0, -1).join(' / '))}</small>` : ''}</span></div></th>${days.map((date, columnIndex) => { const key = `${group.id}:${date}`; const entered = state.requirementDraft.get(key) || ''; const online = actuals.get(`${key}:online`)?.size || 0; const offline = actuals.get(`${key}:offline`)?.size || 0; return `<td class="${date === today() ? 'today' : ''}" data-requirement-cell data-group="${group.id}" data-date="${date}" data-grid-row="${rowIndex}" data-grid-column="${columnIndex}"><input class="requirement-grid-input ${parseRequirementValue(entered) ? '' : 'invalid'}" value="${escapeHtml(entered)}" placeholder="0/0" inputmode="numeric" data-requirement-value aria-label="${escapeHtml(group.path_label || group.name)}, ${displayDate(date)}, ON/OFF"><small class="requirement-live-count">ON ${online} · OFF ${offline}</small><i class="requirement-fill-handle" title="Przeciągnij, aby powielić zaznaczenie"></i></td>`; }).join('')}</tr>`).join('') || `<tr class="area-day-row"><td colspan="${days.length + 1}" class="empty">Brak obszarów.</td></tr>`;
 }
 
 function plannerHeadcountCell(day = {}, showRequirements = false, date = '') {
@@ -1824,12 +1911,12 @@ function plannerCell(user, date, entries, work, absence, timeDetail, holiday, sh
   const weekend = [0, 6].includes(new Date(`${date}T12:00:00Z`).getUTCDay());
   const editable = canCoordinate() && (Number(user.planner_enabled) || date === today());
   let overlapPlaced = false;
-  const chips = entries.map(entry => { const transport = entry.activity_type === 'transport' || entry.transport_mode === 'transport_only'; const current = entry.is_current_project !== false; const showOverlap = current && overlap && !overlapPlaced; if (showOverlap) overlapPlaced = true; const collision = showOverlap ? `<span class="planner-overlap-actions ${overlap.status}" title="Nakładanie się projektów: ${escapeHtml(overlap.other_project_codes || 'inny projekt')}">${overlap.status === 'approved' ? '<b aria-label="Kolizja zatwierdzona">✓</b>' : overlap.status === 'rejected' ? '<b aria-label="Kolizja odrzucona">×</b>' : canCoordinate() ? `<button type="button" data-overlap-action="approve" data-user-id="${user.id}" data-date="${date}" aria-label="Zatwierdź kolizję">✓</button><button type="button" data-overlap-action="reject" data-user-id="${user.id}" data-date="${date}" aria-label="Odrzuć plan">×</button>` : '<b>⚠</b>'}</span>` : ''; return `<span class="plan-chip ${transport ? 'transport-only' : entry.work_mode} ${current ? '' : 'other-project'} ${showOverlap ? `has-overlap ${overlap.status}` : ''}" title="${showOverlap ? `Nakładanie się projektów: ${escapeHtml(overlap.other_project_codes || 'inny projekt')}` : ''}" data-entry-id="${entry.id}" data-current-project="${current ? 1 : 0}" data-project-id="${entry.project_id || state.me.current_project?.id}" draggable="${editable && current ? 'true' : 'false'}">${transport ? '<b class="mode-label">T</b>' : `<b class="mode-label">${entry.work_mode === 'offline' ? 'OFF' : 'ON'}</b>`}<span>${current ? '' : `<em>${escapeHtml(entry.project_code)} · </em>`}${entry.area_path ? escapeHtml(entry.area_path) : entry.area_name ? escapeHtml(entry.area_name) : transport ? 'Transport' : 'Ogólne'}</span>${entry.note ? `<span class="plan-note" data-note="${escapeHtml(entry.note)}" title="${escapeHtml(entry.note)}" tabindex="0" aria-label="Notatka: ${escapeHtml(entry.note)}">i</span>` : ''}${collision}<small>${escapeHtml(entry.shift)}</small></span>`; }).join('');
+  const chips = entries.map(entry => { const transport = entry.activity_type === 'transport' || entry.transport_mode === 'transport_only'; const current = entry.is_current_project !== false; const selectedEntry = current && state.plannerEntrySelection.has(Number(entry.id)); const showOverlap = current && overlap && !overlapPlaced; if (showOverlap) overlapPlaced = true; const collision = showOverlap ? `<span class="planner-overlap-actions ${overlap.status}" title="Nakładanie się projektów: ${escapeHtml(overlap.other_project_codes || 'inny projekt')}">${overlap.status === 'approved' ? '<b aria-label="Kolizja zatwierdzona">✓</b>' : overlap.status === 'rejected' ? '<b aria-label="Kolizja odrzucona">×</b>' : canCoordinate() ? `<button type="button" data-overlap-action="approve" data-user-id="${user.id}" data-date="${date}" aria-label="Zatwierdź kolizję">✓</button><button type="button" data-overlap-action="reject" data-user-id="${user.id}" data-date="${date}" aria-label="Odrzuć plan">×</button>` : '<b>⚠</b>'}</span>` : ''; return `<span class="plan-chip ${transport ? 'transport-only' : entry.work_mode} ${current ? '' : 'other-project'} ${selectedEntry ? 'entry-selected' : ''} ${showOverlap ? `has-overlap ${overlap.status}` : ''}" title="${showOverlap ? `Nakładanie się projektów: ${escapeHtml(overlap.other_project_codes || 'inny projekt')}` : ''}" data-entry-id="${entry.id}" data-current-project="${current ? 1 : 0}" data-project-id="${entry.project_id || state.me.current_project?.id}" draggable="${editable && current ? 'true' : 'false'}">${transport ? '<b class="mode-label">T</b>' : `<b class="mode-label">${entry.work_mode === 'offline' ? 'OFF' : 'ON'}</b>`}<span>${current ? '' : `<em>${escapeHtml(entry.project_code)} · </em>`}${entry.area_path ? escapeHtml(entry.area_path) : entry.area_name ? escapeHtml(entry.area_name) : transport ? 'Transport' : 'Ogólne'}</span>${entry.note ? `<span class="plan-note" data-note="${escapeHtml(entry.note)}" title="${escapeHtml(entry.note)}" tabindex="0" aria-label="Notatka: ${escapeHtml(entry.note)}">i</span>` : ''}${collision}<small>${escapeHtml(entry.shift)}</small></span>`; }).join('');
   const workload = work && (work.tasks || work.points || work.statuses || work.notes) ? `<span class="workload" title="Zadania / otwarte punkty / status / notatki">${work.tasks}/${work.points}/${work.statuses}/${work.notes}</span>` : '';
   const absenceChip = absence ? `<span class="absence-chip ${absence.absence_type}" draggable="${editable ? 'true' : 'false'}"><b>${absence.absence_type === 'vacation' ? 'URLOP' : 'WOLNE'}</b><small>${escapeHtml(absence.note || '')}</small></span>` : '';
   const hours = showTime && timeDetail ? `<span class="planner-hours-chip" title="Dzisiaj: ${Number(timeDetail.actual_hours + timeDetail.credited_hours).toFixed(1)} h · narastająco bez mnożnika: ${Number(timeDetail.overtime_raw_cumulative || 0).toFixed(1)} h · z mnożnikiem: ${Number(timeDetail.overtime_weighted_cumulative || 0).toFixed(1)} h"><b>${Number(timeDetail.actual_hours + timeDetail.credited_hours).toFixed(1)}h</b><i>Σ ${Number(timeDetail.overtime_raw_cumulative || 0).toFixed(1)} / ${Number(timeDetail.overtime_weighted_cumulative || 0).toFixed(1)}</i></span>` : '';
   const selected = state.plannerSelection.has(plannerSelectionKey(user.id, date));
-  return `<td class="planner-cell ${weekend ? 'weekend' : ''} ${holiday ? 'holiday' : ''} ${absence ? 'absent' : ''} ${date === today() ? 'today' : ''} ${entries.length ? 'planned' : ''} ${overlap ? `overlap-${overlap.status}` : ''} ${selected ? 'multi-selected' : ''} ${editable ? '' : 'read-only'}" data-user-id="${user.id}" data-date="${date}" data-editable="${editable ? 1 : 0}" title="${holiday ? `${escapeHtml(holiday.name)} · ` : ''}${editable ? state.plannerSelectionMode ? 'Przeciągnij, aby zaznaczyć wiele dni' : 'Kliknij: edycja · prawy klik: kopiowanie · przeciągnij aktywność' : 'Plan tylko do odczytu'}">${absenceChip}${chips}${workload}${hours}${!absenceChip && !chips && editable ? '<i>+</i>' : ''}</td>`;
+  return `<td class="planner-cell ${weekend ? 'weekend' : ''} ${holiday ? 'holiday' : ''} ${absence ? 'absent' : ''} ${date === today() ? 'today' : ''} ${entries.length ? 'planned' : ''} ${overlap ? `overlap-${overlap.status}` : ''} ${selected ? 'multi-selected' : ''} ${editable ? '' : 'read-only'}" data-user-id="${user.id}" data-date="${date}" data-editable="${editable ? 1 : 0}" title="${holiday ? `${escapeHtml(holiday.name)} · ` : ''}${editable ? 'Lewy przycisk: zaznacz · prawy przycisk: edytuj i kopiuj · przeciągnij aktywność' : 'Plan tylko do odczytu'}">${absenceChip}${chips}${workload}${hours}${!absenceChip && !chips && editable ? '<i>+</i>' : ''}</td>`;
 }
 
 async function decidePlannerOverlap(userId, date, action) {
@@ -1860,7 +1947,14 @@ async function dropPlannerEntry(event, cell) {
 }
 
 async function reloadPlanner() {
-  try { state.planner = await api(`/api/planner?from=${state.plannerFrom}&to=${addDays(state.plannerFrom, state.plannerDays - 1)}`); renderPlanner(); } catch (error) { toast(error.message, true); }
+  try {
+    state.planner = await api(`/api/planner?from=${state.plannerFrom}&to=${addDays(state.plannerFrom, state.plannerDays - 1)}`);
+    if (state.plannerRequirementEdit) {
+      state.requirementFrom = state.plannerFrom; state.requirementDays = state.plannerDays; state.requirementData = state.planner;
+      mergePlannerRequirementData(state.requirementData);
+    }
+    renderPlanner();
+  } catch (error) { toast(error.message, true); }
 }
 
 function plannerEntryRow(entry = {}) {
@@ -2028,6 +2122,46 @@ function mergePlannerRequirementData(data) {
   }
 }
 
+function prepareInlinePlannerRequirements() {
+  const projectId = Number(state.me.current_project?.id || 0);
+  const reset = state.requirementProjectId !== projectId || !state.requirementData;
+  state.requirementProjectId = projectId;
+  state.requirementFrom = state.plannerFrom; state.requirementDays = state.plannerDays; state.requirementData = state.planner;
+  if (reset) {
+    state.requirementDraft = new Map(); state.requirementBaseline = new Map(); state.requirementDirty = new Set();
+    state.requirementSelection = null; state.requirementCollapsedGroups = new Set();
+  }
+  mergePlannerRequirementData(state.requirementData);
+}
+
+function togglePlannerRequirementsEditor() {
+  if (!state.planner?.can_manage_requirements) return;
+  state.plannerRequirementEdit = !state.plannerRequirementEdit;
+  clearPlannerSelections(false);
+  state.requirementSelection = null; state.requirementFill = null;
+  if (state.plannerRequirementEdit) prepareInlinePlannerRequirements();
+  renderPlanner();
+}
+
+function bindInlinePlannerRequirements() {
+  const level = $('#planner-requirement-level-inline');
+  if (level) {
+    level.value = state.requirementLevel;
+    level.addEventListener('change', event => { state.requirementLevel = event.target.value; state.requirementSelection = null; renderPlanner(); });
+  }
+  $$('[data-requirement-toggle-inline]').forEach(button => button.addEventListener('click', () => {
+    const id = Number(button.dataset.requirementToggleInline);
+    if (state.requirementCollapsedGroups.has(id)) state.requirementCollapsedGroups.delete(id); else state.requirementCollapsedGroups.add(id);
+    state.requirementSelection = null; renderPlanner();
+  }));
+  $('#planner-requirement-collapse-inline')?.addEventListener('click', () => { requirementCollapsibleGroups().forEach(id => state.requirementCollapsedGroups.add(id)); state.requirementSelection = null; renderPlanner(); });
+  $('#planner-requirement-expand-inline')?.addEventListener('click', () => { state.requirementCollapsedGroups.clear(); state.requirementSelection = null; renderPlanner(); });
+  $('#planner-requirement-copy-inline')?.addEventListener('click', copyRequirementSelection);
+  $('#planner-requirement-paste-inline')?.addEventListener('click', pasteRequirementSelectionFromClipboard);
+  $('#planner-requirements-save-inline')?.addEventListener('click', savePlannerRequirementsCalendar);
+  bindRequirementGrid(); updateRequirementDirtyCount();
+}
+
 async function openPlannerRequirements(date = today(), groupId = '') {
   if (!state.planner?.can_manage_requirements) return;
   state.requirementFrom = state.plannerFrom || mondayOf(date);
@@ -2036,6 +2170,7 @@ async function openPlannerRequirements(date = today(), groupId = '') {
   state.requirementDraft = new Map(); state.requirementBaseline = new Map(); state.requirementDirty = new Set();
   state.requirementSelection = null; state.requirementCollapsedGroups = new Set();
   mergePlannerRequirementData(state.requirementData);
+  $('#requirement-level').value = state.requirementLevel;
   $('#requirement-days').value = String(state.requirementDays);
   renderPlannerRequirementsCalendar();
   if (!$('#planner-requirements-dialog').open) $('#planner-requirements-dialog').showModal();
@@ -2054,7 +2189,7 @@ async function loadPlannerRequirementRange() {
 
 function requirementHierarchy() {
   const groups = state.requirementData?.areas || [];
-  const mode = $('#requirement-level')?.value || 'areas';
+  const mode = state.requirementLevel || 'areas';
   const maxDepth = mode === 'areas' ? 1 : mode === 'subareas' ? 2 : Infinity;
   const eligible = groups.filter(group => Number(group.depth || 1) <= maxDepth);
   const allowed = new Set(eligible.map(group => Number(group.id)));
@@ -2086,6 +2221,7 @@ function renderPlannerRequirementsCalendar() {
   const days = dateRange(state.requirementFrom, addDays(state.requirementFrom, state.requirementDays - 1));
   const { rows } = requirementHierarchy();
   state.requirementSelection = null; state.requirementFill = null;
+  $('#requirement-level').value = state.requirementLevel;
   $('#requirement-days').value = String(state.requirementDays);
   $('#requirement-date-range').textContent = `${displayDate(days[0])} – ${displayDate(days.at(-1))}`;
   $('#planner-requirements-calendar').innerHTML = `<div class="requirement-grid-help"><b>Jedna komórka = ON/OFF</b><span>Wpisz np. <code>4/2</code>. Przeciągnij po komórkach, użyj <code>Ctrl+C</code>/<code>Ctrl+V</code> albo przeciągnij uchwyt zaznaczenia, aby powielić wartości.</span></div><div class="requirement-calendar-scroll"><table style="--requirement-days:${days.length}"><thead><tr><th class="requirement-area">Hierarchia obszarów</th>${days.map(date => `<th class="${[0, 6].includes(new Date(`${date}T12:00:00Z`).getUTCDay()) ? 'weekend' : ''}"><b>${date.slice(8, 10)}</b><small>${new Intl.DateTimeFormat('pl-PL', { weekday: 'short', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`))}<br>${isoWeek(date).label}</small></th>`).join('')}</tr></thead><tbody>${rows.map(({ group, depth, hasChildren }, rowIndex) => `<tr><th class="requirement-area"><div class="requirement-tree-node" style="--requirement-depth:${depth}">${hasChildren ? `<button type="button" class="requirement-tree-toggle" data-requirement-toggle="${group.id}" aria-label="${state.requirementCollapsedGroups.has(Number(group.id)) ? 'Rozwiń' : 'Zwiń'} ${escapeHtml(group.name)}">${state.requirementCollapsedGroups.has(Number(group.id)) ? '›' : '⌄'}</button>` : '<i></i>'}<span><b>${escapeHtml(group.name)}</b>${depth ? `<small>${escapeHtml((group.path_names || []).slice(0, -1).join(' / '))}</small>` : ''}</span></div></th>${days.map((date, columnIndex) => { const key = `${group.id}:${date}`; const entered = state.requirementDraft.get(key) || ''; return `<td data-requirement-cell data-group="${group.id}" data-date="${date}" data-grid-row="${rowIndex}" data-grid-column="${columnIndex}"><input class="requirement-grid-input ${parseRequirementValue(entered) ? '' : 'invalid'}" value="${escapeHtml(entered)}" placeholder="0/0" inputmode="numeric" data-requirement-value aria-label="${escapeHtml(group.path_label || group.name)}, ${displayDate(date)}, ON/OFF"><i class="requirement-fill-handle" title="Przeciągnij, aby powielić zaznaczenie"></i></td>`; }).join('')}</tr>`).join('') || `<tr><td colspan="${days.length + 1}" class="empty">Brak obszarów.</td></tr>`}</tbody></table></div>`;
@@ -2133,16 +2269,17 @@ function bindRequirementGrid() {
       setRequirementSelection(state.requirementSelection?.anchor || requirementCellPosition(cell), requirementCellPosition(cell));
     }, { signal });
   });
-  const dialog = $('#planner-requirements-dialog');
-  dialog.addEventListener('keydown', event => {
+  const root = requirementGridRoot();
+  if (!root) return;
+  root.addEventListener('keydown', event => {
     if (!(event.ctrlKey || event.metaKey)) return;
     if (event.key.toLowerCase() === 'c') { event.preventDefault(); copyRequirementSelection(); }
-    if (event.key.toLowerCase() === 'a' && event.target.closest('#planner-requirements-calendar')) {
+    if (event.key.toLowerCase() === 'a' && event.target.closest('[data-requirement-cell]')) {
       event.preventDefault(); const all = requirementGridCells();
       if (all.length) setRequirementSelection(requirementCellPosition(all[0]), requirementCellPosition(all.at(-1)));
     }
   }, { signal });
-  dialog.addEventListener('paste', event => {
+  root.addEventListener('paste', event => {
     const text = event.clipboardData?.getData('text/plain');
     if (!text || !state.requirementSelection) return;
     event.preventDefault(); pasteRequirementText(text);
@@ -2151,9 +2288,10 @@ function bindRequirementGrid() {
   document.addEventListener('pointerup', finishRequirementPointerAction, { signal });
 }
 
-function requirementGridCells() { return $$('#planner-requirements-calendar [data-requirement-cell]'); }
+function requirementGridRoot() { return state.plannerRequirementEdit ? $('#planner-inline-requirements') : $('#planner-requirements-calendar'); }
+function requirementGridCells() { return [...(requirementGridRoot()?.querySelectorAll('[data-requirement-cell]') || [])]; }
 function requirementCellPosition(cell) { return { row: Number(cell.dataset.gridRow), column: Number(cell.dataset.gridColumn) }; }
-function requirementCellAt(row, column) { return $(`#planner-requirements-calendar [data-requirement-cell][data-grid-row="${row}"][data-grid-column="${column}"]`); }
+function requirementCellAt(row, column) { return requirementGridRoot()?.querySelector(`[data-requirement-cell][data-grid-row="${row}"][data-grid-column="${column}"]`) || null; }
 
 function requirementSelectionBounds(selection = state.requirementSelection) {
   if (!selection) return null;
@@ -2174,7 +2312,9 @@ function setRequirementSelection(anchor, focus) {
     cell.classList.toggle('selection-corner', row === bounds.bottom && column === bounds.right);
   });
   const count = (bounds.bottom - bounds.top + 1) * (bounds.right - bounds.left + 1);
-  $('#requirement-selection-count').textContent = `${count} ${count === 1 ? 'komórka' : count < 5 ? 'komórki' : 'komórek'} · ${bounds.bottom - bounds.top + 1} × ${bounds.right - bounds.left + 1}`;
+  const label = `${count} ${count === 1 ? 'komórka' : count < 5 ? 'komórki' : 'komórek'} · ${bounds.bottom - bounds.top + 1} × ${bounds.right - bounds.left + 1}`;
+  if ($('#requirement-selection-count')) $('#requirement-selection-count').textContent = label;
+  if ($('#requirement-selection-count-inline')) $('#requirement-selection-count-inline').textContent = label;
 }
 
 function normalizedRequirementValue(value) {
@@ -2192,8 +2332,12 @@ function writeRequirementCell(cell, value) {
 
 function updateRequirementDirtyCount() {
   const count = state.requirementDirty.size;
-  $('#requirement-dirty-count').textContent = count === 1 ? '1 niezapisana zmiana' : count > 1 && count < 5 ? `${count} niezapisane zmiany` : count ? `${count} niezapisanych zmian` : 'Brak niezapisanych zmian';
-  $('#planner-requirements-save').disabled = !count;
+  const label = count === 1 ? '1 niezapisana zmiana' : count > 1 && count < 5 ? `${count} niezapisane zmiany` : count ? `${count} niezapisanych zmian` : 'Brak niezapisanych zmian';
+  if ($('#requirement-dirty-count')) $('#requirement-dirty-count').textContent = label;
+  if ($('#requirement-dirty-count-inline')) $('#requirement-dirty-count-inline').textContent = label;
+  if ($('#planner-requirements-save')) $('#planner-requirements-save').disabled = !count;
+  if ($('#planner-requirements-save-inline')) $('#planner-requirements-save-inline').disabled = !count;
+  if ($('#planner-requirements-open')) $('#planner-requirements-open').textContent = `Zapotrzebowanie${count ? ` · ${count}` : ''}`;
 }
 
 function navigateRequirementGrid(event, cell) {
@@ -2271,7 +2415,7 @@ function startRequirementFill(event) {
 function moveRequirementFill(event) {
   if (!state.requirementFill) return;
   const cell = document.elementFromPoint(event.clientX, event.clientY)?.closest?.('[data-requirement-cell]');
-  if (!cell || !cell.closest('#planner-requirements-calendar')) return;
+  if (!cell || !requirementGridRoot()?.contains(cell)) return;
   const position = requirementCellPosition(cell); const source = state.requirementFill.source;
   state.requirementFill.target = { top: Math.min(source.top, position.row), bottom: Math.max(source.bottom, position.row), left: Math.min(source.left, position.column), right: Math.max(source.right, position.column) };
   requirementGridCells().forEach(item => { const { row, column } = requirementCellPosition(item); const target = state.requirementFill.target; item.classList.toggle('fill-preview', row >= target.top && row <= target.bottom && column >= target.left && column <= target.right); });
@@ -2298,15 +2442,16 @@ async function savePlannerRequirementsCalendar() {
   });
   if (items.some(item => !item)) return toast('Popraw zaznaczone komórki. Użyj formatu ON/OFF, np. 4/2.', true);
   if (!items.length) return toast('Brak zmian do zapisania');
-  const button = $('#planner-requirements-save'); button.disabled = true;
+  const button = state.plannerRequirementEdit ? $('#planner-requirements-save-inline') : $('#planner-requirements-save'); if (button) button.disabled = true;
   try {
     for (let index = 0; index < items.length; index += 1500) await api('/api/planner/requirements/batch', { method: 'PUT', body: JSON.stringify({ items: items.slice(index, index + 1500).map(({ key, ...item }) => item) }) });
     for (const item of items) { const value = normalizedRequirementValue(state.requirementDraft.get(item.key)); state.requirementDraft.set(item.key, value); state.requirementBaseline.set(item.key, value); state.requirementDirty.delete(item.key); }
+    state.requirementSelection = null;
     toast(`Zapisano zapotrzebowanie dla ${items.length} ${items.length === 1 ? 'komórki' : 'komórek'}`);
     await reloadPlanner();
     updateRequirementDirtyCount();
   } catch (error) { toast(error.message, true); }
-  finally { button.disabled = !state.requirementDirty.size; }
+  finally { if (button) button.disabled = !state.requirementDirty.size; }
 }
 
 async function addPlannerHoliday() {
@@ -2365,23 +2510,27 @@ function showPlannerContext(event, userId, date, entryId = null) {
   if (!Number(user?.planner_enabled) && date !== today()) return toast('Ta osoba może być planowana tylko na dzisiaj', true);
   const menu = $('#context-menu');
   const entry = entryId ? state.planner.entries.find(item => item.id === entryId) : null;
-  menu.innerHTML = `<section><b>Edycja dnia</b><button data-action="edit">Edytuj plan dnia</button><button data-action="assign">Przypisz zadania, status lub punkty</button></section><section><b>Kopiowanie i powielanie</b>${entry ? '<button data-action="copy-entry">Kopiuj to przypisanie</button><button data-action="repeat-entry">Powiel przypisanie na wiele dni…</button>' : ''}<button data-action="copy-day">Kopiuj cały dzień</button><button data-action="repeat-day">Powiel cały dzień na wiele dni…</button>${state.plannerClipboard ? `<button data-action="paste">Wklej ${state.plannerClipboard.kind === 'day' ? 'cały dzień' : 'przypisanie'}</button><button data-action="paste-range">Wklej na zakres dni…</button>` : ''}</section><section class="context-danger"><b>Usuwanie</b>${entry ? '<button class="danger-text" data-action="delete-entry">Usuń wskazane przypisanie</button>' : ''}<button class="danger-text" data-action="clear">Wyczyść cały dzień</button></section>`;
+  if (entry) {
+    if (!state.plannerEntrySelection.has(Number(entry.id))) { clearPlannerSelections(false); state.plannerEntrySelection.add(Number(entry.id)); event.target.closest('.plan-chip')?.classList.add('entry-selected'); }
+  } else {
+    const key = plannerSelectionKey(userId, date);
+    if (!state.plannerSelection.has(key)) { clearPlannerSelections(false); state.plannerSelection.add(key); event.target.closest('.planner-cell')?.classList.add('multi-selected'); }
+  }
+  updatePlannerBulkCount();
+  const selectedLabel = state.plannerEntrySelection.size ? `${state.plannerEntrySelection.size} aktywności` : `${state.plannerSelection.size} dni`;
+  menu.innerHTML = `<section><b>Edycja dnia</b><button data-action="edit">Edytuj plan dnia</button><button data-action="assign">Przypisz zadania, status lub punkty</button></section><section><b>Zaznaczenie · ${selectedLabel}</b><button data-action="copy-selection">Kopiuj zaznaczenie <small>Ctrl+C</small></button>${state.plannerClipboard && state.plannerSelection.size ? `<button data-action="paste-selection">Wklej do zaznaczonych dni <small>Ctrl+V</small></button>` : ''}</section><section><b>Kopiowanie i powielanie</b>${entry ? '<button data-action="copy-entry">Kopiuj to przypisanie</button><button data-action="repeat-entry">Powiel przypisanie na wiele dni…</button>' : ''}<button data-action="copy-day">Kopiuj cały dzień</button><button data-action="repeat-day">Powiel cały dzień na wiele dni…</button>${state.plannerClipboard && state.plannerClipboard.kind !== 'days' ? '<button data-action="paste-range">Wklej na zakres dni…</button>' : ''}</section><section class="context-danger"><b>Usuwanie</b>${entry ? '<button class="danger-text" data-action="delete-entry">Usuń wskazane przypisanie</button>' : ''}<button class="danger-text" data-action="clear">Wyczyść cały dzień</button></section>`;
   menu.style.left = `${Math.min(event.clientX, innerWidth - 300)}px`; menu.style.top = `${Math.max(8, Math.min(event.clientY, innerHeight - 430))}px`; menu.classList.remove('hidden');
   menu.querySelectorAll('button').forEach(button => button.addEventListener('click', async () => {
     menu.classList.add('hidden');
     const daySnapshot = plannerDaySnapshot(userId, date);
-    const dayEntries = daySnapshot.entries;
     try {
-      if (button.dataset.action === 'copy-entry' && entry) { state.plannerClipboard = { kind: 'entry', entries: [entry] }; return toast('Skopiowano przypisanie'); }
+      if (button.dataset.action === 'copy-selection') return copyPlannerSelection();
+      if (button.dataset.action === 'paste-selection') return pastePlannerSelection();
+      if (button.dataset.action === 'copy-entry' && entry) { state.plannerClipboard = { kind: 'entry', entries: [plannerEntryPayload(entry)] }; updatePlannerBulkCount(); return toast('Skopiowano przypisanie'); }
       if (button.dataset.action === 'delete-entry' && entry && await uiConfirm('Usuń aktywność', 'Usunięty zostanie tylko wskazany element dnia. Pozostały plan pracownika pozostanie bez zmian.', 'Usuń', true)) { await api(`/api/planner/entries/${entry.id}`, { method: 'DELETE' }); toast('Aktywność została usunięta'); return reloadPlanner(); }
-      if (button.dataset.action === 'copy-day') { state.plannerClipboard = { kind: 'day', ...daySnapshot }; return toast('Skopiowano cały dzień razem z urlopem lub wolnym'); }
+      if (button.dataset.action === 'copy-day') { state.plannerClipboard = { kind: 'day', ...daySnapshot }; updatePlannerBulkCount(); return toast('Skopiowano cały dzień razem z urlopem lub wolnym'); }
       if (button.dataset.action === 'repeat-entry' && entry) return pastePlannerRange(userId, date, [entry], 'entry');
       if (button.dataset.action === 'repeat-day') return pastePlannerRange(userId, date, daySnapshot, 'day');
-      if (button.dataset.action === 'paste') {
-        const source = state.plannerClipboard.entries || [];
-        const target = state.plannerClipboard.kind === 'day' ? source : [...dayEntries, ...source];
-        if (await savePlannerTarget(userId, date, target, state.plannerClipboard.kind === 'day' ? state.plannerClipboard : {})) toast('Plan został wklejony'); return;
-      }
       if (button.dataset.action === 'paste-range') return pastePlannerRange(userId, date, state.plannerClipboard.kind === 'day' ? state.plannerClipboard : (state.plannerClipboard.entries || []), state.plannerClipboard.kind);
       if (button.dataset.action === 'assign') return openEntitySelection({ mode: 'planner', userId, date, allowed: ['task', 'status', 'point'] });
       if (button.dataset.action === 'edit') return openPlannerCell(userId, date);
