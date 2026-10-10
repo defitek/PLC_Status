@@ -119,6 +119,12 @@ CREATE TABLE IF NOT EXISTS settings (
   PRIMARY KEY(project_id,key)
 ) STRICT, WITHOUT ROWID;
 
+CREATE TABLE IF NOT EXISTS system_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+) STRICT, WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS function_groups (
   id INTEGER PRIMARY KEY,
   project_id INTEGER NOT NULL DEFAULT 1 REFERENCES projects(id) ON DELETE CASCADE,
@@ -550,6 +556,39 @@ CREATE TABLE IF NOT EXISTS planner_absences (
   UNIQUE(project_id,user_id,absence_date)
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS system_holidays (
+  id INTEGER PRIMARY KEY,
+  holiday_date TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS system_absences (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  absence_date TEXT NOT NULL,
+  absence_type TEXT NOT NULL CHECK(absence_type IN ('time_off','vacation')),
+  note TEXT NOT NULL DEFAULT '',
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(user_id,absence_date)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS planner_overlap_reviews (
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  plan_date TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),
+  requested_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  decided_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  decided_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(project_id,user_id,plan_date)
+) STRICT, WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS planner_time_adjustments (
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -936,6 +975,8 @@ CREATE INDEX IF NOT EXISTS idx_entity_requirements_entity ON entity_requirements
 CREATE INDEX IF NOT EXISTS idx_planner_holidays_date ON planner_holidays(project_id,holiday_date);
 CREATE INDEX IF NOT EXISTS idx_planner_absences_date ON planner_absences(project_id,absence_date,user_id);
 CREATE INDEX IF NOT EXISTS idx_planner_time_adjustments_date ON planner_time_adjustments(project_id,plan_date,user_id);
+CREATE INDEX IF NOT EXISTS idx_system_absences_date ON system_absences(absence_date,user_id);
+CREATE INDEX IF NOT EXISTS idx_planner_overlap_reviews ON planner_overlap_reviews(project_id,status,plan_date,user_id);
 CREATE INDEX IF NOT EXISTS idx_saved_views_owner ON saved_views(project_id,module,visibility,owner_user_id);
 CREATE INDEX IF NOT EXISTS idx_task_dependencies_task ON task_dependencies(project_id,task_id,prerequisite_task_id);
 CREATE INDEX IF NOT EXISTS idx_entity_dependencies_dependent ON entity_dependencies(project_id,dependent_type,dependent_id);

@@ -71,6 +71,7 @@ export function openDatabase(databasePath) {
   migrateToV13(db);
   migrateToV14(db);
   migrateEntityDependencies(db);
+  migrateGlobalPlannerData(db);
   syncProjectMemberships(db);
   removeEmptyDuplicateControllerRoots(db);
   backfillV3(db);
@@ -97,6 +98,26 @@ function migrateEntityDependencies(db) {
   db.exec(`INSERT OR IGNORE INTO entity_dependencies(
     project_id,dependent_type,dependent_id,prerequisite_type,prerequisite_id,created_by,created_at
   ) SELECT project_id,'task',task_id,'task',prerequisite_task_id,created_by,created_at FROM task_dependencies`);
+}
+
+const globalPlannerSettingKeys = [
+  'planner_online_hours', 'planner_offline_hours', 'planner_base_hours', 'planner_weekday_multiplier',
+  'planner_saturday_multiplier', 'planner_sunday_holiday_multiplier', 'planner_time_off_debit'
+];
+
+function migrateGlobalPlannerData(db) {
+  const migrated = db.prepare("SELECT value FROM app_meta WHERE key='global_planner_data_v1'").get()?.value === '1';
+  if (!migrated) db.exec(`INSERT OR IGNORE INTO system_holidays(holiday_date,name,created_by,created_at)
+      SELECT holiday_date,name,created_by,created_at FROM planner_holidays ORDER BY project_id,id;
+      INSERT OR IGNORE INTO system_absences(user_id,absence_date,absence_type,note,created_by,created_at,updated_at)
+      SELECT user_id,absence_date,absence_type,note,created_by,created_at,updated_at FROM planner_absences ORDER BY project_id,id;`);
+  const insert = db.prepare('INSERT OR IGNORE INTO system_settings(key,value) VALUES(?,?)');
+  const defaults = { planner_online_hours: '10.5', planner_offline_hours: '8', planner_base_hours: '8', planner_weekday_multiplier: '1.5', planner_saturday_multiplier: '1.5', planner_sunday_holiday_multiplier: '2', planner_time_off_debit: '8' };
+  for (const key of globalPlannerSettingKeys) {
+    const value = !migrated ? db.prepare('SELECT value FROM settings WHERE key=? ORDER BY project_id LIMIT 1').get(key)?.value || defaults[key] : defaults[key];
+    insert.run(key, value);
+  }
+  if (!migrated) db.prepare("INSERT INTO app_meta(key,value) VALUES('global_planner_data_v1','1') ON CONFLICT(key) DO UPDATE SET value='1'").run();
 }
 
 function primaryProjectId(db) {
@@ -719,9 +740,14 @@ function seedSecondProject(db, hashPassword) {
 function syncProjectMemberships(db) {
   const users = db.prepare('SELECT id,role,system_role FROM users WHERE active=1').all();
   const projects = db.prepare('SELECT id FROM projects WHERE active=1').all();
-  const insert = db.prepare('INSERT OR IGNORE INTO project_memberships(project_id,user_id,role,active) VALUES(?,?,?,1)');
+  const insert = db.prepare(`INSERT OR IGNORE INTO project_memberships(project_id,user_id,role,active,planner_enabled,assignable)
+    VALUES(?,?,?,?,?,?)`);
   for (const user of users) {
-    for (const project of projects) insert.run(project.id, user.id, user.system_role === 'system_admin' || user.role === 'admin' ? 'project_admin' : ['moderator', 'user'].includes(user.role) ? user.role : 'user');
+    const isSystemAdmin = user.system_role === 'system_admin' || user.role === 'admin';
+    for (const project of projects) insert.run(
+      project.id, user.id, isSystemAdmin ? 'project_admin' : ['moderator', 'user'].includes(user.role) ? user.role : 'user',
+      isSystemAdmin ? 1 : 0, isSystemAdmin ? 1 : 0, isSystemAdmin ? 1 : 0
+    );
   }
 }
 
@@ -2017,6 +2043,21 @@ function createRepository(db, defaultProjectId) {
     db.prepare('DELETE FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=?').run(activeProjectId(), userId, planDate);
     const insert = db.prepare(`INSERT INTO planner_entries(project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,note,created_by) VALUES(?,?,?,?,?,?,?,?,?)`);
     normalized.forEach(entry => insert.run(activeProjectId(), userId, planDate, entry.shift, entry.groupId, entry.workMode, entry.transportMode, entry.note, currentUser.id));
+    syncPlannerOverlapReview(userId, planDate, currentUser);
+  }
+
+  function syncPlannerOverlapReview(userId, planDate, currentUser) {
+    const projectIds = all(`SELECT DISTINCT pe.project_id FROM planner_entries pe JOIN projects p ON p.id=pe.project_id AND p.active=1
+      WHERE pe.user_id=? AND pe.plan_date=? ORDER BY pe.project_id`, userId, planDate).map(row => Number(row.project_id));
+    if (projectIds.length < 2) {
+      db.prepare('DELETE FROM planner_overlap_reviews WHERE user_id=? AND plan_date=?').run(userId, planDate);
+      return;
+    }
+    const insert = db.prepare(`INSERT INTO planner_overlap_reviews(project_id,user_id,plan_date,status,requested_by)
+      VALUES(?,?,?,'pending',?) ON CONFLICT(project_id,user_id,plan_date) DO UPDATE SET
+      status=CASE WHEN planner_overlap_reviews.status='approved' THEN 'approved' ELSE 'pending' END,
+      requested_by=excluded.requested_by,updated_at=CURRENT_TIMESTAMP`);
+    projectIds.forEach(projectId => insert.run(projectId, userId, planDate, currentUser.id));
   }
 
   function plannerData(fromValue, toValue, currentUser = null) {
@@ -2045,11 +2086,19 @@ function createRepository(db, defaultProjectId) {
         const area = otherHierarchy.groups.find(group => group.id === Number(entry.controller_group_id));
         return { ...entry, activity_type: entry.transport_mode === 'transport_only' ? 'transport' : 'work', is_current_project: false, area_name: area?.name || '', area_path: area?.path_label || '', area_depth: area?.depth || 0, root_area_id: area?.root_group_id || null };
       });
-    const holidays = all('SELECT * FROM planner_holidays WHERE project_id=? AND holiday_date BETWEEN ? AND ? ORDER BY holiday_date', activeProjectId(), range.from, range.to);
+    const holidays = all('SELECT * FROM system_holidays WHERE holiday_date BETWEEN ? AND ? ORDER BY holiday_date', range.from, range.to);
     const timeAdjustments = all(`SELECT * FROM planner_time_adjustments
       WHERE project_id=? AND plan_date BETWEEN ? AND ? ORDER BY plan_date,user_id`, activeProjectId(), range.from, range.to);
-    const absences = all(`SELECT pa.*,u.display_name FROM planner_absences pa JOIN users u ON u.id=pa.user_id
-      WHERE pa.project_id=? AND pa.absence_date BETWEEN ? AND ? ORDER BY pa.absence_date,u.sort_order,u.display_name`, activeProjectId(), range.from, range.to);
+    const absences = all(`SELECT pa.*,u.display_name FROM system_absences pa JOIN users u ON u.id=pa.user_id
+      WHERE pa.absence_date BETWEEN ? AND ? ORDER BY pa.absence_date,u.sort_order,u.display_name`, range.from, range.to);
+    const overlapReviews = all(`SELECT por.*,u.display_name,decider.display_name decided_by_name,
+      GROUP_CONCAT(DISTINCT p.code) other_project_codes
+      FROM planner_overlap_reviews por JOIN users u ON u.id=por.user_id
+      LEFT JOIN users decider ON decider.id=por.decided_by
+      LEFT JOIN planner_entries pe ON pe.user_id=por.user_id AND pe.plan_date=por.plan_date AND pe.project_id!=por.project_id
+      LEFT JOIN projects p ON p.id=pe.project_id AND p.active=1
+      WHERE por.project_id=? AND por.plan_date BETWEEN ? AND ?
+      GROUP BY por.project_id,por.user_id,por.plan_date ORDER BY por.plan_date,u.sort_order,u.display_name`, activeProjectId(), range.from, range.to);
     const usersWithEntries = new Set([...entries.map(entry => Number(entry.user_id)), ...crossProjectEntries.map(entry => Number(entry.user_id)), ...absences.map(item => Number(item.user_id))]);
     const decorateUser = user => {
       const areaIds = all('SELECT controller_group_id FROM project_user_areas WHERE project_id=? AND user_id=? ORDER BY sort_order', activeProjectId(), user.id).map(row => row.controller_group_id);
@@ -2140,27 +2189,27 @@ function createRepository(db, defaultProjectId) {
     if (canManageRequirements) {
       const historicalStarts = [
         one('SELECT MIN(plan_date) value FROM planner_entries WHERE project_id=?', activeProjectId())?.value,
-        one('SELECT MIN(absence_date) value FROM planner_absences WHERE project_id=?', activeProjectId())?.value,
+        one('SELECT MIN(absence_date) value FROM system_absences')?.value,
         one('SELECT MIN(plan_date) value FROM planner_time_adjustments WHERE project_id=?', activeProjectId())?.value
       ].filter(Boolean).sort();
       const calculationFrom = historicalStarts[0] && historicalStarts[0] < range.from ? historicalStarts[0] : range.from;
       const calculationRange = safeDateRange(calculationFrom, range.to, 7305);
       const calculationEntries = calculationFrom === range.from ? entries : all(`SELECT * FROM planner_entries
         WHERE project_id=? AND plan_date BETWEEN ? AND ? ORDER BY plan_date,user_id,id`, activeProjectId(), calculationFrom, range.to);
-      const calculationAbsences = calculationFrom === range.from ? absences : all(`SELECT * FROM planner_absences
-        WHERE project_id=? AND absence_date BETWEEN ? AND ? ORDER BY absence_date,user_id`, activeProjectId(), calculationFrom, range.to);
-      const calculationHolidays = calculationFrom === range.from ? holidays : all(`SELECT * FROM planner_holidays
-        WHERE project_id=? AND holiday_date BETWEEN ? AND ? ORDER BY holiday_date`, activeProjectId(), calculationFrom, range.to);
+      const calculationAbsences = calculationFrom === range.from ? absences : all(`SELECT * FROM system_absences
+        WHERE absence_date BETWEEN ? AND ? ORDER BY absence_date,user_id`, calculationFrom, range.to);
+      const calculationHolidays = calculationFrom === range.from ? holidays : all(`SELECT * FROM system_holidays
+        WHERE holiday_date BETWEEN ? AND ? ORDER BY holiday_date`, calculationFrom, range.to);
       const calculationAdjustments = calculationFrom === range.from ? timeAdjustments : all(`SELECT * FROM planner_time_adjustments
         WHERE project_id=? AND plan_date BETWEEN ? AND ? ORDER BY plan_date,user_id`, activeProjectId(), calculationFrom, range.to);
       timeDetails = plannerTimeCalculation(calculationRange, projectUsers, calculationEntries, calculationAbsences, calculationHolidays, calculationAdjustments, range);
     }
-    return { ...range, users, available_today_users, entries, cross_project_entries: crossProjectEntries, absences, holidays, time_adjustments: canManageRequirements ? timeAdjustments : [], work, summary, area_summary, area_day_summary, shift_summary, mode_summary, areas: hierarchy.groups, requirements, time_details: timeDetails, can_manage_requirements: canManageRequirements, can_manage_time: canManageRequirements };
+    return { ...range, users, available_today_users, entries, cross_project_entries: crossProjectEntries, absences, holidays, overlap_reviews: overlapReviews, time_adjustments: canManageRequirements ? timeAdjustments : [], work, summary, area_summary, area_day_summary, shift_summary, mode_summary, areas: hierarchy.groups, requirements, time_details: timeDetails, can_manage_requirements: canManageRequirements, can_manage_time: canManageRequirements };
   }
 
   function plannerTimeCalculation(range, users, entries, absences, holidays, adjustments = [], visibleRange = range) {
     const settingNumber = (key, fallback) => {
-      const value = Number(one('SELECT value FROM settings WHERE project_id=? AND key=?', activeProjectId(), key)?.value);
+      const value = Number(one('SELECT value FROM system_settings WHERE key=?', key)?.value);
       return Number.isFinite(value) ? value : fallback;
     };
     const onlineHours = settingNumber('planner_online_hours', 10.5);
@@ -2280,9 +2329,9 @@ function createRepository(db, defaultProjectId) {
     db.exec('BEGIN IMMEDIATE');
     try {
       replacePlannerDay(userId, planDate, normalized, currentUser);
-      db.prepare('DELETE FROM planner_absences WHERE project_id=? AND user_id=? AND absence_date=?').run(activeProjectId(), userId, planDate);
-      if (absenceType) db.prepare(`INSERT INTO planner_absences(project_id,user_id,absence_date,absence_type,note,created_by)
-        VALUES(?,?,?,?,?,?)`).run(activeProjectId(), userId, planDate, absenceType, clean(input.absence_note), currentUser.id);
+      db.prepare('DELETE FROM system_absences WHERE user_id=? AND absence_date=?').run(userId, planDate);
+      if (absenceType) db.prepare(`INSERT INTO system_absences(user_id,absence_date,absence_type,note,created_by)
+        VALUES(?,?,?,?,?)`).run(userId, planDate, absenceType, clean(input.absence_note), currentUser.id);
       if (['actual_hours_adjustment', 'overtime_raw_adjustment', 'overtime_weighted_adjustment', 'work_start_time', 'work_end_time', 'overtime_raw_balance_override', 'overtime_weighted_balance_override', 'adjustment_note'].some(key => Object.hasOwn(input, key))) {
         const actualAdjustment = Number(input.actual_hours_adjustment || 0);
         const rawAdjustment = Number(input.overtime_raw_adjustment || 0);
@@ -2316,7 +2365,7 @@ function createRepository(db, defaultProjectId) {
     const targetDate = nullableDate(input.target_date);
     if (!targetUserId || !targetDate) throw appError('Pracownik i dzień docelowy są wymagane');
     validatePlannerUserDate(targetUserId, targetDate);
-    if (one('SELECT 1 FROM planner_absences WHERE project_id=? AND user_id=? AND absence_date=?', activeProjectId(), targetUserId, targetDate)) throw appError('Nie można przenieść aktywności na dzień oznaczony jako urlop lub wolne');
+    if (one('SELECT 1 FROM system_absences WHERE user_id=? AND absence_date=?', targetUserId, targetDate)) throw appError('Nie można przenieść aktywności na dzień oznaczony jako urlop lub wolne');
     if (entry.user_id === targetUserId && entry.plan_date === targetDate) return plannerData(targetDate, targetDate, currentUser);
     const sourceRows = all('SELECT * FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=? ORDER BY id', activeProjectId(), entry.user_id, entry.plan_date);
     const targetRows = all('SELECT * FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=? ORDER BY id', activeProjectId(), targetUserId, targetDate);
@@ -2338,6 +2387,7 @@ function createRepository(db, defaultProjectId) {
     const entry = one('SELECT * FROM planner_entries WHERE id=? AND project_id=?', asId(id), activeProjectId());
     if (!entry) throw appError('Nie znaleziono aktywności Plannera', 404);
     db.prepare('DELETE FROM planner_entries WHERE id=? AND project_id=?').run(entry.id, activeProjectId());
+    syncPlannerOverlapReview(entry.user_id, entry.plan_date, currentUser);
     return plannerData(entry.plan_date, entry.plan_date, currentUser);
   }
 
@@ -2348,20 +2398,20 @@ function createRepository(db, defaultProjectId) {
     validatePlannerUserDate(sourceUserId, sourceDate); validatePlannerUserDate(targetUserId, targetDate);
     if (sourceUserId === targetUserId && sourceDate === targetDate) return plannerData(sourceDate, targetDate, currentUser);
     const entries = normalizePlannerEntries(all('SELECT * FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=? ORDER BY id', activeProjectId(), sourceUserId, sourceDate));
-    const absence = one('SELECT * FROM planner_absences WHERE project_id=? AND user_id=? AND absence_date=?', activeProjectId(), sourceUserId, sourceDate);
+    const absence = one('SELECT * FROM system_absences WHERE user_id=? AND absence_date=?', sourceUserId, sourceDate);
     const adjustment = one('SELECT * FROM planner_time_adjustments WHERE project_id=? AND user_id=? AND plan_date=?', activeProjectId(), sourceUserId, sourceDate);
     if (!entries.length && !absence && !adjustment) throw appError('Dzień źródłowy nie zawiera planu, urlopu ani korekty czasu');
     db.exec('BEGIN IMMEDIATE');
     try {
       replacePlannerDay(targetUserId, targetDate, absence ? [] : entries, currentUser);
-      db.prepare('DELETE FROM planner_absences WHERE project_id=? AND user_id=? AND absence_date=?').run(activeProjectId(), targetUserId, targetDate);
-      if (absence) db.prepare('INSERT INTO planner_absences(project_id,user_id,absence_date,absence_type,note,created_by) VALUES(?,?,?,?,?,?)').run(activeProjectId(), targetUserId, targetDate, absence.absence_type, absence.note, currentUser.id);
+      db.prepare('DELETE FROM system_absences WHERE user_id=? AND absence_date=?').run(targetUserId, targetDate);
+      if (absence) db.prepare('INSERT INTO system_absences(user_id,absence_date,absence_type,note,created_by) VALUES(?,?,?,?,?)').run(targetUserId, targetDate, absence.absence_type, absence.note, currentUser.id);
       db.prepare('DELETE FROM planner_time_adjustments WHERE project_id=? AND user_id=? AND plan_date=?').run(activeProjectId(), targetUserId, targetDate);
       if (adjustment) db.prepare(`INSERT INTO planner_time_adjustments(project_id,user_id,plan_date,actual_hours_adjustment,overtime_raw_adjustment,overtime_weighted_adjustment,work_start_time,work_end_time,overtime_raw_balance_override,overtime_weighted_balance_override,note,updated_by)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(activeProjectId(), targetUserId, targetDate, adjustment.actual_hours_adjustment, adjustment.overtime_raw_adjustment, adjustment.overtime_weighted_adjustment, adjustment.work_start_time, adjustment.work_end_time, adjustment.overtime_raw_balance_override, adjustment.overtime_weighted_balance_override, adjustment.note, currentUser.id);
       if (!Number(input.copy)) {
         replacePlannerDay(sourceUserId, sourceDate, [], currentUser);
-        db.prepare('DELETE FROM planner_absences WHERE project_id=? AND user_id=? AND absence_date=?').run(activeProjectId(), sourceUserId, sourceDate);
+        db.prepare('DELETE FROM system_absences WHERE user_id=? AND absence_date=?').run(sourceUserId, sourceDate);
         db.prepare('DELETE FROM planner_time_adjustments WHERE project_id=? AND user_id=? AND plan_date=?').run(activeProjectId(), sourceUserId, sourceDate);
       }
       db.exec('COMMIT');
@@ -2398,10 +2448,14 @@ function createRepository(db, defaultProjectId) {
     if (!holidayDate || !name) throw appError('Data i nazwa święta są wymagane');
     let recordId = asId(id);
     if (recordId) {
-      const result = db.prepare('UPDATE planner_holidays SET holiday_date=?,name=? WHERE id=? AND project_id=?').run(holidayDate, name, recordId, activeProjectId());
+      const result = db.prepare('UPDATE system_holidays SET holiday_date=?,name=? WHERE id=?').run(holidayDate, name, recordId);
       if (!result.changes) throw appError('Nie znaleziono święta', 404);
-    } else recordId = insertRecord('planner_holidays', { project_id: activeProjectId(), holiday_date: holidayDate, name, created_by: currentUser.id });
-    return one('SELECT * FROM planner_holidays WHERE id=?', recordId);
+    } else {
+      db.prepare(`INSERT INTO system_holidays(holiday_date,name,created_by) VALUES(?,?,?)
+        ON CONFLICT(holiday_date) DO UPDATE SET name=excluded.name`).run(holidayDate, name, currentUser.id);
+      recordId = one('SELECT id FROM system_holidays WHERE holiday_date=?', holidayDate).id;
+    }
+    return one('SELECT * FROM system_holidays WHERE id=?', recordId);
   }
 
   function savePlannerHolidaysBulk(input, currentUser) {
@@ -2413,8 +2467,8 @@ function createRepository(db, defaultProjectId) {
         const holidayDate = nullableDate(item.holiday_date);
         const name = clean(item.name);
         if (!holidayDate || !name) throw appError('Każdy wiersz musi zawierać datę RRRR-MM-DD i nazwę święta');
-        db.prepare(`INSERT INTO planner_holidays(project_id,holiday_date,name,created_by) VALUES(?,?,?,?)
-          ON CONFLICT(project_id,holiday_date) DO UPDATE SET name=excluded.name`).run(activeProjectId(), holidayDate, name, currentUser.id);
+        db.prepare(`INSERT INTO system_holidays(holiday_date,name,created_by) VALUES(?,?,?)
+          ON CONFLICT(holiday_date) DO UPDATE SET name=excluded.name`).run(holidayDate, name, currentUser.id);
       }
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
@@ -2422,8 +2476,28 @@ function createRepository(db, defaultProjectId) {
   }
 
   function deletePlannerHoliday(id) {
-    const result = db.prepare('DELETE FROM planner_holidays WHERE id=? AND project_id=?').run(asId(id), activeProjectId());
+    const result = db.prepare('DELETE FROM system_holidays WHERE id=?').run(asId(id));
     if (!result.changes) throw appError('Nie znaleziono święta', 404);
+  }
+
+  function reviewPlannerOverlap(input, currentUser) {
+    const userId = asId(input.user_id);
+    const planDate = nullableDate(input.plan_date);
+    const action = clean(input.action);
+    if (!userId || !planDate || !['approve', 'reject'].includes(action)) throw appError('Nieprawidłowa decyzja dla kolizji planu');
+    const review = one('SELECT * FROM planner_overlap_reviews WHERE project_id=? AND user_id=? AND plan_date=?', activeProjectId(), userId, planDate);
+    if (!review) throw appError('Nie znaleziono kolizji wymagającej decyzji', 404);
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      if (action === 'reject') {
+        db.prepare('DELETE FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=?').run(activeProjectId(), userId, planDate);
+        db.prepare('DELETE FROM planner_overlap_reviews WHERE project_id!=? AND user_id=? AND plan_date=?').run(activeProjectId(), userId, planDate);
+      }
+      db.prepare(`UPDATE planner_overlap_reviews SET status=?,decided_by=?,decided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP
+        WHERE project_id=? AND user_id=? AND plan_date=?`).run(action === 'approve' ? 'approved' : 'rejected', currentUser.id, activeProjectId(), userId, planDate);
+      db.exec('COMMIT');
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
+    return plannerData(planDate, planDate, currentUser);
   }
 
   function assignPlannerWork(input, currentUser) {
@@ -2521,7 +2595,7 @@ function createRepository(db, defaultProjectId) {
       if (placement.entity_type === 'goal') push({ ...common, title: row.title, assigned_names: row.created_by_name, color: 'blue', related_to_me: row.created_by === currentUser.id });
     }
     events.sort((a, b) => a.start_date.localeCompare(b.start_date) || Number(b.entity_type === 'annotation') - Number(a.entity_type === 'annotation') || a.entity_type.localeCompare(b.entity_type) || a.title.localeCompare(b.title, 'pl'));
-    const holidays = all('SELECT holiday_date,name FROM planner_holidays WHERE project_id=? AND holiday_date BETWEEN ? AND ? ORDER BY holiday_date', activeProjectId(), range.from, range.to);
+    const holidays = all('SELECT holiday_date,name FROM system_holidays WHERE holiday_date BETWEEN ? AND ? ORDER BY holiday_date', range.from, range.to);
     return { ...range, events, holidays };
   }
 
@@ -3868,7 +3942,7 @@ function createRepository(db, defaultProjectId) {
     users() {
       return all(`SELECT u.id,u.username,u.display_name,u.system_role,u.theme,u.active,u.sort_order,u.created_at,
         pm.role project_role,COALESCE(pm.role,'user') role,COALESCE(pm.active,0) project_active,
-        COALESCE(pm.planner_enabled,0) planner_enabled,COALESCE(pm.assignable,1) assignable,COALESCE(pm.summary_area_source,'configuration') summary_area_source
+        COALESCE(pm.planner_enabled,0) planner_enabled,COALESCE(pm.assignable,0) assignable,COALESCE(pm.summary_area_source,'configuration') summary_area_source
         FROM users u LEFT JOIN project_memberships pm ON pm.user_id=u.id AND pm.project_id=?
         ORDER BY u.sort_order,u.display_name`, activeProjectId()).map(user => ({
           ...user,
@@ -4224,9 +4298,12 @@ function createRepository(db, defaultProjectId) {
           })),
         options: all('SELECT * FROM options WHERE project_id=? AND active=1 ORDER BY kind,sort_order,value', activeProjectId()),
         announcement_labels: all('SELECT * FROM announcement_labels WHERE project_id=? AND active=1 ORDER BY sort_order,name', activeProjectId()),
-        planner_holidays: all('SELECT * FROM planner_holidays WHERE project_id=? ORDER BY holiday_date', activeProjectId()),
+        planner_holidays: all('SELECT * FROM system_holidays ORDER BY holiday_date'),
         requirements: all('SELECT * FROM completion_requirements WHERE project_id=? AND active=1 ORDER BY sort_order,name', activeProjectId()),
-        settings: Object.fromEntries(all('SELECT * FROM settings WHERE project_id=?', activeProjectId()).map(row => [row.key, row.value])),
+        settings: Object.fromEntries([
+          ...all('SELECT key,value FROM settings WHERE project_id=?', activeProjectId()).map(row => [row.key, row.value]),
+          ...all('SELECT key,value FROM system_settings').map(row => [row.key, row.value])
+        ]),
         export_templates: all('SELECT * FROM export_templates WHERE project_id=? AND active=1 ORDER BY name', activeProjectId()).map(row => ({ ...row, columns: JSON.parse(row.columns_json || '[]'), filters: JSON.parse(row.filters_json || '{}') }))
       };
     },
@@ -4320,7 +4397,9 @@ function createRepository(db, defaultProjectId) {
       db.prepare(`DELETE FROM ${table} WHERE id=?`).run(id);
     },
     saveSetting(key, value) {
-      db.prepare('INSERT INTO settings(project_id,key,value) VALUES(?,?,?) ON CONFLICT(project_id,key) DO UPDATE SET value=excluded.value').run(activeProjectId(), key, String(value));
+      if (globalPlannerSettingKeys.includes(key)) db.prepare(`INSERT INTO system_settings(key,value,updated_at) VALUES(?,?,CURRENT_TIMESTAMP)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP`).run(key, String(value));
+      else db.prepare('INSERT INTO settings(project_id,key,value) VALUES(?,?,?) ON CONFLICT(project_id,key) DO UPDATE SET value=excluded.value').run(activeProjectId(), key, String(value));
     },
     reorder(kind, ids) {
       const map = { controllers: 'controllers', controller_groups: 'controller_groups', users: 'users', categories: 'categories', subcategories: 'subcategories', task_categories: 'task_categories', task_subcategories: 'task_subcategories', options: 'options', announcement_labels: 'announcement_labels', completion_requirements: 'completion_requirements', function_groups: 'function_groups', function_group_elements: 'function_group_elements', function_group_subcategories: 'function_group_subcategories', export_templates: 'export_templates' };
@@ -4374,6 +4453,7 @@ function createRepository(db, defaultProjectId) {
     savePlannerHoliday(id, input, currentUser) { return savePlannerHoliday(id, input, currentUser); },
     savePlannerHolidaysBulk(input, currentUser) { return savePlannerHolidaysBulk(input, currentUser); },
     deletePlannerHoliday(id) { return deletePlannerHoliday(id); },
+    reviewPlannerOverlap(input, currentUser) { return reviewPlannerOverlap(input, currentUser); },
     assignPlannerWork(input, currentUser) { return assignPlannerWork(input, currentUser); },
     calendar(input, currentUser) { return calendarData(input || {}, currentUser); },
     saveCalendarItems(input, currentUser) { return saveCalendarItems(input, currentUser); },

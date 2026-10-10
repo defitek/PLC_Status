@@ -196,6 +196,7 @@ async function handleProjectApi(request, response, url, user) {
   const plannerEntryId = numericId(path, '/api/planner/entries');
   if (plannerEntryId !== null && method === 'DELETE') { requireRole(user, 'moderator'); return json(response, 200, repository.deletePlannerEntry(plannerEntryId, user)); }
   if (method === 'POST' && path === '/api/planner/move-day') { requireRole(user, 'moderator'); return json(response, 200, repository.movePlannerDay(await readJson(request), user)); }
+  if (method === 'POST' && path === '/api/planner/overlaps/action') { requireRole(user, 'moderator'); return json(response, 200, repository.reviewPlannerOverlap(await readJson(request), user)); }
   if (method === 'PUT' && path === '/api/planner/requirements') { requireRole(user, 'moderator'); return json(response, 200, repository.setPlannerRequirements(await readJson(request), user)); }
   if (method === 'PUT' && path === '/api/planner/requirements/batch') { requireRole(user, 'moderator'); return json(response, 200, repository.setPlannerRequirementsBatch(await readJson(request), user)); }
   if (method === 'POST' && path === '/api/planner/holidays') { requireRole(user, 'moderator'); return json(response, 201, repository.savePlannerHoliday(null, await readJson(request), user)); }

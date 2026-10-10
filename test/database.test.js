@@ -995,15 +995,19 @@ test('V14 shares users across projects, exposes cross-project plans and supports
     const worker = repository.saveUser(null, {
       username: 'v14-worker', display_name: 'V14 Worker', password: 'worker-password', project_role: 'user', planner_enabled: 1, assignable: 1
     });
-    const project = repository.saveProject(null, { code: 'V14', name: 'Projekt V14', description: 'Test globalnego zespołu', active: 1 });
-    assert.ok(repository.availableProjects(worker.id).some(item => item.id === project.id));
-
     const planDate = new Date().toISOString().slice(0, 10);
+    const originalArea = repository.controllerGroups().find(item => !item.parent_id);
+    repository.savePlannerDay({ user_id: worker.id, plan_date: planDate, entries: [{ activity_type: 'work', controller_group_id: originalArea.id, work_mode: 'offline', shift: 'Dzień', note: 'Plan bazowy' }] }, admin);
+    const project = repository.saveProject(null, { code: 'V14', name: 'Projekt V14', description: 'Test globalnego zespołu', active: 1 });
+    assert.equal(repository.availableProjects(worker.id).some(item => item.id === project.id), false);
+
     let completedTask;
     let note;
     let review;
     repository.withProject(project.id, () => {
       const projectAdmin = repository.me(admin.id, project.id);
+      repository.saveUser(worker.id, { project_active: 1, planner_enabled: 1, assignable: 1, project_role: 'user' });
+      assert.equal(repository.availableProjects(worker.id).some(item => item.id === project.id), true);
       const area = repository.saveControllerGroup(null, { name: 'AREA-V14' });
       const subarea = repository.saveControllerGroup(null, { name: 'CELL-V14', parent_id: area.id });
       const controller = repository.saveController(null, { leaf_code: 'PLC1', group_id: subarea.id, area: 'V14' });
@@ -1017,6 +1021,9 @@ test('V14 shares users across projects, exposes cross-project plans and supports
       }, projectAdmin);
       const day = repository.planner(planDate, planDate, projectAdmin);
       assert.deepEqual(day.entries.map(item => item.activity_type).sort(), ['transport', 'work']);
+      assert.equal(day.overlap_reviews.find(item => item.user_id === worker.id)?.status, 'pending');
+      repository.reviewPlannerOverlap({ user_id: worker.id, plan_date: planDate, action: 'approve' }, projectAdmin);
+      assert.equal(repository.planner(planDate, planDate, projectAdmin).overlap_reviews.find(item => item.user_id === worker.id)?.status, 'approved');
       const transport = day.entries.find(item => item.activity_type === 'transport');
       repository.deletePlannerEntry(transport.id, projectAdmin);
       assert.equal(repository.planner(planDate, planDate, projectAdmin).entries.filter(item => item.user_id === worker.id).length, 1);
@@ -1046,6 +1053,10 @@ test('V14 shares users across projects, exposes cross-project plans and supports
       assert.equal(repository.monthlyEmployeeReviews(period).find(item => item.user_id === worker.id).review_id, review.id);
       assert.ok(repository.projectBackup().tables.monthly_employee_reviews.some(item => item.id === review.id));
 
+      repository.savePlannerDay({ user_id: worker.id, plan_date: '2026-11-20', absence_type: 'vacation', absence_note: 'Globalny urlop' }, projectAdmin);
+      repository.savePlannerHoliday(null, { holiday_date: '2026-11-21', name: 'Globalne święto' }, projectAdmin);
+      repository.saveSetting('planner_online_hours', '9.5');
+
       repository.saveUser(worker.id, { project_active: 0 });
       assert.equal(repository.planner(planDate, planDate, projectAdmin).users.some(item => item.id === worker.id), false);
       repository.saveUser(worker.id, { project_active: 1 });
@@ -1053,6 +1064,9 @@ test('V14 shares users across projects, exposes cross-project plans and supports
 
     const currentPlanner = repository.planner(planDate, planDate, admin);
     assert.ok(currentPlanner.cross_project_entries.some(item => item.project_id === project.id && item.user_id === worker.id));
+    assert.equal(repository.planner('2026-11-20', '2026-11-20', admin).absences.find(item => item.user_id === worker.id)?.note, 'Globalny urlop');
+    assert.ok(repository.config().planner_holidays.some(item => item.holiday_date === '2026-11-21'));
+    assert.equal(repository.config().settings.planner_online_hours, '9.5');
     const workerInCurrentProject = repository.me(worker.id, admin.current_project.id);
     const summary = repository.mySummary(workerInCurrentProject);
     assert.ok(summary.projects_in_scope.some(item => item.id === project.id));

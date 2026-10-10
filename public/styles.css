@@ -217,7 +217,7 @@ dialog::backdrop { background:#101827a3; }
 .choice-list { display:grid; gap:10px; max-height:70vh; padding:16px; overflow:auto; }
 .project-option { display:grid; grid-template-columns:52px 1fr auto; gap:12px; align-items:center; width:100%; padding:14px; color:var(--text); text-align:left; background:var(--panel-alt); border:1px solid var(--line); border-radius:12px; }
 .project-option:hover { border-color:var(--blue); transform:translateY(-1px); }
-.project-option .project-code { display:grid; place-items:center; width:48px; height:48px; color:#fff; background:var(--blue); border-radius:11px; font-weight:800; }
+.project-option .project-code { display:grid; place-items:center; width:48px; min-height:48px; padding:4px; overflow-wrap:anywhere; color:#fff; background:var(--blue); border-radius:11px; font-size:10px; font-weight:800; }
 .project-option strong,.project-option small { display:block; }
 .project-option small { margin-top:4px; color:var(--muted); }
 .theme-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; padding:16px; }
@@ -1184,3 +1184,56 @@ input:is([type=checkbox],[type=radio]) { accent-color:var(--blue); cursor:pointe
 .queue-blocked { border-top:3px solid var(--red); }
 .queue-completed { border-top:3px solid var(--muted); opacity:.82; }
 @media(max-width:1050px) { .dependency-queue { grid-template-columns:repeat(4,260px); } }
+
+/* Compact hierarchy overview */
+.overview-hierarchy-tree { display:grid; gap:5px; padding:8px; }
+.overview-tree-branch { overflow:hidden; background:var(--surface); border:1px solid var(--line); border-radius:7px; }
+.overview-tree-branch .overview-tree-branch { margin:4px 5px 4px calc(8px + var(--tree-depth) * 3px); border-left:3px solid color-mix(in srgb,var(--blue) 30%,var(--line)); }
+.overview-tree-row { display:grid; grid-template-columns:minmax(190px,280px) 56px minmax(310px,1fr) 58px auto; gap:9px; align-items:center; min-height:44px; padding:6px 8px; color:var(--text); cursor:pointer; list-style-position:inside; }
+.overview-tree-row:hover { background:var(--blue-soft); }
+.overview-tree-name { display:grid; min-width:0; }
+.overview-tree-name b,.overview-tree-name small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.overview-tree-name small { margin-top:2px; color:var(--muted); font-size:8px; }
+.overview-tree-row>strong { color:var(--blue); font-size:14px; text-align:right; }
+.overview-tree-modules { display:grid; grid-template-columns:repeat(4,minmax(65px,1fr)); gap:5px; }
+.overview-tree-metric { display:grid; grid-template-columns:13px minmax(24px,1fr) 29px; gap:4px; align-items:center; min-width:0; font-size:8px; }
+.overview-tree-metric>b { color:var(--muted); }
+.overview-tree-metric>i { display:block; height:4px; overflow:hidden; background:var(--track); border-radius:8px; }
+.overview-tree-metric>i>u { display:block; height:100%; background:var(--blue); }
+.overview-tree-metric.tasks>i>u { background:var(--green); }.overview-tree-metric.points>i>u { background:var(--amber); }.overview-tree-metric.goals>i>u { background:#7256cf; }
+.overview-tree-metric>em { color:var(--muted); font-style:normal; text-align:right; }
+.overview-tree-count { color:var(--muted); text-align:right; }
+.overview-tree-children { padding:0 3px 3px; }
+.overview-tree-branch.leaf>summary { padding-left:24px; }.overview-tree-branch.leaf>summary::marker { content:''; }
+
+/* Table columns and stable group progress */
+.table-view-tools { display:flex; justify-content:flex-end; padding:7px 9px; background:var(--panel-alt); border-bottom:1px solid var(--line); }
+.column-picker { flex:0 0 auto; min-width:150px; }
+.column-picker>div { display:grid; grid-template-columns:1fr; gap:2px; padding:6px; color:var(--text); background:var(--surface); border:1px solid var(--line); border-radius:var(--control-radius); }
+.group-toggle { grid-template-columns:15px minmax(160px,260px) 130px auto minmax(0,1fr); }
+.group-toggle .group-progress { grid-template-columns:90px 34px; justify-self:start; width:124px; }
+.group-toggle>small { justify-self:start; white-space:nowrap; }
+
+/* Spreadsheet requirement editor */
+.requirement-grid-help { position:sticky; left:0; z-index:9; display:flex; gap:10px; align-items:center; padding:8px 11px; color:var(--muted); background:var(--panel-alt); border-bottom:1px solid var(--line); font-size:9px; }
+.requirement-grid-help b { color:var(--text); }.requirement-grid-help code { padding:2px 4px; color:var(--blue); background:var(--blue-soft); border-radius:4px; }
+.requirement-calendar td[data-requirement-cell] { display:table-cell; padding:2px; }
+.requirement-grid-input { width:100%!important; min-height:31px!important; padding:5px!important; text-align:center; font-weight:700!important; }
+.requirement-grid-input.invalid { color:var(--red)!important; background:var(--red-soft)!important; border-color:var(--red)!important; }
+
+/* Cross-project planning decisions */
+.planner-overlap { display:flex; gap:2px; align-items:center; margin-bottom:2px; padding:2px 3px; color:var(--red); background:var(--red-soft); border:1px solid color-mix(in srgb,var(--red) 45%,var(--line)); border-radius:4px; font-size:7px; }
+.planner-overlap>b { min-width:0; margin-right:auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.planner-overlap button { display:grid; place-items:center; width:16px; height:16px; min-height:16px!important; padding:0!important; color:inherit; background:var(--surface); border:1px solid currentColor!important; border-radius:3px!important; font-size:9px!important; }
+.planner-overlap.approved { color:var(--green); background:var(--green-soft); border-color:color-mix(in srgb,var(--green) 45%,var(--line)); }
+.planner-overlap.rejected { color:var(--muted); background:var(--panel-alt); border-color:var(--line); }
+.planner-cell.overlap-pending { box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--red) 70%,transparent); }
+.transfer-audit-change li small { display:block; margin-top:3px; color:var(--muted); }
+
+@media(max-width:900px) {
+  .overview-tree-row { grid-template-columns:minmax(150px,1fr) 48px auto; }
+  .overview-tree-modules { grid-column:1/-1; }.overview-tree-count { display:none; }
+  .group-toggle { grid-template-columns:15px minmax(100px,1fr) auto; }
+  .group-toggle .group-progress { grid-column:2; width:124px; justify-self:start; }
+  .group-toggle>small { grid-column:3; grid-row:1; }
+}
