@@ -56,6 +56,7 @@ export function openDatabase(databasePath) {
   migrateToV12(db);
   migrateToV13(db);
   migrateToV14(db);
+  migrateToV15(db);
   migrateStatusWorkflow(db);
   migrateEntityDependencies(db);
   const defaultProjectId = primaryProjectId(db);
@@ -72,6 +73,7 @@ export function openDatabase(databasePath) {
   migrateToV12(db);
   migrateToV13(db);
   migrateToV14(db);
+  migrateToV15(db);
   migrateStatusWorkflow(db);
   migrateEntityDependencies(db);
   migrateGlobalPlannerData(db);
@@ -109,6 +111,42 @@ function migrateStatusWorkflow(db) {
     UPDATE status_items SET status='Ready to test' WHERE status='Not started';
     UPDATE status_items SET status='NOK / Retest required' WHERE status IN ('NOK / Rework','Retest required');
   `);
+}
+
+function migrateToV15(db) {
+  db.exec(`CREATE TABLE IF NOT EXISTS entity_edit_locks (
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point','goal')),
+    entity_id INTEGER NOT NULL,
+    locked_by INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    reason TEXT NOT NULL,
+    locked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(project_id,entity_type,entity_id)
+  ) STRICT, WITHOUT ROWID;
+  CREATE INDEX IF NOT EXISTS idx_entity_edit_locks_project ON entity_edit_locks(project_id,entity_type,entity_id);`);
+  const automationSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='automation_rules'").get()?.sql || '';
+  if (!automationSql.includes("'in_progress'")) {
+    db.exec('PRAGMA foreign_keys=OFF');
+    try {
+      db.exec(`BEGIN IMMEDIATE;
+        CREATE TABLE automation_rules_v15 (
+          id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          name TEXT NOT NULL, trigger_type TEXT NOT NULL CHECK(trigger_type IN ('overdue','due_soon','reminder_due','unassigned','blocked','in_progress')),
+          entity_types_json TEXT NOT NULL DEFAULT '[]', days_offset INTEGER NOT NULL DEFAULT 0,
+          action_type TEXT NOT NULL CHECK(action_type IN ('notify_assignees','notify_managers','escalate_priority')),
+          target_priority TEXT NOT NULL DEFAULT 'High', active INTEGER NOT NULL DEFAULT 1,
+          created_by INTEGER REFERENCES users(id) ON DELETE SET NULL, last_run_at TEXT,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(project_id,name)
+        ) STRICT;
+        INSERT INTO automation_rules_v15 SELECT * FROM automation_rules;
+        DROP TABLE automation_rules;
+        ALTER TABLE automation_rules_v15 RENAME TO automation_rules;
+        CREATE INDEX IF NOT EXISTS idx_automation_rules_project ON automation_rules(project_id,active,trigger_type);
+        COMMIT;`);
+    } catch (error) { try { db.exec('ROLLBACK'); } catch {} throw error; }
+    finally { db.exec('PRAGMA foreign_keys=ON'); }
+  }
 }
 
 const globalPlannerSettingKeys = [
@@ -1481,6 +1519,44 @@ function createRepository(db, defaultProjectId) {
     };
   }
 
+  function editLockState(type, id, currentUser) {
+    const lock = one(`SELECT el.*,u.display_name locked_by_name FROM entity_edit_locks el
+      JOIN users u ON u.id=el.locked_by WHERE el.project_id=? AND el.entity_type=? AND el.entity_id=?`, activeProjectId(), type, id);
+    const canOverride = ['system_admin', 'project_admin', 'moderator'].includes(currentUser?.role);
+    return {
+      edit_locked: Boolean(lock),
+      edit_lock: lock || null,
+      can_override_edit_lock: canOverride,
+      can_edit: !lock || canOverride
+    };
+  }
+
+  function assertEntityEditable(type, id, currentUser) {
+    if (!id || ['system_admin', 'project_admin', 'moderator'].includes(currentUser?.role)) return;
+    const lock = one('SELECT reason FROM entity_edit_locks WHERE project_id=? AND entity_type=? AND entity_id=?', activeProjectId(), type, id);
+    if (lock) throw appError(`Element jest zablokowany przed edycją. Powód: ${lock.reason}`, 423);
+  }
+
+  function setEntityEditLock(type, id, input, currentUser) {
+    if (!['status', 'task', 'point', 'goal'].includes(type)) throw appError('Nieprawidłowy typ elementu');
+    if (!one(`SELECT 1 FROM ${TABLES[type]} WHERE id=? AND project_id=?`, asId(id), activeProjectId())) throw appError('Nie znaleziono elementu', 404);
+    const reason = clean(input.reason);
+    if (!reason) throw appError('Podaj powód zablokowania elementu');
+    db.prepare(`INSERT INTO entity_edit_locks(project_id,entity_type,entity_id,locked_by,reason)
+      VALUES(?,?,?,?,?) ON CONFLICT(project_id,entity_type,entity_id) DO UPDATE SET
+      locked_by=excluded.locked_by,reason=excluded.reason,locked_at=CURRENT_TIMESTAMP`).run(activeProjectId(), type, id, currentUser.id, reason);
+    writeAudit(type, id, 'update', currentUser, { edit_lock: null }, { edit_lock: { reason, locked_by: currentUser.display_name } });
+    return editLockState(type, id, currentUser);
+  }
+
+  function clearEntityEditLock(type, id, currentUser) {
+    const lock = one('SELECT * FROM entity_edit_locks WHERE project_id=? AND entity_type=? AND entity_id=?', activeProjectId(), type, asId(id));
+    if (!lock) throw appError('Element nie jest zablokowany', 404);
+    db.prepare('DELETE FROM entity_edit_locks WHERE project_id=? AND entity_type=? AND entity_id=?').run(activeProjectId(), type, id);
+    writeAudit(type, id, 'update', currentUser, { edit_lock: { reason: lock.reason } }, { edit_lock: null });
+    return editLockState(type, id, currentUser);
+  }
+
   function decorateStatus(row, currentUser) {
     const links = entityLinkRows('status', row.id).map(link => ({ ...link, status: linkedItemStatus(link) }));
     const actionable = links.filter(link => ['task', 'point'].includes(link.entity_type));
@@ -1497,6 +1573,7 @@ function createRepository(db, defaultProjectId) {
       mentioned_user_ids: [], comments: commentRows('status', row.id), requirements,
       requirement_ids: requirements.map(item => item.id), requirement_names: requirements.map(item => item.name).join(', '),
       can_delete: ['system_admin', 'project_admin'].includes(currentUser.role),
+      ...editLockState('status', row.id, currentUser),
       ...dependencyState('status', row)
     };
   }
@@ -1534,13 +1611,14 @@ function createRepository(db, defaultProjectId) {
       links: entityLinkRows('task', row.id),
       mentioned_user_ids: [], comments: commentRows('task', row.id), requirements,
       requirement_ids: requirements.map(item => item.id), requirement_names: requirements.map(item => item.name).join(', '),
-      can_delete: canDeleteTask(row, currentUser)
+      can_delete: canDeleteTask(row, currentUser),
+      ...editLockState('task', row.id, currentUser)
     };
   }
 
   function decoratePoint(row, currentUser) {
     const requirements = requirementRows('point', row.id);
-    return { ...row, links: entityLinkRows('point', row.id), mentioned_user_ids: mentionIds('point', row.id), comments: commentRows('point', row.id), requirements, requirement_ids: requirements.map(item => item.id), requirement_names: requirements.map(item => item.name).join(', '), can_delete: ['system_admin', 'project_admin'].includes(currentUser.role), ...dependencyState('point', row) };
+    return { ...row, links: entityLinkRows('point', row.id), mentioned_user_ids: mentionIds('point', row.id), comments: commentRows('point', row.id), requirements, requirement_ids: requirements.map(item => item.id), requirement_names: requirements.map(item => item.name).join(', '), can_delete: ['system_admin', 'project_admin'].includes(currentUser.role), ...editLockState('point', row.id, currentUser), ...dependencyState('point', row) };
   }
 
   function decorateNote(row, currentUser) {
@@ -1681,6 +1759,7 @@ function createRepository(db, defaultProjectId) {
     db.prepare('DELETE FROM calendar_item_dates WHERE project_id=? AND entity_type=? AND entity_id=?').run(activeProjectId(), type, id);
     db.prepare('DELETE FROM entity_comments WHERE project_id=? AND entity_type=? AND entity_id=?').run(activeProjectId(), type, id);
     db.prepare('DELETE FROM entity_requirements WHERE project_id=? AND entity_type=? AND entity_id=?').run(activeProjectId(), type, id);
+    db.prepare('DELETE FROM entity_edit_locks WHERE project_id=? AND entity_type=? AND entity_id=?').run(activeProjectId(), type, id);
     if (['status', 'task', 'point'].includes(type)) db.prepare('DELETE FROM goal_links WHERE project_id=? AND entity_type=? AND entity_id=?').run(activeProjectId(), type, id);
     writeAudit(type, id, 'delete', user, before, null);
     dependentStatusIds.forEach(statusId => syncStatusDependencyState(statusId, user, true));
@@ -1790,7 +1869,8 @@ function createRepository(db, defaultProjectId) {
         ...attachControllerMeta(goal),
         links: all('SELECT * FROM goal_links WHERE project_id=? AND goal_id=? ORDER BY entity_type,entity_id', activeProjectId(), goal.id),
         comments: commentRows('goal', goal.id),
-        can_delete: ['system_admin', 'project_admin'].includes(currentUser.role)
+        can_delete: ['system_admin', 'project_admin'].includes(currentUser.role),
+        ...editLockState('goal', goal.id, currentUser)
       }));
   }
 
@@ -1924,7 +2004,7 @@ function createRepository(db, defaultProjectId) {
     ['daily_note_sections', 'project_id=?'], ['daily_note_section_scopes', 'section_id IN (SELECT id FROM daily_note_sections WHERE project_id=?)'],
     ['daily_note_section_links', 'section_id IN (SELECT id FROM daily_note_sections WHERE project_id=?)'],
     ['goal_links', 'project_id=?'], ['entity_mentions', 'project_id=?'], ['entity_links', 'project_id=?'], ['entity_requirements', 'project_id=?'], ['entity_comments', 'project_id=?'], ['notifications', 'project_id=?'],
-    ['entity_requirement_status', 'project_id=?'],
+    ['entity_requirement_status', 'project_id=?'], ['entity_edit_locks', 'project_id=?'],
     ['announcements', 'project_id=?'],
     ['announcement_labels', 'project_id=?'],
     ['announcement_label_links', 'announcement_id IN (SELECT id FROM announcements WHERE project_id=?)'],
@@ -1947,7 +2027,7 @@ function createRepository(db, defaultProjectId) {
     'controller_groups', 'controllers', 'categories', 'subcategories', 'task_categories', 'task_subcategories',
     'options', 'settings', 'completion_requirements', 'function_groups', 'function_group_elements', 'function_group_subcategories', 'function_group_checks',
     'function_group_check_subcategories', 'status_items', 'status_assignees', 'tasks', 'task_dependencies', 'task_checklist', 'task_scope_checklist', 'task_assignees', 'open_points', 'entity_dependencies',
-    'daily_notes', 'daily_note_sections', 'daily_note_section_scopes', 'daily_note_section_links', 'goals', 'goal_links', 'entity_mentions', 'entity_links', 'entity_requirements', 'entity_requirement_status', 'entity_comments', 'notifications', 'audit_log',
+    'daily_notes', 'daily_note_sections', 'daily_note_section_scopes', 'daily_note_section_links', 'goals', 'goal_links', 'entity_mentions', 'entity_links', 'entity_requirements', 'entity_requirement_status', 'entity_edit_locks', 'entity_comments', 'notifications', 'audit_log',
     'export_templates', 'project_sequences', 'project_user_areas', 'planner_entries', 'planner_requirements', 'planner_holidays', 'planner_absences', 'planner_time_adjustments',
     'announcements', 'announcement_labels', 'announcement_scopes', 'announcement_users', 'announcement_links', 'announcement_label_links', 'announcement_reads', 'calendar_annotations', 'calendar_item_dates',
     'shift_handovers', 'shift_handover_items', 'automation_rules', 'automation_rule_hits', 'commissioning_templates', 'saved_views',
@@ -2193,8 +2273,8 @@ function createRepository(db, defaultProjectId) {
         offline_assignments: unique(related.filter(entry => entry.work_mode === 'offline').map(entry => `${entry.user_id}:${entry.plan_date}`)),
         online_people: unique(related.filter(entry => entry.work_mode === 'online').map(entry => entry.user_id)),
         offline_people: unique(related.filter(entry => entry.work_mode === 'offline').map(entry => entry.user_id)),
-        today_online_required: requirements.filter(row => row.plan_date === currentDate && row.work_mode === 'online' && descendants.has(Number(row.controller_group_id))).reduce((sum, row) => sum + Number(row.required_count || 0), 0),
-        today_offline_required: requirements.filter(row => row.plan_date === currentDate && row.work_mode === 'offline' && descendants.has(Number(row.controller_group_id))).reduce((sum, row) => sum + Number(row.required_count || 0), 0)
+        today_online_required: Number(requirements.find(row => row.plan_date === currentDate && row.work_mode === 'online' && Number(row.controller_group_id) === Number(group.id))?.required_count || 0),
+        today_offline_required: Number(requirements.find(row => row.plan_date === currentDate && row.work_mode === 'offline' && Number(row.controller_group_id) === Number(group.id))?.required_count || 0)
       };
     });
     const shift_summary = all(`SELECT pe.shift,COUNT(DISTINCT pe.user_id||':'||pe.plan_date) assignments FROM planner_entries pe
@@ -2217,7 +2297,7 @@ function createRepository(db, defaultProjectId) {
         days: range.days ? Array.from({ length: range.days }, (_, index) => {
           const date = new Date(`${range.from}T12:00:00Z`); date.setUTCDate(date.getUTCDate() + index); const value = date.toISOString().slice(0, 10);
           const related = entries.filter(entry => entry.plan_date === value && entry.transport_mode !== 'transport_only' && descendants.has(Number(entry.controller_group_id)));
-          const required = requirements.filter(row => row.plan_date === value && descendants.has(Number(row.controller_group_id)));
+          const required = requirements.filter(row => row.plan_date === value && Number(row.controller_group_id) === Number(group.id));
           return {
             date: value,
             online: new Set(related.filter(entry => entry.work_mode === 'online').map(entry => entry.user_id)).size,
@@ -2469,19 +2549,55 @@ function createRepository(db, defaultProjectId) {
     if (!one('SELECT 1 FROM controller_groups WHERE id=? AND project_id=? AND active=1', groupId, activeProjectId())) throw appError('Wybrany obszar nie należy do projektu');
     const values = { online: Math.max(0, Math.min(999, Number(input.online_required) || 0)), offline: Math.max(0, Math.min(999, Number(input.offline_required) || 0)) };
     db.exec('BEGIN IMMEDIATE');
-    try {
-      db.prepare('DELETE FROM planner_requirements WHERE project_id=? AND controller_group_id=? AND plan_date=?').run(activeProjectId(), groupId, planDate);
-      const insert = db.prepare('INSERT INTO planner_requirements(project_id,controller_group_id,plan_date,work_mode,required_count,note,created_by) VALUES(?,?,?,?,?,?,?)');
-      for (const mode of ['online', 'offline']) if (values[mode] > 0) insert.run(activeProjectId(), groupId, planDate, mode, values[mode], clean(input.note), currentUser.id);
-      db.exec('COMMIT');
-    } catch (error) { db.exec('ROLLBACK'); throw error; }
+    try { writePlannerRequirement(groupId, planDate, values, clean(input.note), currentUser); db.exec('COMMIT'); }
+    catch (error) { db.exec('ROLLBACK'); throw error; }
     return { plan_date: planDate, controller_group_id: groupId, online_required: values.online, offline_required: values.offline };
+  }
+
+  function writePlannerRequirement(groupId, planDate, values, note, currentUser) {
+    const replace = (targetId, counts, preserveHigher = false) => {
+      const insert = db.prepare('INSERT INTO planner_requirements(project_id,controller_group_id,plan_date,work_mode,required_count,note,created_by) VALUES(?,?,?,?,?,?,?)');
+      for (const mode of ['online', 'offline']) {
+        const current = Number(one('SELECT required_count FROM planner_requirements WHERE project_id=? AND controller_group_id=? AND plan_date=? AND work_mode=?', activeProjectId(), targetId, planDate, mode)?.required_count || 0);
+        const next = preserveHigher ? Math.max(current, counts[mode]) : counts[mode];
+        db.prepare('DELETE FROM planner_requirements WHERE project_id=? AND controller_group_id=? AND plan_date=? AND work_mode=?').run(activeProjectId(), targetId, planDate, mode);
+        if (next > 0) insert.run(activeProjectId(), targetId, planDate, mode, next, note, currentUser.id);
+      }
+    };
+    replace(groupId, values, false);
+    let parentId = one('SELECT parent_id FROM controller_groups WHERE id=? AND project_id=?', groupId, activeProjectId())?.parent_id;
+    while (parentId) {
+      replace(Number(parentId), values, true);
+      parentId = one('SELECT parent_id FROM controller_groups WHERE id=? AND project_id=?', parentId, activeProjectId())?.parent_id;
+    }
+  }
+
+  function enforcePlannerRequirementHierarchy(planDates, currentUser) {
+    const groups = hierarchyData().groups.slice().sort((left, right) => Number(right.depth || 0) - Number(left.depth || 0));
+    const upsert = db.prepare(`INSERT INTO planner_requirements(project_id,controller_group_id,plan_date,work_mode,required_count,note,created_by)
+      VALUES(?,?,?,?,?,'Automatyczne minimum z podobszaru',?)
+      ON CONFLICT(project_id,controller_group_id,plan_date,work_mode) DO UPDATE SET
+      required_count=MAX(planner_requirements.required_count,excluded.required_count)`);
+    for (const planDate of new Set(planDates)) for (const mode of ['online', 'offline']) for (const group of groups) {
+      if (!group.parent_id) continue;
+      const required = Number(one('SELECT required_count FROM planner_requirements WHERE project_id=? AND controller_group_id=? AND plan_date=? AND work_mode=?', activeProjectId(), group.id, planDate, mode)?.required_count || 0);
+      if (required > 0) upsert.run(activeProjectId(), Number(group.parent_id), planDate, mode, required, currentUser.id);
+    }
   }
 
   function setPlannerRequirementsBatch(input, currentUser) {
     const items = Array.isArray(input.items) ? input.items.slice(0, 2000) : [];
     if (!items.length) throw appError('Brak danych zapotrzebowania do zapisania');
-    for (const item of items) setPlannerRequirements(item, currentUser);
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const item of items) {
+        const planDate = nullableDate(item.plan_date); const groupId = asId(item.controller_group_id);
+        if (!planDate || !groupId || !one('SELECT 1 FROM controller_groups WHERE id=? AND project_id=? AND active=1', groupId, activeProjectId())) throw appError('Dzień i obszar zapotrzebowania są wymagane');
+        writePlannerRequirement(groupId, planDate, { online: Math.max(0, Math.min(999, Number(item.online_required) || 0)), offline: Math.max(0, Math.min(999, Number(item.offline_required) || 0)) }, clean(item.note), currentUser);
+      }
+      enforcePlannerRequirementHierarchy(items.map(item => nullableDate(item.plan_date)).filter(Boolean), currentUser);
+      db.exec('COMMIT');
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
     return { saved: items.length };
   }
 
@@ -3009,7 +3125,15 @@ function createRepository(db, defaultProjectId) {
     return [];
   }
 
-  function triageSignals(type, row, dueSoonDays = 7) {
+  function inProgressStartedAt(type, row) {
+    if (row.status !== 'In progress') return '';
+    const transition = all(`SELECT changed_at,changes_json FROM audit_log
+      WHERE project_id=? AND entity_type=? AND entity_id=? AND action='update' ORDER BY id DESC`, activeProjectId(), type, row.id)
+      .find(entry => parseJson(entry.changes_json, {}).status?.to === 'In progress');
+    return transition?.changed_at || row.created_at || row.updated_at || '';
+  }
+
+  function triageSignals(type, row, dueSoonDays = 7, includeInProgress = false) {
     if (isClosedEntity(type, row)) return [];
     const todayValue = new Date().toISOString().slice(0, 10);
     const soonDate = new Date(`${todayValue}T12:00:00Z`); soonDate.setUTCDate(soonDate.getUTCDate() + Math.max(0, Number(dueSoonDays || 0)));
@@ -3021,6 +3145,9 @@ function createRepository(db, defaultProjectId) {
     if (!ownerIdsForEntity(type, row).length && type !== 'goal') signals.push('unassigned');
     if (['Blocked', 'NOK / Retest required', 'Waiting'].includes(row.status)) signals.push('blocked');
     if (type === 'task' && Number(row.blocked_by_dependencies || 0) > 0) signals.push('dependency');
+    const inProgressSince = String(inProgressStartedAt(type, row)).slice(0, 10);
+    const inProgressLimit = new Date(`${todayValue}T12:00:00Z`); inProgressLimit.setUTCDate(inProgressLimit.getUTCDate() - Math.max(0, Number(dueSoonDays || 0)));
+    if (includeInProgress && row.status === 'In progress' && inProgressSince && inProgressSince <= inProgressLimit.toISOString().slice(0, 10)) signals.push('in_progress');
     return signals;
   }
 
@@ -3534,7 +3661,7 @@ function createRepository(db, defaultProjectId) {
 
   function saveAutomationRule(id, input, currentUser) {
     const name = clean(input.name);
-    const trigger = ['overdue', 'due_soon', 'reminder_due', 'unassigned', 'blocked'].includes(clean(input.trigger_type)) ? clean(input.trigger_type) : '';
+    const trigger = ['overdue', 'due_soon', 'reminder_due', 'unassigned', 'blocked', 'in_progress'].includes(clean(input.trigger_type)) ? clean(input.trigger_type) : '';
     const action = ['notify_assignees', 'notify_managers', 'escalate_priority'].includes(clean(input.action_type)) ? clean(input.action_type) : '';
     const types = [...new Set((Array.isArray(input.entity_types) ? input.entity_types : []).map(clean).filter(type => ['status', 'task', 'point', 'goal'].includes(type)))];
     const targetPriority = ['Low', 'Medium', 'High', 'Critical'].includes(clean(input.target_priority)) ? clean(input.target_priority) : 'High';
@@ -3560,9 +3687,9 @@ function createRepository(db, defaultProjectId) {
     let executed = 0;
     for (const rule of automationRuleRows().filter(item => item.active)) {
       for (const type of rule.entity_types) for (const row of collections[type] || []) {
-        const signal = triageSignals(type, row, rule.days_offset);
+        const signal = triageSignals(type, row, rule.days_offset, rule.trigger_type === 'in_progress');
         if (!signal.includes(rule.trigger_type)) continue;
-        const dateKey = rule.trigger_type === 'reminder_due' ? row.reminder_date : ['overdue', 'due_soon'].includes(rule.trigger_type) ? row.due_date : row.status || 'state';
+        const dateKey = rule.trigger_type === 'reminder_due' ? row.reminder_date : ['overdue', 'due_soon'].includes(rule.trigger_type) ? row.due_date : rule.trigger_type === 'in_progress' ? String(inProgressStartedAt(type, row)).slice(0, 10) : row.status || 'state';
         const hitKey = `${rule.trigger_type}:${dateKey || todayValue}`;
         const hit = db.prepare('INSERT OR IGNORE INTO automation_rule_hits(rule_id,entity_type,entity_id,hit_key) VALUES(?,?,?,?)').run(rule.id, type, row.id, hitKey);
         if (!hit.changes) continue;
@@ -4509,6 +4636,8 @@ function createRepository(db, defaultProjectId) {
     notifications(currentUser, limit) { return notificationsData(currentUser, limit); },
     markNotificationRead(id, currentUser) { return markNotificationRead(id, currentUser); },
     addComment(input, currentUser) { return addComment(input, currentUser); },
+    setEntityEditLock(type, id, input, currentUser) { return setEntityEditLock(type, id, input, currentUser); },
+    clearEntityEditLock(type, id, currentUser) { return clearEntityEditLock(type, id, currentUser); },
     saveCompletionRequirement(id, input) { return saveCompletionRequirement(id, input); },
     deleteCompletionRequirement(id) { return deleteCompletionRequirement(id); },
     updateRequirementStatus(type, entityId, requirementId, input, currentUser) { return updateRequirementStatus(type, entityId, requirementId, input, currentUser); },
@@ -4582,9 +4711,11 @@ function createRepository(db, defaultProjectId) {
     saveStatus(id, input, currentUser) {
       const before = id ? baseSnapshot('status', id) : null;
       if (id && !before) throw appError('Nie znaleziono punktu statusu', 404);
+      assertEntityEditable('status', id, currentUser);
       assertFresh('status', id, input.updated_at);
       const requestedDependencies = Array.isArray(input.dependency_refs) ? input.dependency_refs : before?.dependency_refs || [];
       if (id) validateEntityDependencies('status', id, requestedDependencies);
+      const ownerInputProvided = Array.isArray(input.responsible_user_ids) || Object.hasOwn(input, 'responsible_user_id');
       const requestedOwners = Array.isArray(input.responsible_user_ids) ? input.responsible_user_ids
         : asId(input.responsible_user_id) ? [asId(input.responsible_user_id)] : before?.responsible_user_ids || [];
       const ownerIds = [...new Set(requestedOwners.map(asId).filter(Boolean))];
@@ -4603,9 +4734,12 @@ function createRepository(db, defaultProjectId) {
       const statusChanged = Boolean(before && requestedStatus !== before.status);
       const blockers = unresolvedDependencies(requestedDependencies);
       const statusComment = clean(input.status_change_comment);
+      const commentAlreadyAdded = Boolean(input.status_comment_already_added);
       const dependencyOverride = Boolean(statusChanged && blockers.length && requestedStatus !== 'Blocked');
-      if (statusChanged && ['In progress', 'NOK / Retest required'].includes(requestedStatus) && !statusComment) throw appError('Ta zmiana statusu wymaga komentarza');
-      if (dependencyOverride && !statusComment) throw appError('Pominięcie blokady zależności wymaga komentarza');
+      const manualBlock = Boolean(statusChanged && requestedStatus === 'Blocked' && !blockers.length);
+      if (statusChanged && requestedStatus === 'NOK / Retest required' && !statusComment && !commentAlreadyAdded) throw appError('Ta zmiana statusu wymaga komentarza');
+      if (dependencyOverride && !statusComment && !commentAlreadyAdded) throw appError('Pominięcie blokady zależności wymaga komentarza');
+      if (manualBlock && !statusComment && !commentAlreadyAdded) throw appError('Status „Zablokowany” wymaga niespełnionej zależności albo komentarza z przyczyną blokady');
       let effectiveStatus = requestedStatus;
       let overrideFlag = Number(before?.dependency_override || 0);
       if (blockers.length) {
@@ -4641,7 +4775,7 @@ function createRepository(db, defaultProjectId) {
         values.test_id = nextProjectIdentifier('status', 'ST', 'status_items', 'test_id');
         recordId = insertRecord('status_items', { ...values, created_by: currentUser.id });
       }
-      const savedOwners = saveStatusAssignees(recordId, ownerIds);
+      const savedOwners = !id || ownerInputProvided ? saveStatusAssignees(recordId, ownerIds) : ownerIds;
       const primaryOwner = savedOwners[0] || null;
       db.prepare('UPDATE status_items SET responsible_user_id=?,responsible=? WHERE id=? AND project_id=?').run(primaryOwner, userName(primaryOwner), recordId, activeProjectId());
       setMentions('status', recordId, []);
@@ -4652,8 +4786,9 @@ function createRepository(db, defaultProjectId) {
       writeAudit('status', recordId, id ? 'update' : 'create', currentUser, before, after);
       if (statusChanged && statusComment) {
         const statusNames = { 'Ready to test': 'Gotowe do sprawdzenia', 'In progress': 'W trakcie', Blocked: 'Zablokowany', 'NOK / Retest required': 'NOK / wymagany retest', Done: 'Gotowe', 'N/A': 'N/A' };
+        const dependencyContext = dependencyOverride ? `\nWymagane niespełnione zależności: ${blockers.map(item => `${item.title} (${item.status})`).join(', ')}` : '';
         const context = dependencyOverride ? `Ręczne pominięcie blokady zależności przy zmianie statusu na „${statusNames[requestedStatus] || requestedStatus}”` : `Komentarz dodany ze względu na zmianę statusu na „${statusNames[requestedStatus] || requestedStatus}”`;
-        addComment({ entity_type: 'status', entity_id: recordId, content: `${context}:\n${statusComment}` }, currentUser);
+        addComment({ entity_type: 'status', entity_id: recordId, content: `${context}:${dependencyContext}\n${statusComment}` }, currentUser);
       }
       refreshDependentStatusItems('status', recordId, currentUser);
       const finalSnapshot = baseSnapshot('status', recordId);
@@ -4694,6 +4829,7 @@ function createRepository(db, defaultProjectId) {
     saveTask(id, input, currentUser) {
       const before = id ? baseSnapshot('task', id) : null;
       if (id && !before) throw appError('Nie znaleziono zadania', 404);
+      assertEntityEditable('task', id, currentUser);
       assertFresh('task', id, input.updated_at);
       const checklist = Array.isArray(input.checklist) ? input.checklist : before?.checklist || [];
       const requestedDependencies = Array.isArray(input.dependency_refs) && (input.dependency_refs.length || !Array.isArray(input.dependency_task_ids)) ? input.dependency_refs
@@ -4762,6 +4898,7 @@ function createRepository(db, defaultProjectId) {
       const task = one('SELECT * FROM tasks WHERE id=?', id);
       if (!task) throw appError('Nie znaleziono zadania', 404);
       if (!canDeleteTask(task, currentUser)) throw appError('Nie możesz usunąć tego zadania', 403);
+      assertEntityEditable('task', id, currentUser);
       removeWithAudit('task', id, currentUser);
     },
 
@@ -4769,6 +4906,7 @@ function createRepository(db, defaultProjectId) {
     savePoint(id, input, currentUser) {
       const before = id ? baseSnapshot('point', id) : null;
       if (id && !before) throw appError('Nie znaleziono otwartego punktu', 404);
+      assertEntityEditable('point', id, currentUser);
       assertFresh('point', id, input.updated_at);
       const requestedDependencies = Array.isArray(input.dependency_refs) ? input.dependency_refs : before?.dependency_refs || [];
       if (id) validateEntityDependencies('point', id, requestedDependencies);
@@ -4864,6 +5002,7 @@ function createRepository(db, defaultProjectId) {
     saveGoal(id, input, currentUser) {
       const before = id ? baseSnapshot('goal', id) : null;
       if (id && !before) throw appError('Nie znaleziono celu', 404);
+      assertEntityEditable('goal', id, currentUser);
       assertFresh('goal', id, input.updated_at);
       const values = { project_id: activeProjectId(), controller_id: controller(input.controller).id, title: clean(input.title), description: clean(input.description), status: clean(input.status) || 'Open', priority: clean(input.priority) || 'Medium', due_date: nullableDate(input.due_date) };
       if (!values.title) throw appError('Nazwa celu jest wymagana');

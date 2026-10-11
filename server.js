@@ -223,6 +223,12 @@ async function handleProjectApi(request, response, url, user) {
   const notificationRead = path.match(/^\/api\/notifications\/(\d+)\/read$/);
   if (notificationRead && method === 'POST') return json(response, 200, repository.markNotificationRead(Number(notificationRead[1]), user));
   if (method === 'POST' && path === '/api/comments') return json(response, 201, repository.addComment(await readJson(request), user));
+  const entityLock = path.match(/^\/api\/entity-locks\/(status|task|point|goal)\/(\d+)$/);
+  if (entityLock) {
+    requireRole(user, 'moderator');
+    if (method === 'POST') return json(response, 200, repository.setEntityEditLock(entityLock[1], Number(entityLock[2]), await readJson(request), user));
+    if (method === 'DELETE') return json(response, 200, repository.clearEntityEditLock(entityLock[1], Number(entityLock[2]), user));
+  }
   const requirementStatus = path.match(/^\/api\/(status|task|point)\/(\d+)\/requirements\/(\d+)$/);
   if (requirementStatus && method === 'PATCH') {
     const body = await readJson(request);

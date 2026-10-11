@@ -700,7 +700,7 @@ CREATE TABLE IF NOT EXISTS automation_rules (
   id INTEGER PRIMARY KEY,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
-  trigger_type TEXT NOT NULL CHECK(trigger_type IN ('overdue','due_soon','reminder_due','unassigned','blocked')),
+  trigger_type TEXT NOT NULL CHECK(trigger_type IN ('overdue','due_soon','reminder_due','unassigned','blocked','in_progress')),
   entity_types_json TEXT NOT NULL DEFAULT '[]',
   days_offset INTEGER NOT NULL DEFAULT 0,
   action_type TEXT NOT NULL CHECK(action_type IN ('notify_assignees','notify_managers','escalate_priority')),
@@ -948,6 +948,16 @@ CREATE TABLE IF NOT EXISTS knowledge_articles (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS entity_edit_locks (
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point','goal')),
+  entity_id INTEGER NOT NULL,
+  locked_by INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  reason TEXT NOT NULL,
+  locked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(project_id,entity_type,entity_id)
+) STRICT, WITHOUT ROWID;
+
 CREATE INDEX IF NOT EXISTS idx_status_controller_status ON status_items(controller_id,status);
 CREATE INDEX IF NOT EXISTS idx_controller_groups_project ON controller_groups(project_id,parent_id,sort_order);
 CREATE INDEX IF NOT EXISTS idx_function_groups_controller ON function_groups(controller_id,sort_order);
@@ -996,3 +1006,4 @@ CREATE INDEX IF NOT EXISTS idx_meetings_project ON project_meetings(project_id,m
 CREATE INDEX IF NOT EXISTS idx_requirement_status_entity ON entity_requirement_status(project_id,entity_type,entity_id);
 CREATE INDEX IF NOT EXISTS idx_external_dependencies_entity ON external_dependencies(project_id,entity_type,entity_id,dependency_status);
 CREATE INDEX IF NOT EXISTS idx_knowledge_project ON knowledge_articles(project_id,status,category);
+CREATE INDEX IF NOT EXISTS idx_entity_edit_locks_project ON entity_edit_locks(project_id,entity_type,entity_id);
