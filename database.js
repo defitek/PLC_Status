@@ -23,6 +23,7 @@ const nullableTime = value => /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(clean(value)) ?
 const nullableNumber = value => value === '' || value === null || value === undefined || !Number.isFinite(Number(value)) ? null : Number(value);
 const asId = value => Number(value) > 0 ? Number(value) : null;
 const appError = (message, statusCode = 400) => Object.assign(new Error(message), { statusCode });
+const validPassword = password => typeof password === 'string' && password.length >= 8 && password.length <= 256;
 const hashPassword = password => {
   const salt = randomBytes(16).toString('hex');
   return `${salt}:${scryptSync(password, salt, 64).toString('hex')}`;
@@ -58,6 +59,7 @@ export function openDatabase(databasePath) {
   migrateToV14(db);
   migrateToV15(db);
   migrateToV16(db);
+  migrateToV17(db);
   migrateStatusWorkflow(db);
   migrateEntityDependencies(db);
   const defaultProjectId = primaryProjectId(db);
@@ -65,6 +67,10 @@ export function openDatabase(databasePath) {
   db.exec('CREATE INDEX IF NOT EXISTS idx_status_project ON status_items(project_id,controller_id,status)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_task_scope_group ON tasks(project_id,controller_group_id,status)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_task_scope_checklist ON task_scope_checklist(task_id,sort_order)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_points_project ON open_points(project_id,controller_id,status,due_date)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_goals_project ON goals(project_id,controller_id,status,due_date)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_notes_project_date ON daily_notes(project_id,note_date DESC,controller_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_audit_project_changed ON audit_log(project_id,changed_at DESC,id DESC)');
   seedConfiguration(db, defaultProjectId);
   if (String(process.env.SEED_DEMO_DATA || 'true').toLowerCase() !== 'false') {
     if (defaultProjectId === 1) seedDemoData(db, hashPassword, process.env.DEMO_DATA_LIMIT || 100);
@@ -76,6 +82,7 @@ export function openDatabase(databasePath) {
   migrateToV14(db);
   migrateToV15(db);
   migrateToV16(db);
+  migrateToV17(db);
   migrateStatusWorkflow(db);
   migrateEntityDependencies(db);
   migrateGlobalPlannerData(db);
@@ -153,6 +160,13 @@ function migrateToV15(db) {
 
 function migrateToV16(db) {
   ensureColumn(db, 'automation_rules', 'actions_json', "TEXT NOT NULL DEFAULT '[]'");
+}
+
+function migrateToV17(db) {
+  ensureColumn(db, 'planner_requirements', 'manual_required_count', 'INTEGER');
+  db.exec(`UPDATE planner_requirements
+    SET manual_required_count=CASE WHEN note='Automatyczne minimum z sumy podobszarów' THEN 0 ELSE required_count END
+    WHERE manual_required_count IS NULL`);
 }
 
 const globalPlannerSettingKeys = [
@@ -706,8 +720,11 @@ function seedConfiguration(db, projectId = 1, variant = 'main') {
   }
 
   if (!db.prepare('SELECT 1 FROM users LIMIT 1').get()) {
-    const username = process.env.APP_USER || 'admin';
-    const password = process.env.APP_PASSWORD || 'change-me';
+    const username = clean(process.env.APP_USER) || 'admin';
+    const password = String(process.env.APP_PASSWORD || (process.env.NODE_ENV === 'production' ? '' : 'change-me'));
+    if (username.length > 100) throw new Error('APP_USER może mieć maksymalnie 100 znaków');
+    if (!password) throw new Error('APP_PASSWORD jest wymagane przy pierwszym uruchomieniu produkcyjnym');
+    if (!validPassword(password)) throw new Error('APP_PASSWORD musi mieć od 8 do 256 znaków');
     db.prepare("INSERT INTO users(username,display_name,password_hash,role,system_role,sort_order) VALUES(?,?,?,?,?,0)").run(username, 'Administrator', hashPassword(password), 'admin', 'system_admin');
   }
   const systemAdmin = db.prepare("SELECT id FROM users WHERE system_role='system_admin' ORDER BY id LIMIT 1").get();
@@ -1191,7 +1208,7 @@ function createRepository(db, defaultProjectId) {
     const fields = allowedFields.filter(field => Object.hasOwn(values, field));
     if (!fields.length) return;
     const parameters = fields.map(field => values[field] === '' && (field.endsWith('_date') || field.endsWith('_id')) ? null : values[field]);
-    const result = db.prepare(`UPDATE ${table} SET ${fields.map(field => `${field}=?`).join(',')},updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=?`).run(...parameters, id);
+    const result = db.prepare(`UPDATE ${table} SET ${fields.map(field => `${field}=?`).join(',')},updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?`).run(...parameters, id, activeProjectId());
     if (!result.changes) throw appError('Nie znaleziono rekordu', 404);
   }
 
@@ -1759,7 +1776,7 @@ function createRepository(db, defaultProjectId) {
       WHERE project_id=? AND prerequisite_type=? AND prerequisite_id=? AND dependent_type='status'`, activeProjectId(), type, id).map(item => item.dependent_id) : [];
     if (dependencyTypes.has(type)) db.prepare(`DELETE FROM entity_dependencies WHERE project_id=? AND
       ((dependent_type=? AND dependent_id=?) OR (prerequisite_type=? AND prerequisite_id=?))`).run(activeProjectId(), type, id, type, id);
-    db.prepare(`DELETE FROM ${table} WHERE id=?`).run(id);
+    db.prepare(`DELETE FROM ${table} WHERE id=? AND project_id=?`).run(id, activeProjectId());
     db.prepare('DELETE FROM entity_mentions WHERE project_id=? AND entity_type=? AND entity_id=?').run(activeProjectId(), type, id);
     db.prepare('DELETE FROM entity_links WHERE project_id=? AND ((source_type=? AND source_id=?) OR (target_type=? AND target_id=?))').run(activeProjectId(), type, id, type, id);
     db.prepare('DELETE FROM calendar_item_dates WHERE project_id=? AND entity_type=? AND entity_id=?').run(activeProjectId(), type, id);
@@ -2070,7 +2087,11 @@ function createRepository(db, defaultProjectId) {
     for (const source of orderedRows) {
       const row = { ...source };
       if (Object.hasOwn(row, 'project_id')) row.project_id = projectId;
-      const columns = Object.keys(row);
+      if (table === 'planner_requirements' && !Object.hasOwn(row, 'manual_required_count')) {
+        row.manual_required_count = row.note === 'Automatyczne minimum z sumy podobszarów' ? 0 : Number(row.required_count || 0);
+      }
+      const allowedColumns = columnNames(db, table);
+      const columns = Object.keys(row).filter(column => allowedColumns.has(column));
       if (!columns.length) continue;
       db.prepare(`INSERT INTO ${table}(${columns.join(',')}) VALUES(${columns.map(() => '?').join(',')})`).run(...columns.map(column => row[column]));
     }
@@ -2109,9 +2130,9 @@ function createRepository(db, defaultProjectId) {
       migrateEntityDependencies(db);
       migrateStatusWorkflow(db);
       db.exec('COMMIT');
-    } catch (error) {
+    } catch {
       db.exec('ROLLBACK');
-      throw appError(`Nie udało się odtworzyć backupu: ${error.message}`);
+      throw appError('Nie udało się odtworzyć backupu. Sprawdź format i zgodność pliku.');
     }
     return { ok: true, project: currentProject, restored_at: new Date().toISOString() };
   }
@@ -2128,7 +2149,7 @@ function createRepository(db, defaultProjectId) {
   }
 
   function plannerProjectUsers() {
-    return all(`SELECT u.id,u.display_name,u.username,u.sort_order,COALESCE(pm.role,'user') role,
+    return all(`SELECT u.id,u.display_name,u.sort_order,COALESCE(pm.role,'user') role,
       COALESCE(pm.planner_enabled,1) planner_enabled,COALESCE(pm.active,1) project_active
       FROM users u LEFT JOIN project_memberships pm ON pm.user_id=u.id AND pm.project_id=?
       WHERE u.active=1 AND pm.active=1 ORDER BY u.sort_order,u.display_name`, activeProjectId());
@@ -2194,6 +2215,7 @@ function createRepository(db, defaultProjectId) {
     const hierarchy = hierarchyData();
     const groupMap = new Map(hierarchy.groups.map(group => [group.id, group]));
     const projectUsers = plannerProjectUsers();
+    const canManageRequirements = ['system_admin', 'project_admin', 'moderator'].includes(currentUser?.role);
     const currentProject = one('SELECT id,code,name FROM projects WHERE id=?', activeProjectId());
     const entries = all(`SELECT pe.*,u.display_name,creator.display_name created_by_name
       FROM planner_entries pe JOIN users u ON u.id=pe.user_id
@@ -2204,13 +2226,17 @@ function createRepository(db, defaultProjectId) {
         const area = groupMap.get(Number(entry.controller_group_id));
         return { ...entry, activity_type: entry.transport_mode === 'transport_only' ? 'transport' : 'work', project_code: currentProject?.code || '', project_name: currentProject?.name || '', is_current_project: true, area_name: area?.name || '', area_path: area?.path_label || '', area_depth: area?.depth || 0, root_area_id: area?.root_group_id || null };
       });
+    const crossProjectVisibility = canManageRequirements
+      ? { sql: 'AND EXISTS(SELECT 1 FROM project_memberships current_pm WHERE current_pm.project_id=? AND current_pm.user_id=pe.user_id AND current_pm.active=1)', params: [activeProjectId()] }
+      : { sql: 'AND pe.user_id=?', params: [Number(currentUser?.id || 0)] };
     const crossProjectEntries = all(`SELECT pe.*,u.display_name,creator.display_name created_by_name,p.code project_code,p.name project_name
       FROM planner_entries pe JOIN users u ON u.id=pe.user_id
       JOIN projects p ON p.id=pe.project_id AND p.active=1
       JOIN project_memberships pm ON pm.project_id=pe.project_id AND pm.user_id=pe.user_id AND pm.active=1
       LEFT JOIN users creator ON creator.id=pe.created_by
       WHERE pe.project_id!=? AND pe.plan_date BETWEEN ? AND ?
-      ORDER BY pe.plan_date,u.sort_order,p.sort_order,pe.id`, activeProjectId(), range.from, range.to).map(entry => {
+      ${crossProjectVisibility.sql}
+      ORDER BY pe.plan_date,u.sort_order,p.sort_order,pe.id`, activeProjectId(), range.from, range.to, ...crossProjectVisibility.params).map(entry => {
         const otherHierarchy = hierarchyData(entry.project_id);
         const area = otherHierarchy.groups.find(group => group.id === Number(entry.controller_group_id));
         return { ...entry, activity_type: entry.transport_mode === 'transport_only' ? 'transport' : 'work', is_current_project: false, area_name: area?.name || '', area_path: area?.path_label || '', area_depth: area?.depth || 0, root_area_id: area?.root_group_id || null };
@@ -2219,15 +2245,17 @@ function createRepository(db, defaultProjectId) {
     const timeAdjustments = all(`SELECT * FROM planner_time_adjustments
       WHERE project_id=? AND plan_date BETWEEN ? AND ? ORDER BY plan_date,user_id`, activeProjectId(), range.from, range.to);
     const absences = all(`SELECT pa.*,u.display_name FROM system_absences pa JOIN users u ON u.id=pa.user_id
-      WHERE pa.absence_date BETWEEN ? AND ? ORDER BY pa.absence_date,u.sort_order,u.display_name`, range.from, range.to);
+      JOIN project_memberships current_pm ON current_pm.user_id=pa.user_id AND current_pm.project_id=? AND current_pm.active=1
+      WHERE pa.absence_date BETWEEN ? AND ? ORDER BY pa.absence_date,u.sort_order,u.display_name`, activeProjectId(), range.from, range.to);
+    const overlapVisibility = canManageRequirements ? { sql: '', params: [] } : { sql: 'AND por.user_id=?', params: [Number(currentUser?.id || 0)] };
     const overlapReviews = all(`SELECT por.*,u.display_name,decider.display_name decided_by_name,
       GROUP_CONCAT(DISTINCT p.code) other_project_codes
       FROM planner_overlap_reviews por JOIN users u ON u.id=por.user_id
       LEFT JOIN users decider ON decider.id=por.decided_by
       LEFT JOIN planner_entries pe ON pe.user_id=por.user_id AND pe.plan_date=por.plan_date AND pe.project_id!=por.project_id
       LEFT JOIN projects p ON p.id=pe.project_id AND p.active=1
-      WHERE por.project_id=? AND por.plan_date BETWEEN ? AND ?
-      GROUP BY por.project_id,por.user_id,por.plan_date ORDER BY por.plan_date,u.sort_order,u.display_name`, activeProjectId(), range.from, range.to);
+      WHERE por.project_id=? AND por.plan_date BETWEEN ? AND ? ${overlapVisibility.sql}
+      GROUP BY por.project_id,por.user_id,por.plan_date ORDER BY por.plan_date,u.sort_order,u.display_name`, activeProjectId(), range.from, range.to, ...overlapVisibility.params);
     const usersWithEntries = new Set([...entries.map(entry => Number(entry.user_id)), ...crossProjectEntries.map(entry => Number(entry.user_id)), ...absences.map(item => Number(item.user_id))]);
     const decorateUser = user => {
       const areaIds = all('SELECT controller_group_id FROM project_user_areas WHERE project_id=? AND user_id=? ORDER BY sort_order', activeProjectId(), user.id).map(row => row.controller_group_id);
@@ -2255,7 +2283,6 @@ function createRepository(db, defaultProjectId) {
       SUM(pe.transport_mode='transport_only') transport_only,SUM(pe.transport_mode='transport_work') transport_work
       FROM planner_entries pe JOIN project_memberships pm ON pm.project_id=pe.project_id AND pm.user_id=pe.user_id AND pm.active=1
       WHERE pe.project_id=? AND pe.plan_date BETWEEN ? AND ? GROUP BY pe.plan_date ORDER BY pe.plan_date`, activeProjectId(), range.from, range.to);
-    const canManageRequirements = ['system_admin', 'project_admin', 'moderator'].includes(currentUser?.role);
     const requirements = canManageRequirements ? all(`SELECT pr.*,cg.name area_name FROM planner_requirements pr
       JOIN controller_groups cg ON cg.id=pr.controller_group_id
       WHERE pr.project_id=? AND pr.plan_date BETWEEN ? AND ? ORDER BY pr.plan_date,cg.sort_order,pr.work_mode`, activeProjectId(), range.from, range.to).map(row => {
@@ -2318,15 +2345,17 @@ function createRepository(db, defaultProjectId) {
     if (canManageRequirements) {
       const historicalStarts = [
         one('SELECT MIN(plan_date) value FROM planner_entries WHERE project_id=?', activeProjectId())?.value,
-        one('SELECT MIN(absence_date) value FROM system_absences')?.value,
+        one(`SELECT MIN(sa.absence_date) value FROM system_absences sa JOIN project_memberships pm ON pm.user_id=sa.user_id
+          WHERE pm.project_id=? AND pm.active=1`, activeProjectId())?.value,
         one('SELECT MIN(plan_date) value FROM planner_time_adjustments WHERE project_id=?', activeProjectId())?.value
       ].filter(Boolean).sort();
       const calculationFrom = historicalStarts[0] && historicalStarts[0] < range.from ? historicalStarts[0] : range.from;
       const calculationRange = safeDateRange(calculationFrom, range.to, 7305);
       const calculationEntries = calculationFrom === range.from ? entries : all(`SELECT * FROM planner_entries
         WHERE project_id=? AND plan_date BETWEEN ? AND ? ORDER BY plan_date,user_id,id`, activeProjectId(), calculationFrom, range.to);
-      const calculationAbsences = calculationFrom === range.from ? absences : all(`SELECT * FROM system_absences
-        WHERE absence_date BETWEEN ? AND ? ORDER BY absence_date,user_id`, calculationFrom, range.to);
+      const calculationAbsences = calculationFrom === range.from ? absences : all(`SELECT sa.* FROM system_absences sa
+        JOIN project_memberships pm ON pm.user_id=sa.user_id AND pm.project_id=? AND pm.active=1
+        WHERE sa.absence_date BETWEEN ? AND ? ORDER BY sa.absence_date,sa.user_id`, activeProjectId(), calculationFrom, range.to);
       const calculationHolidays = calculationFrom === range.from ? holidays : all(`SELECT * FROM system_holidays
         WHERE holiday_date BETWEEN ? AND ? ORDER BY holiday_date`, calculationFrom, range.to);
       const calculationAdjustments = calculationFrom === range.from ? timeAdjustments : all(`SELECT * FROM planner_time_adjustments
@@ -2557,38 +2586,33 @@ function createRepository(db, defaultProjectId) {
     db.exec('BEGIN IMMEDIATE');
     try { writePlannerRequirement(groupId, planDate, values, clean(input.note), currentUser); enforcePlannerRequirementHierarchy([planDate], currentUser); db.exec('COMMIT'); }
     catch (error) { db.exec('ROLLBACK'); throw error; }
-    return { plan_date: planDate, controller_group_id: groupId, online_required: values.online, offline_required: values.offline };
+    const effective = Object.fromEntries(['online', 'offline'].map(mode => [mode, Number(one(`SELECT required_count FROM planner_requirements
+      WHERE project_id=? AND controller_group_id=? AND plan_date=? AND work_mode=?`, activeProjectId(), groupId, planDate, mode)?.required_count || 0)]));
+    return { plan_date: planDate, controller_group_id: groupId, online_required: effective.online, offline_required: effective.offline };
   }
 
   function writePlannerRequirement(groupId, planDate, values, note, currentUser) {
-    const replace = (targetId, counts, preserveHigher = false) => {
-      const insert = db.prepare('INSERT INTO planner_requirements(project_id,controller_group_id,plan_date,work_mode,required_count,note,created_by) VALUES(?,?,?,?,?,?,?)');
-      for (const mode of ['online', 'offline']) {
-        const current = Number(one('SELECT required_count FROM planner_requirements WHERE project_id=? AND controller_group_id=? AND plan_date=? AND work_mode=?', activeProjectId(), targetId, planDate, mode)?.required_count || 0);
-        const next = preserveHigher ? Math.max(current, counts[mode]) : counts[mode];
-        db.prepare('DELETE FROM planner_requirements WHERE project_id=? AND controller_group_id=? AND plan_date=? AND work_mode=?').run(activeProjectId(), targetId, planDate, mode);
-        if (next > 0) insert.run(activeProjectId(), targetId, planDate, mode, next, note, currentUser.id);
-      }
-    };
-    replace(groupId, values, false);
-    let parentId = one('SELECT parent_id FROM controller_groups WHERE id=? AND project_id=?', groupId, activeProjectId())?.parent_id;
-    while (parentId) {
-      replace(Number(parentId), values, true);
-      parentId = one('SELECT parent_id FROM controller_groups WHERE id=? AND project_id=?', parentId, activeProjectId())?.parent_id;
-    }
+    const upsert = db.prepare(`INSERT INTO planner_requirements(
+      project_id,controller_group_id,plan_date,work_mode,required_count,manual_required_count,note,created_by
+    ) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(project_id,controller_group_id,plan_date,work_mode) DO UPDATE SET
+      manual_required_count=excluded.manual_required_count,note=excluded.note,created_by=excluded.created_by,updated_at=CURRENT_TIMESTAMP`);
+    for (const mode of ['online', 'offline']) upsert.run(activeProjectId(), groupId, planDate, mode, values[mode], values[mode], note, currentUser.id);
   }
 
   function enforcePlannerRequirementHierarchy(planDates, currentUser) {
     const groups = hierarchyData().groups.slice().sort((left, right) => Number(right.depth || 0) - Number(left.depth || 0));
-    const upsert = db.prepare(`INSERT INTO planner_requirements(project_id,controller_group_id,plan_date,work_mode,required_count,note,created_by)
-      VALUES(?,?,?,?,?,'Automatyczne minimum z sumy podobszarów',?)
+    const upsert = db.prepare(`INSERT INTO planner_requirements(project_id,controller_group_id,plan_date,work_mode,required_count,manual_required_count,note,created_by)
+      VALUES(?,?,?,?,?,0,'Automatyczne minimum z sumy podobszarów',?)
       ON CONFLICT(project_id,controller_group_id,plan_date,work_mode) DO UPDATE SET
-      required_count=MAX(planner_requirements.required_count,excluded.required_count)`);
+      required_count=excluded.required_count,manual_required_count=COALESCE(planner_requirements.manual_required_count,planner_requirements.required_count),updated_at=CURRENT_TIMESTAMP`);
     for (const planDate of new Set(planDates)) for (const mode of ['online', 'offline']) for (const group of groups) {
       const children = groups.filter(candidate => Number(candidate.parent_id || 0) === Number(group.id));
-      if (!children.length) continue;
-      const required = children.reduce((sum, child) => sum + Number(one('SELECT required_count FROM planner_requirements WHERE project_id=? AND controller_group_id=? AND plan_date=? AND work_mode=?', activeProjectId(), child.id, planDate, mode)?.required_count || 0), 0);
-      if (required > 0) upsert.run(activeProjectId(), Number(group.id), planDate, mode, required, currentUser.id);
+      const row = one('SELECT required_count,manual_required_count FROM planner_requirements WHERE project_id=? AND controller_group_id=? AND plan_date=? AND work_mode=?', activeProjectId(), group.id, planDate, mode);
+      const manual = Number(row?.manual_required_count ?? row?.required_count ?? 0);
+      const childrenRequired = children.reduce((sum, child) => sum + Number(one('SELECT required_count FROM planner_requirements WHERE project_id=? AND controller_group_id=? AND plan_date=? AND work_mode=?', activeProjectId(), child.id, planDate, mode)?.required_count || 0), 0);
+      const required = Math.max(manual, childrenRequired);
+      if (required > 0 || manual > 0) upsert.run(activeProjectId(), Number(group.id), planDate, mode, required, currentUser.id);
+      else db.prepare('DELETE FROM planner_requirements WHERE project_id=? AND controller_group_id=? AND plan_date=? AND work_mode=?').run(activeProjectId(), group.id, planDate, mode);
     }
   }
 
@@ -4068,13 +4092,13 @@ function createRepository(db, defaultProjectId) {
       const user = one('SELECT password_hash FROM users WHERE id=? AND active=1', asId(userId));
       if (!user || !verifyPassword(String(input.current_password || ''), user.password_hash)) throw appError('Bieżące hasło jest nieprawidłowe', 403);
       const password = String(input.new_password || '');
-      if (password.length < 8) throw appError('Nowe hasło musi mieć co najmniej 8 znaków');
+      if (!validPassword(password)) throw appError('Nowe hasło musi mieć od 8 do 256 znaków');
       db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(hashPassword(password), asId(userId));
       return { changed: true };
     },
     resetUserPassword(userId, input) {
       const password = String(input.new_password || '');
-      if (password.length < 8) throw appError('Nowe hasło musi mieć co najmniej 8 znaków');
+      if (!validPassword(password)) throw appError('Nowe hasło musi mieć od 8 do 256 znaków');
       const result = db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(hashPassword(password), asId(userId));
       if (!result.changes) throw appError('Nie znaleziono użytkownika', 404);
       return { changed: true, user_id: Number(userId) };
@@ -4134,10 +4158,32 @@ function createRepository(db, defaultProjectId) {
           area_ids: all('SELECT controller_group_id FROM project_user_areas WHERE project_id=? AND user_id=? ORDER BY sort_order,controller_group_id', activeProjectId(), user.id).map(row => row.controller_group_id)
         }));
     },
+    projectUsers({ includeAccountDetails = false } = {}) {
+      if (!includeAccountDetails) return all(`SELECT u.id,u.display_name,1 active,1 project_active,pm.assignable
+        FROM project_memberships pm JOIN users u ON u.id=pm.user_id
+        WHERE pm.project_id=? AND pm.active=1 AND u.active=1
+        ORDER BY u.sort_order,u.display_name`, activeProjectId());
+      return all(`SELECT u.id,u.username,u.display_name,u.system_role,1 active,
+        pm.role project_role,pm.role role,1 project_active,pm.planner_enabled,pm.assignable,pm.summary_area_source
+        FROM project_memberships pm JOIN users u ON u.id=pm.user_id
+        WHERE pm.project_id=? AND pm.active=1 AND u.active=1
+        ORDER BY u.sort_order,u.display_name`, activeProjectId()).map(user => ({
+          ...user,
+          area_ids: all('SELECT controller_group_id FROM project_user_areas WHERE project_id=? AND user_id=? ORDER BY sort_order,controller_group_id', activeProjectId(), user.id).map(row => row.controller_group_id)
+        }));
+    },
     saveUser(id, input) {
       if (id) {
+        if (Object.hasOwn(input, 'username') && (!clean(input.username) || clean(input.username).length > 100)) throw appError('Login musi mieć od 1 do 100 znaków');
+        if (Object.hasOwn(input, 'display_name') && (!clean(input.display_name) || clean(input.display_name).length > 150)) throw appError('Nazwa użytkownika musi mieć od 1 do 150 znaków');
+        if (clean(input.password) && !validPassword(String(input.password))) throw appError('Hasło musi mieć od 8 do 256 znaków');
         const fields = ['username', 'display_name', 'system_role', 'active', 'sort_order'].filter(field => Object.hasOwn(input, field));
         const values = { ...input };
+        if (Object.hasOwn(values, 'username')) values.username = clean(values.username);
+        if (Object.hasOwn(values, 'display_name')) values.display_name = clean(values.display_name);
+        if (Object.hasOwn(values, 'active')) values.active = Number(values.active) ? 1 : 0;
+        if (Object.hasOwn(values, 'sort_order')) values.sort_order = Math.max(0, Math.floor(Number(values.sort_order) || 0));
+        if (Object.hasOwn(values, 'system_role')) values.system_role = clean(values.system_role) === 'system_admin' ? 'system_admin' : 'user';
         if (Object.hasOwn(values, 'system_role')) values.role = values.system_role === 'system_admin' ? 'admin' : 'user';
         if (Object.hasOwn(values, 'system_role')) fields.push('role');
         if (clean(input.password)) { values.password_hash = hashPassword(input.password); fields.push('password_hash'); }
@@ -4145,15 +4191,18 @@ function createRepository(db, defaultProjectId) {
         if (['project_role', 'project_active', 'role', 'planner_enabled', 'assignable', 'summary_area_source'].some(field => Object.hasOwn(input, field))) {
           const current = one('SELECT * FROM project_memberships WHERE project_id=? AND user_id=?', activeProjectId(), id) || {};
           const summarySource = clean(input.summary_area_source || current.summary_area_source) === 'planner' ? 'planner' : 'configuration';
+          const projectRole = ['project_admin', 'moderator', 'user'].includes(clean(input.project_role || input.role)) ? clean(input.project_role || input.role) : current.role || 'user';
           db.prepare(`INSERT INTO project_memberships(project_id,user_id,role,active,planner_enabled,assignable,summary_area_source) VALUES(?,?,?,?,?,?,?)
             ON CONFLICT(project_id,user_id) DO UPDATE SET role=excluded.role,active=excluded.active,planner_enabled=excluded.planner_enabled,assignable=excluded.assignable,summary_area_source=excluded.summary_area_source`).run(
-            activeProjectId(), id, clean(input.project_role || input.role || current.role) || 'user', Number(input.project_active ?? current.active ?? 1) ? 1 : 0,
+            activeProjectId(), id, projectRole, Number(input.project_active ?? current.active ?? 1) ? 1 : 0,
             Number(input.planner_enabled ?? current.planner_enabled ?? 1) ? 1 : 0, Number(input.assignable ?? current.assignable ?? 1) ? 1 : 0, summarySource
           );
         }
         return this.users().find(user => user.id === id);
       }
       if (!clean(input.username) || !clean(input.display_name) || !clean(input.password)) throw appError('Login, imię i hasło są wymagane');
+      if (clean(input.username).length > 100 || clean(input.display_name).length > 150) throw appError('Login lub nazwa użytkownika są zbyt długie');
+      if (!validPassword(String(input.password))) throw appError('Hasło musi mieć od 8 do 256 znaków');
       const nextOrder = one('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM users').value;
       const systemRole = clean(input.system_role) === 'system_admin' ? 'system_admin' : 'user';
       const userId = insertRecord('users', { username: clean(input.username), display_name: clean(input.display_name), password_hash: hashPassword(input.password), role: systemRole === 'system_admin' ? 'admin' : 'user', system_role: systemRole, active: 1, sort_order: nextOrder });
@@ -4162,9 +4211,9 @@ function createRepository(db, defaultProjectId) {
         const current = Number(project.id) === Number(activeProjectId());
         insertMembership.run(project.id, userId,
           systemRole === 'system_admin' ? 'project_admin' : current ? clean(input.project_role || input.role) || 'user' : 'user',
-          current ? (Number(input.project_active ?? 1) ? 1 : 0) : 1,
-          current ? (Number(input.planner_enabled ?? (systemRole === 'system_admin' ? 0 : 1)) ? 1 : 0) : (systemRole === 'system_admin' ? 0 : 1),
-          current ? (Number(input.assignable ?? 1) ? 1 : 0) : 1,
+          systemRole === 'system_admin' ? 1 : current ? (Number(input.project_active ?? 1) ? 1 : 0) : 0,
+          systemRole === 'system_admin' ? 0 : current ? (Number(input.planner_enabled ?? 1) ? 1 : 0) : 0,
+          systemRole === 'system_admin' ? 0 : current ? (Number(input.assignable ?? 1) ? 1 : 0) : 0,
           current && clean(input.summary_area_source) === 'planner' ? 'planner' : 'configuration');
       }
       return this.users().find(user => user.id === userId);
@@ -4536,6 +4585,8 @@ function createRepository(db, defaultProjectId) {
     saveOption(id, input) {
       const value = clean(input.value);
       const kind = clean(input.kind);
+      if (!value || value.length > 100) throw appError('Wartość słownika musi mieć od 1 do 100 znaków');
+      if (!['shift', 'note_type', 'waiting_for', 'announcement_importance'].includes(kind)) throw appError('Nieznany typ słownika');
       if (id) {
         const previous = one('SELECT * FROM options WHERE id=? AND project_id=?', id, activeProjectId());
         if (!previous) throw appError('Nie znaleziono pozycji słownika', 404);
@@ -4582,9 +4633,20 @@ function createRepository(db, defaultProjectId) {
       db.prepare(`DELETE FROM ${table} WHERE id=?`).run(id);
     },
     saveSetting(key, value) {
+      const ranges = {
+        default_reminder_days: [1, 3650], reminder_warning_days: [1, 365],
+        planner_online_hours: [0, 24], planner_offline_hours: [0, 24], planner_base_hours: [0, 24],
+        planner_weekday_multiplier: [0, 10], planner_saturday_multiplier: [0, 10], planner_sunday_holiday_multiplier: [0, 10], planner_time_off_debit: [0, 24],
+        employee_review_item_weight: [0, 100], employee_review_dimension_weight: [0, 100]
+      };
+      if (!Object.hasOwn(ranges, key)) throw appError('Nieznane ustawienie projektu');
+      const numericValue = Number(value);
+      const [minimum, maximum] = ranges[key];
+      if (!Number.isFinite(numericValue) || numericValue < minimum || numericValue > maximum) throw appError(`Wartość ustawienia musi mieścić się w zakresie ${minimum}–${maximum}`);
+      const normalizedValue = String(numericValue);
       if (globalPlannerSettingKeys.includes(key)) db.prepare(`INSERT INTO system_settings(key,value,updated_at) VALUES(?,?,CURRENT_TIMESTAMP)
-        ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP`).run(key, String(value));
-      else db.prepare('INSERT INTO settings(project_id,key,value) VALUES(?,?,?) ON CONFLICT(project_id,key) DO UPDATE SET value=excluded.value').run(activeProjectId(), key, String(value));
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP`).run(key, normalizedValue);
+      else db.prepare('INSERT INTO settings(project_id,key,value) VALUES(?,?,?) ON CONFLICT(project_id,key) DO UPDATE SET value=excluded.value').run(activeProjectId(), key, normalizedValue);
     },
     reorder(kind, ids) {
       const map = { controllers: 'controllers', controller_groups: 'controller_groups', users: 'users', categories: 'categories', subcategories: 'subcategories', task_categories: 'task_categories', task_subcategories: 'task_subcategories', options: 'options', announcement_labels: 'announcement_labels', completion_requirements: 'completion_requirements', function_groups: 'function_groups', function_group_elements: 'function_group_elements', function_group_subcategories: 'function_group_subcategories', export_templates: 'export_templates' };
@@ -4911,7 +4973,7 @@ function createRepository(db, defaultProjectId) {
       return decorateTask(attachControllerMeta(row), currentUser);
     },
     deleteTask(id, currentUser) {
-      const task = one('SELECT * FROM tasks WHERE id=?', id);
+      const task = one('SELECT * FROM tasks WHERE id=? AND project_id=?', id, activeProjectId());
       if (!task) throw appError('Nie znaleziono zadania', 404);
       if (!canDeleteTask(task, currentUser)) throw appError('Nie możesz usunąć tego zadania', 403);
       assertEntityEditable('task', id, currentUser);
@@ -4927,7 +4989,8 @@ function createRepository(db, defaultProjectId) {
       const requestedDependencies = Array.isArray(input.dependency_refs) ? input.dependency_refs : before?.dependency_refs || [];
       if (id) validateEntityDependencies('point', id, requestedDependencies);
       const ownerId = asId(input.owner_user_id);
-      const defaultDays = Number(one("SELECT value FROM settings WHERE project_id=? AND key='default_reminder_days'", activeProjectId())?.value || 14);
+      const configuredDefaultDays = Number(one("SELECT value FROM settings WHERE project_id=? AND key='default_reminder_days'", activeProjectId())?.value);
+      const defaultDays = Number.isFinite(configuredDefaultDays) ? Math.max(1, Math.min(3650, configuredDefaultDays)) : 14;
       const defaultReminder = new Date();
       defaultReminder.setUTCDate(defaultReminder.getUTCDate() + defaultDays);
       const values = {
@@ -5008,7 +5071,7 @@ function createRepository(db, defaultProjectId) {
       return decorateNote(row, currentUser);
     },
     deleteNote(id, currentUser) {
-      const note = one('SELECT * FROM daily_notes WHERE id=?', id);
+      const note = one('SELECT * FROM daily_notes WHERE id=? AND project_id=?', id, activeProjectId());
       if (!note) throw appError('Nie znaleziono notatki', 404);
       if (!(['system_admin', 'project_admin', 'moderator'].includes(currentUser.role) || note.created_by === currentUser.id)) throw appError('Nie możesz usunąć tej notatki', 403);
       removeWithAudit('note', id, currentUser);

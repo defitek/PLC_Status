@@ -426,6 +426,7 @@ CREATE TABLE IF NOT EXISTS planner_requirements (
   plan_date TEXT NOT NULL,
   work_mode TEXT NOT NULL CHECK(work_mode IN ('online','offline')),
   required_count INTEGER NOT NULL DEFAULT 0 CHECK(required_count >= 0),
+  manual_required_count INTEGER NOT NULL DEFAULT 0 CHECK(manual_required_count >= 0),
   note TEXT NOT NULL DEFAULT '',
   created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -975,7 +976,9 @@ CREATE INDEX IF NOT EXISTS idx_entity_links_target ON entity_links(project_id,ta
 CREATE INDEX IF NOT EXISTS idx_task_assignees_user ON task_assignees(project_id,user_id,task_id);
 CREATE INDEX IF NOT EXISTS idx_status_assignees_user ON status_assignees(project_id,user_id,status_id);
 CREATE INDEX IF NOT EXISTS idx_project_user_areas_user ON project_user_areas(project_id,user_id);
+CREATE INDEX IF NOT EXISTS idx_project_memberships_user ON project_memberships(user_id,active,project_id);
 CREATE INDEX IF NOT EXISTS idx_planner_project_date ON planner_entries(project_id,plan_date,user_id);
+CREATE INDEX IF NOT EXISTS idx_planner_user_date_project ON planner_entries(user_id,plan_date,project_id);
 CREATE INDEX IF NOT EXISTS idx_planner_requirements_date ON planner_requirements(project_id,plan_date,controller_group_id);
 CREATE INDEX IF NOT EXISTS idx_announcements_project ON announcements(project_id,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_announcement_labels_project ON announcement_labels(project_id,sort_order,name);

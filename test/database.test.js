@@ -1004,6 +1004,7 @@ test('V14 shares users across projects, exposes cross-project plans and supports
     const worker = repository.saveUser(null, {
       username: 'v14-worker', display_name: 'V14 Worker', password: 'worker-password', project_role: 'user', planner_enabled: 1, assignable: 1
     });
+    assert.deepEqual(repository.availableProjects(worker.id).map(item => item.id), [1]);
     const planDate = new Date().toISOString().slice(0, 10);
     const originalArea = repository.controllerGroups().find(item => !item.parent_id);
     repository.savePlannerDay({ user_id: worker.id, plan_date: planDate, entries: [{ activity_type: 'work', controller_group_id: originalArea.id, work_mode: 'offline', shift: 'Dzień', note: 'Plan bazowy' }] }, admin);
@@ -1119,6 +1120,14 @@ test('edit locks, hierarchical requirements and the refined status workflow are 
     assert.ok(requirement(root.id, 'online') >= 5);
     assert.ok(planner.area_day_summary.find(item => item.id === root.id).days[0].online_required >= 5);
 
+    repository.setPlannerRequirementsBatch({ items: [
+      { plan_date: '2027-01-15', controller_group_id: sibling.id, online_required: 0, offline_required: 0 }
+    ] }, admin);
+    const reducedPlanner = repository.planner('2027-01-15', '2027-01-15', admin);
+    const reducedRequirement = (groupId, mode) => reducedPlanner.requirements.find(item => Number(item.controller_group_id) === Number(groupId) && item.work_mode === mode)?.required_count || 0;
+    assert.equal(reducedRequirement(root.id, 'online'), 2);
+    assert.equal(reducedRequirement(root.id, 'offline'), 1);
+
     let status = repository.saveStatus(null, { controller: controller.code, function_detail: 'Przepływ komentarzy statusu', category: 'General', status: 'Ready to test' }, admin);
     const comment = repository.addComment({ entity_type: 'status', entity_id: status.id, content: 'Komentarz w otwartej sesji edycji' }, admin);
     assert.ok(comment.entity_updated_at);
@@ -1141,6 +1150,31 @@ test('edit locks, hierarchical requirements and the refined status workflow are 
     assert.ok(repository.runAutomations(admin).executed >= 2);
     assert.ok(repository.notifications(admin).some(item => item.entity_type === 'task' && item.entity_id === trackedTask.id && item.title.includes('Za długo w trakcie')));
     assert.equal(repository.tasks('all', admin).find(item => item.id === trackedTask.id).priority, 'Critical');
+  } finally {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
+test('project-scoped generic updates cannot move records between projects', () => {
+  const temporary = temporaryDatabase();
+  const repository = openDatabase(temporary.path);
+  try {
+    const account = repository.authenticate('admin');
+    const firstProjectAdmin = repository.me(account.id, 1);
+    let gate;
+    repository.withProject(1, () => {
+      gate = repository.saveReadinessGate(null, { name: 'Brama projektu źródłowego', scope_type: 'project', criteria: { max_blockers: 9999 } }, firstProjectAdmin);
+    });
+    const secondProject = repository.availableProjects(account.id).find(project => project.id !== 1);
+    assert.ok(secondProject);
+    repository.withProject(secondProject.id, () => {
+      const secondProjectAdmin = repository.me(account.id, secondProject.id);
+      assert.throws(() => repository.saveReadinessGate(gate.id, { name: 'Próba przejęcia rekordu', scope_type: 'project', criteria: { max_blockers: 9999 } }, secondProjectAdmin), /Nie znaleziono rekordu/);
+    });
+    repository.withProject(1, () => {
+      assert.equal(repository.commissioning(firstProjectAdmin).gates.find(item => item.id === gate.id)?.name, 'Brama projektu źródłowego');
+    });
   } finally {
     repository.close();
     rmSync(temporary.directory, { recursive: true, force: true });

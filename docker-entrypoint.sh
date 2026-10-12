@@ -10,4 +10,4 @@ mkdir -p "$data_directory"
 chown -R node:node "$data_directory"
 
 # Sama aplikacja nadal działa jako nieuprzywilejowany użytkownik.
-exec su-exec node "$@"
+exec su -s /bin/sh -c 'exec "$0" "$@"' -- node "$@"

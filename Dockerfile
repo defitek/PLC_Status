@@ -1,7 +1,5 @@
 FROM public.ecr.aws/docker/library/node:24-alpine
 
-RUN apk add --no-cache su-exec
-
 WORKDIR /app
 COPY package.json ./
 COPY server.js database.js demo-data.js schema.sql exports.js xlsx.js ./

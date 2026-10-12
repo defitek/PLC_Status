@@ -1,8 +1,8 @@
 import { createServer } from 'node:http';
 import { createReadStream, existsSync, statSync } from 'node:fs';
-import { dirname, extname, join, normalize } from 'node:path';
+import { dirname, extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, scryptSync } from 'node:crypto';
 import { openDatabase, verifyPassword } from './database.js';
 import { openPointsWorkbook, projectWorkbook, statusWorkbook } from './exports.js';
 
@@ -12,24 +12,44 @@ const databasePath = process.env.DB_PATH || join(moduleDir, 'data', 'plc-status.
 const port = Number(process.env.PORT || 3000);
 const repository = openDatabase(databasePath);
 const sessions = new Map();
+const loginFailures = new Map();
 const liveClients = new Set();
 const mimeTypes = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json; charset=utf-8', '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+const securityHeaders = { 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'same-origin', 'Permissions-Policy': 'camera=(), microphone=(), geolocation=()', 'Cross-Origin-Opener-Policy': 'same-origin', 'Cross-Origin-Resource-Policy': 'same-origin', 'Strict-Transport-Security': 'max-age=31536000' };
+const sessionTtlSeconds = 12 * 60 * 60;
+const maxJsonBytes = 5_000_000;
+const loginWindowMs = 15 * 60 * 1000;
+const loginFailureLimit = 8;
+const managerSettingKeys = new Set(['planner_online_hours', 'planner_offline_hours', 'planner_base_hours', 'planner_weekday_multiplier', 'planner_saturday_multiplier', 'planner_sunday_holiday_multiplier', 'planner_time_off_debit']);
+const dummySalt = randomBytes(16).toString('hex');
+const dummyPasswordHash = `${dummySalt}:${scryptSync(randomBytes(32), dummySalt, 64).toString('hex')}`;
 
 function json(response, statusCode, payload, headers = {}) {
-  response.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', ...headers });
+  response.writeHead(statusCode, { ...securityHeaders, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers });
   response.end(JSON.stringify(payload));
 }
 function download(response, buffer, contentType, filename) {
-  response.writeHead(200, { 'Content-Type': contentType, 'Content-Length': buffer.length, 'Content-Disposition': `attachment; filename="${filename.replace(/[^a-zA-Z0-9._-]/g, '_')}"`, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+  response.writeHead(200, { ...securityHeaders, 'Content-Type': contentType, 'Content-Length': buffer.length, 'Content-Disposition': `attachment; filename="${filename.replace(/[^a-zA-Z0-9._-]/g, '_')}"`, 'Cache-Control': 'no-store' });
   response.end(buffer);
 }
-async function readJson(request) {
+async function readJson(request, byteLimit = maxJsonBytes) {
+  const declaredLength = Number(request.headers['content-length'] || 0);
+  if (Number.isFinite(declaredLength) && declaredLength > byteLimit) throw Object.assign(new Error('Żądanie jest zbyt duże'), { statusCode: 413 });
   let content = '';
-  for await (const chunk of request) { content += chunk; if (content.length > 50_000_000) throw Object.assign(new Error('Żądanie jest zbyt duże'), { statusCode: 413 }); }
+  let receivedBytes = 0;
+  for await (const chunk of request) { receivedBytes += chunk.length; if (receivedBytes > byteLimit) throw Object.assign(new Error('Żądanie jest zbyt duże'), { statusCode: 413 }); content += chunk; }
   if (!content) return {};
   try { return JSON.parse(content); } catch { throw Object.assign(new Error('Nieprawidłowy JSON'), { statusCode: 400 }); }
 }
-function cookies(request) { return Object.fromEntries((request.headers.cookie || '').split(';').map(value => value.trim().split('=').map(decodeURIComponent)).filter(parts => parts.length === 2)); }
+function cookies(request) {
+  const result = {};
+  for (const part of String(request.headers.cookie || '').split(';')) {
+    const separator = part.indexOf('=');
+    if (separator < 1) continue;
+    try { result[decodeURIComponent(part.slice(0, separator).trim())] = decodeURIComponent(part.slice(separator + 1).trim()); } catch {}
+  }
+  return result;
+}
 function sessionCookie(request, value, maxAge) {
   const https = request.socket.encrypted || String(request.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
   return `plc_session=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${https ? '; Secure' : ''}`;
@@ -40,6 +60,37 @@ function activeSession(request) {
   if (!session || session.expiresAt < Date.now()) { if (token) sessions.delete(token); return null; }
   return { token, session };
 }
+function revokeUserSessions(userId, exceptToken = '') {
+  for (const [token, session] of sessions) if (session.userId === Number(userId) && token !== exceptToken) sessions.delete(token);
+}
+function createUserSession(userId, projectId = null) {
+  const token = randomBytes(32).toString('hex');
+  const expiresAt = Date.now() + sessionTtlSeconds * 1000;
+  for (const [storedToken, session] of sessions) if (session.expiresAt < Date.now()) sessions.delete(storedToken);
+  const userSessions = [...sessions.entries()].filter(([, session]) => session.userId === Number(userId)).sort((left, right) => left[1].expiresAt - right[1].expiresAt);
+  while (userSessions.length >= 10) sessions.delete(userSessions.shift()[0]);
+  sessions.set(token, { userId: Number(userId), projectId: projectId ? Number(projectId) : null, expiresAt });
+  return token;
+}
+function requestAddress(request) {
+  const forwarded = String(request.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return (forwarded || request.socket.remoteAddress || 'unknown').slice(0, 128);
+}
+function failureState(key, limit = loginFailureLimit) {
+  const cutoff = Date.now() - loginWindowMs;
+  const attempts = (loginFailures.get(key) || []).filter(timestamp => timestamp > cutoff);
+  if (attempts.length) loginFailures.set(key, attempts); else loginFailures.delete(key);
+  return { key, attempts, blocked: attempts.length >= limit, retryAfter: attempts.length ? Math.max(1, Math.ceil((attempts[0] + loginWindowMs - Date.now()) / 1000)) : 1 };
+}
+function loginFailureState(request) { return failureState(`ip:${requestAddress(request)}`); }
+function recordLoginFailure(key, attempts) {
+  loginFailures.set(key, [...attempts, Date.now()]);
+  if (loginFailures.size > 10000) {
+    const cutoff = Date.now() - loginWindowMs;
+    for (const [storedKey, timestamps] of loginFailures) if (!timestamps.some(timestamp => timestamp > cutoff)) loginFailures.delete(storedKey);
+    for (const storedKey of loginFailures.keys()) { if (loginFailures.size <= 10000) break; loginFailures.delete(storedKey); }
+  }
+}
 function currentUser(request) { const active = activeSession(request); return active ? repository.me(active.session.userId, active.session.projectId || null) : null; }
 function requireRole(user, role = 'user') {
   const hierarchy = { user: 1, moderator: 2, project_admin: 3, system_admin: 4 };
@@ -49,25 +100,33 @@ function numericId(pathname, prefix) { const match = pathname.match(new RegExp(`
 function projectFilename(project, suffix, extension) { return `${project.code}_${suffix}_${new Date().toISOString().slice(0, 10)}.${extension}`; }
 function openEventStream(request, response, projectId, userId, clientId) {
   response.writeHead(200, {
+    ...securityHeaders,
     'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform',
     Connection: 'keep-alive', 'X-Accel-Buffering': 'no'
   });
   response.write(`event: ready\ndata: ${JSON.stringify({ project_id: projectId })}\n\n`);
   const client = { response, projectId: Number(projectId), userId: Number(userId), clientId: String(clientId || '') };
   liveClients.add(client);
-  const heartbeat = setInterval(() => response.write(': heartbeat\n\n'), 20000);
+  const heartbeat = setInterval(() => {
+    const active = activeSession(request);
+    const current = active ? repository.me(active.session.userId, active.session.projectId || null) : null;
+    if (!active || Number(active.session.userId) !== Number(userId) || Number(active.session.projectId) !== Number(projectId) || !current?.current_project) {
+      clearInterval(heartbeat); liveClients.delete(client); response.end(); return;
+    }
+    response.write(': heartbeat\n\n');
+  }, 20000);
   heartbeat.unref();
   request.on('close', () => { clearInterval(heartbeat); liveClients.delete(client); });
 }
 function broadcastProjectChange(projectId, payload) {
-  const body = `event: change\ndata: ${JSON.stringify(payload)}\n\n`;
+  const body = `event: change\ndata: ${JSON.stringify({ at: payload.at, client_id: payload.client_id })}\n\n`;
   for (const client of liveClients) {
     if (client.projectId !== Number(projectId)) continue;
     try { client.response.write(body); } catch { liveClients.delete(client); }
   }
 }
 function broadcastPlannerChange(payload) {
-  const body = `event: change\ndata: ${JSON.stringify({ ...payload, global_planner: true })}\n\n`;
+  const body = `event: change\ndata: ${JSON.stringify({ at: payload.at, client_id: payload.client_id, global_planner: true })}\n\n`;
   for (const client of liveClients) {
     try { client.response.write(body); } catch { liveClients.delete(client); }
   }
@@ -81,7 +140,10 @@ async function handleProjectApi(request, response, url, user) {
 
   if (method === 'GET' && path === '/api/controllers') return json(response, 200, repository.controllers());
   if (method === 'GET' && path === '/api/controller-groups') return json(response, 200, repository.controllerGroups());
-  if (method === 'GET' && path === '/api/users') return json(response, 200, repository.users());
+  if (method === 'GET' && path === '/api/users') {
+    if (['system_admin', 'project_admin'].includes(user.role)) return json(response, 200, repository.users());
+    return json(response, 200, repository.projectUsers({ includeAccountDetails: user.role === 'moderator' }));
+  }
   if (method === 'GET' && path === '/api/config') return json(response, 200, repository.config());
   if (method === 'GET' && path === '/api/dashboard') return json(response, 200, repository.dashboard(scope));
   if (method === 'GET' && path === '/api/overview') return json(response, 200, repository.overview(scope));
@@ -150,7 +212,7 @@ async function handleProjectApi(request, response, url, user) {
     if (method === 'PATCH') return json(response, 200, repository.saveHandover(handoverId, await readJson(request), user));
     if (method === 'DELETE') { repository.deleteHandover(handoverId, user); response.writeHead(204); return response.end(); }
   }
-  if (method === 'GET' && path === '/api/automation-rules') return json(response, 200, repository.automationRules());
+  if (method === 'GET' && path === '/api/automation-rules') { requireRole(user, 'moderator'); return json(response, 200, repository.automationRules()); }
   if (method === 'POST' && path === '/api/automation-rules') { requireRole(user, 'moderator'); return json(response, 201, repository.saveAutomationRule(null, await readJson(request), user)); }
   if (method === 'POST' && path === '/api/automation-rules/run') { requireRole(user, 'moderator'); return json(response, 200, repository.runAutomations(user)); }
   const automationRuleId = numericId(path, '/api/automation-rules');
@@ -159,7 +221,7 @@ async function handleProjectApi(request, response, url, user) {
     if (method === 'PATCH') return json(response, 200, repository.saveAutomationRule(automationRuleId, await readJson(request), user));
     if (method === 'DELETE') { repository.deleteAutomationRule(automationRuleId); response.writeHead(204); return response.end(); }
   }
-  if (method === 'GET' && path === '/api/commissioning-templates') return json(response, 200, repository.commissioningTemplates());
+  if (method === 'GET' && path === '/api/commissioning-templates') { requireRole(user, 'moderator'); return json(response, 200, repository.commissioningTemplates()); }
   if (method === 'POST' && path === '/api/commissioning-templates') { requireRole(user, 'moderator'); return json(response, 201, repository.saveCommissioningTemplate(null, await readJson(request), user)); }
   const templateApply = path.match(/^\/api\/commissioning-templates\/(\d+)\/apply$/);
   if (templateApply && method === 'POST') { requireRole(user, 'moderator'); return json(response, 201, repository.applyCommissioningTemplate(Number(templateApply[1]), await readJson(request), user)); }
@@ -252,7 +314,7 @@ async function handleProjectApi(request, response, url, user) {
     requireRole(user, 'project_admin');
     return download(response, Buffer.from(JSON.stringify(repository.projectBackup(), null, 2)), 'application/json; charset=utf-8', projectFilename(project, 'backup', 'json'));
   }
-  if (method === 'POST' && path === '/api/backup/restore') { requireRole(user, 'project_admin'); const input = await readJson(request); return json(response, 200, repository.restoreProjectBackup(input.backup || input)); }
+  if (method === 'POST' && path === '/api/backup/restore') { requireRole(user, 'project_admin'); const input = await readJson(request, 50_000_000); return json(response, 200, repository.restoreProjectBackup(input.backup || input)); }
   if (method === 'POST' && path === '/api/exports/project') {
     const data = { overview: repository.overview('all'), status: repository.status('all', user), tasks: repository.tasks('all', user), points: repository.points('all', user), notes: repository.notes('all', null, null, user), goals: repository.goals('all', user) };
     return download(response, projectWorkbook(data, project), mimeTypes['.xlsx'], projectFilename(project, 'caly_projekt', 'xlsx'));
@@ -297,7 +359,13 @@ async function handleProjectApi(request, response, url, user) {
 
   if (path === '/api/users' && method === 'POST') { requireRole(user, 'system_admin'); return json(response, 201, repository.saveUser(null, await readJson(request))); }
   const userPasswordMatch = path.match(/^\/api\/users\/(\d+)\/password$/);
-  if (userPasswordMatch && method === 'PUT') { requireRole(user, 'system_admin'); return json(response, 200, repository.resetUserPassword(Number(userPasswordMatch[1]), await readJson(request))); }
+  if (userPasswordMatch && method === 'PUT') {
+    requireRole(user, 'system_admin');
+    const targetUserId = Number(userPasswordMatch[1]);
+    const result = repository.resetUserPassword(targetUserId, await readJson(request));
+    revokeUserSessions(targetUserId);
+    return json(response, 200, result);
+  }
   let id = numericId(path, '/api/users');
   if (id !== null) {
     requireRole(user, 'project_admin');
@@ -308,9 +376,11 @@ async function handleProjectApi(request, response, url, user) {
       if (user.role !== 'system_admin' && (target?.system_role === 'system_admin' || target?.project_role === 'project_admin') && Object.keys(input).some(key => !protectedProjectFields.has(key))) throw Object.assign(new Error('Dla administratora możesz tutaj zmienić wyłącznie udział w Plannerze i widoczność na listach wyboru'), { statusCode: 403 });
       const safe = user.role === 'system_admin' ? input : (target?.system_role === 'system_admin' || target?.project_role === 'project_admin') ? { planner_enabled: input.planner_enabled, assignable: input.assignable } : { project_role: input.project_role, project_active: input.project_active, planner_enabled: input.planner_enabled, assignable: input.assignable };
       if (user.role !== 'system_admin' && Object.hasOwn(safe, 'project_role') && !['user', 'moderator'].includes(safe.project_role)) throw Object.assign(new Error('Administrator projektu może przydzielać wyłącznie role managera projektu i użytkownika'), { statusCode: 403 });
-      return json(response, 200, repository.saveUser(id, safe));
+      const result = repository.saveUser(id, safe);
+      if (Object.hasOwn(safe, 'password') || Number(safe.active) === 0) revokeUserSessions(id);
+      return json(response, 200, result);
     }
-    if (method === 'DELETE') { requireRole(user, 'system_admin'); if (id === user.id) throw Object.assign(new Error('Nie możesz usunąć własnego konta'), { statusCode: 400 }); repository.deleteUser(id); response.writeHead(204); return response.end(); }
+    if (method === 'DELETE') { requireRole(user, 'system_admin'); if (id === user.id) throw Object.assign(new Error('Nie możesz usunąć własnego konta'), { statusCode: 400 }); revokeUserSessions(id); repository.deleteUser(id); response.writeHead(204, securityHeaders); return response.end(); }
   }
   const userAreaMatch = path.match(/^\/api\/users\/(\d+)\/areas$/);
   if (userAreaMatch && method === 'PUT') { requireRole(user, 'project_admin'); return json(response, 200, repository.saveUserAreas(Number(userAreaMatch[1]), await readJson(request))); }
@@ -385,7 +455,11 @@ async function handleProjectApi(request, response, url, user) {
     if (['controllers', 'controller_groups', 'users', 'function_groups', 'function_group_elements', 'function_group_subcategories', 'export_templates'].includes(input.kind)) requireRole(user, 'project_admin'); else requireRole(user, 'moderator');
     repository.reorder(input.kind, input.ids); return json(response, 200, { ok: true });
   }
-  if (method === 'PATCH' && path.startsWith('/api/settings/')) { requireRole(user, 'project_admin'); const input = await readJson(request); repository.saveSetting(decodeURIComponent(path.slice('/api/settings/'.length)), input.value); return json(response, 200, { ok: true }); }
+  if (method === 'PATCH' && path.startsWith('/api/settings/')) {
+    const key = decodeURIComponent(path.slice('/api/settings/'.length));
+    requireRole(user, managerSettingKeys.has(key) ? 'moderator' : 'project_admin');
+    const input = await readJson(request); repository.saveSetting(key, input.value); return json(response, 200, { ok: true });
+  }
   return json(response, 404, { error: 'Nie znaleziono endpointu' });
 }
 
@@ -393,10 +467,28 @@ async function handleApi(request, response, url) {
   const method = request.method || 'GET'; const path = url.pathname;
   if (method === 'GET' && path === '/api/health') return json(response, 200, { status: 'ok', version: 14, release: '14.0.0' });
   if (method === 'POST' && path === '/api/login') {
-    const input = await readJson(request); const account = repository.authenticate(input.username);
-    if (!account || !verifyPassword(input.password || '', account.password_hash)) return json(response, 401, { error: 'Nieprawidłowy login lub hasło' });
-    const token = randomBytes(32).toString('hex'); sessions.set(token, { userId: account.id, projectId: null, expiresAt: Date.now() + 12 * 60 * 60 * 1000 });
-    return json(response, 200, repository.me(account.id, null), { 'Set-Cookie': sessionCookie(request, token, 43200) });
+    const throttle = loginFailureState(request);
+    if (throttle.blocked) return json(response, 429, { error: 'Zbyt wiele nieudanych prób logowania. Spróbuj ponownie później.' }, { 'Retry-After': String(throttle.retryAfter) });
+    const input = await readJson(request);
+    const username = String(input.username || '').trim().slice(0, 101);
+    const password = String(input.password || '');
+    const accountThrottle = failureState(`account:${username.toLocaleLowerCase('pl-PL')}`, 30);
+    if (accountThrottle.blocked) return json(response, 429, { error: 'Zbyt wiele nieudanych prób logowania. Spróbuj ponownie później.' }, { 'Retry-After': String(accountThrottle.retryAfter) });
+    const account = username.length <= 100 ? repository.authenticate(username) : null;
+    const passwordForCheck = password.length <= 256 ? password : '';
+    const passwordMatches = verifyPassword(passwordForCheck, account?.password_hash || dummyPasswordHash);
+    if (!account || !passwordMatches || password.length > 256) {
+      recordLoginFailure(throttle.key, throttle.attempts);
+      recordLoginFailure(accountThrottle.key, accountThrottle.attempts);
+      const latest = loginFailureState(request);
+      const latestAccount = failureState(accountThrottle.key, 30);
+      if (latest.blocked || latestAccount.blocked) return json(response, 429, { error: 'Zbyt wiele nieudanych prób logowania. Spróbuj ponownie później.' }, { 'Retry-After': String(Math.max(latest.retryAfter, latestAccount.retryAfter)) });
+      return json(response, 401, { error: 'Nieprawidłowy login lub hasło' });
+    }
+    loginFailures.delete(throttle.key);
+    loginFailures.delete(accountThrottle.key);
+    const token = createUserSession(account.id);
+    return json(response, 200, repository.me(account.id, null), { 'Set-Cookie': sessionCookie(request, token, sessionTtlSeconds) });
   }
   if (method === 'POST' && path === '/api/logout') { sessions.delete(cookies(request).plc_session); return json(response, 200, { ok: true }, { 'Set-Cookie': sessionCookie(request, '', 0) }); }
   const active = activeSession(request);
@@ -406,7 +498,13 @@ async function handleApi(request, response, url) {
   if (method === 'GET' && path === '/api/me') return json(response, 200, user);
   if (method === 'GET' && path === '/api/projects/available') return json(response, 200, user.projects);
   if (method === 'PATCH' && path === '/api/preferences') return json(response, 200, repository.setPreference(user.id, await readJson(request)));
-  if (method === 'PUT' && path === '/api/account/password') return json(response, 200, repository.changeOwnPassword(user.id, await readJson(request)));
+  if (method === 'PUT' && path === '/api/account/password') {
+    const result = repository.changeOwnPassword(user.id, await readJson(request));
+    const selectedProjectId = active.session.projectId;
+    revokeUserSessions(user.id);
+    const token = createUserSession(user.id, selectedProjectId);
+    return json(response, 200, result, { 'Set-Cookie': sessionCookie(request, token, sessionTtlSeconds) });
+  }
   if (method === 'POST' && path === '/api/select-project') {
     const input = await readJson(request); const selected = user.projects.find(project => project.id === Number(input.project_id));
     if (!selected) return json(response, 403, { error: 'Projekt jest niedostępny dla tego użytkownika' });
@@ -439,14 +537,16 @@ async function handleApi(request, response, url) {
 }
 
 function serveStatic(response, pathname) {
-  const requested = pathname === '/' ? '/index.html' : pathname; const normalized = normalize(requested).replace(/^(\.\.[/\\])+/, ''); const filePath = join(publicDir, normalized);
-  if (!filePath.startsWith(publicDir) || !existsSync(filePath) || !statSync(filePath).isFile()) return json(response, 404, { error: 'Nie znaleziono pliku' });
-  response.writeHead(200, { 'Content-Type': mimeTypes[extname(filePath)] || 'application/octet-stream', 'Cache-Control': ['.html', '.js', '.css'].includes(extname(filePath)) ? 'no-cache, no-store, must-revalidate' : 'public,max-age=3600', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin', 'X-Frame-Options': 'SAMEORIGIN', 'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'self'; form-action 'self'" });
+  const requested = pathname === '/' ? '/index.html' : pathname;
+  const filePath = resolve(publicDir, `.${requested}`);
+  if (!(filePath === publicDir || filePath.startsWith(`${publicDir}${sep}`)) || !existsSync(filePath) || !statSync(filePath).isFile()) return json(response, 404, { error: 'Nie znaleziono pliku' });
+  response.writeHead(200, { ...securityHeaders, 'Content-Type': mimeTypes[extname(filePath)] || 'application/octet-stream', 'Cache-Control': ['.html', '.js', '.css'].includes(extname(filePath)) ? 'no-cache, no-store, must-revalidate' : 'public,max-age=3600', 'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" });
   createReadStream(filePath).pipe(response);
 }
 
 export const server = createServer(async (request, response) => {
   try {
+    for (const [name, value] of Object.entries(securityHeaders)) response.setHeader(name, value);
     const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
     if (url.pathname.startsWith('/api/')) return await handleApi(request, response, url);
     const publicLoginFiles = ['/login.html', '/login.js', '/styles.css'];
@@ -454,8 +554,10 @@ export const server = createServer(async (request, response) => {
     return serveStatic(response, url.pathname);
   } catch (error) {
     const statusCode = Number(error.statusCode) || (String(error.message).includes('UNIQUE constraint') ? 409 : 500);
-    if (statusCode >= 500) console.error(error);
-    return json(response, statusCode, { error: statusCode === 500 ? `Nieoczekiwany błąd serwera: ${error.message}` : error.message });
+    const requestId = randomBytes(6).toString('hex');
+    if (statusCode >= 500 || String(error.message).includes('UNIQUE constraint')) console.error(`[${requestId}]`, error);
+    const publicMessage = statusCode >= 500 ? 'Nieoczekiwany błąd serwera' : String(error.message).includes('UNIQUE constraint') ? 'Taki rekord już istnieje' : error.message;
+    return json(response, statusCode, { error: publicMessage, request_id: requestId }, { 'X-Request-Id': requestId });
   }
 });
 let automationTimer = null;

@@ -276,7 +276,7 @@ Konfiguracja serwera pozostaje zgodna z poprzednimi ustaleniami.
    DB_PATH=/app/data/plc-status.db
    ```
 
-5. Dla zupełnie nowej bazy ustaw pierwszego administratora systemu:
+5. Dla zupełnie nowej bazy ustaw pierwszego administratora systemu. W środowisku produkcyjnym `APP_PASSWORD` jest wymagane; brak wartości zatrzyma start zamiast tworzyć konto z domyślnym hasłem:
 
    ```text
    APP_USER=admin
