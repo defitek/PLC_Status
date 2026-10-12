@@ -57,6 +57,7 @@ export function openDatabase(databasePath) {
   migrateToV13(db);
   migrateToV14(db);
   migrateToV15(db);
+  migrateToV16(db);
   migrateStatusWorkflow(db);
   migrateEntityDependencies(db);
   const defaultProjectId = primaryProjectId(db);
@@ -74,6 +75,7 @@ export function openDatabase(databasePath) {
   migrateToV13(db);
   migrateToV14(db);
   migrateToV15(db);
+  migrateToV16(db);
   migrateStatusWorkflow(db);
   migrateEntityDependencies(db);
   migrateGlobalPlannerData(db);
@@ -147,6 +149,10 @@ function migrateToV15(db) {
     } catch (error) { try { db.exec('ROLLBACK'); } catch {} throw error; }
     finally { db.exec('PRAGMA foreign_keys=ON'); }
   }
+}
+
+function migrateToV16(db) {
+  ensureColumn(db, 'automation_rules', 'actions_json', "TEXT NOT NULL DEFAULT '[]'");
 }
 
 const globalPlannerSettingKeys = [
@@ -2549,7 +2555,7 @@ function createRepository(db, defaultProjectId) {
     if (!one('SELECT 1 FROM controller_groups WHERE id=? AND project_id=? AND active=1', groupId, activeProjectId())) throw appError('Wybrany obszar nie należy do projektu');
     const values = { online: Math.max(0, Math.min(999, Number(input.online_required) || 0)), offline: Math.max(0, Math.min(999, Number(input.offline_required) || 0)) };
     db.exec('BEGIN IMMEDIATE');
-    try { writePlannerRequirement(groupId, planDate, values, clean(input.note), currentUser); db.exec('COMMIT'); }
+    try { writePlannerRequirement(groupId, planDate, values, clean(input.note), currentUser); enforcePlannerRequirementHierarchy([planDate], currentUser); db.exec('COMMIT'); }
     catch (error) { db.exec('ROLLBACK'); throw error; }
     return { plan_date: planDate, controller_group_id: groupId, online_required: values.online, offline_required: values.offline };
   }
@@ -2575,13 +2581,14 @@ function createRepository(db, defaultProjectId) {
   function enforcePlannerRequirementHierarchy(planDates, currentUser) {
     const groups = hierarchyData().groups.slice().sort((left, right) => Number(right.depth || 0) - Number(left.depth || 0));
     const upsert = db.prepare(`INSERT INTO planner_requirements(project_id,controller_group_id,plan_date,work_mode,required_count,note,created_by)
-      VALUES(?,?,?,?,?,'Automatyczne minimum z podobszaru',?)
+      VALUES(?,?,?,?,?,'Automatyczne minimum z sumy podobszarów',?)
       ON CONFLICT(project_id,controller_group_id,plan_date,work_mode) DO UPDATE SET
       required_count=MAX(planner_requirements.required_count,excluded.required_count)`);
     for (const planDate of new Set(planDates)) for (const mode of ['online', 'offline']) for (const group of groups) {
-      if (!group.parent_id) continue;
-      const required = Number(one('SELECT required_count FROM planner_requirements WHERE project_id=? AND controller_group_id=? AND plan_date=? AND work_mode=?', activeProjectId(), group.id, planDate, mode)?.required_count || 0);
-      if (required > 0) upsert.run(activeProjectId(), Number(group.parent_id), planDate, mode, required, currentUser.id);
+      const children = groups.filter(candidate => Number(candidate.parent_id || 0) === Number(group.id));
+      if (!children.length) continue;
+      const required = children.reduce((sum, child) => sum + Number(one('SELECT required_count FROM planner_requirements WHERE project_id=? AND controller_group_id=? AND plan_date=? AND work_mode=?', activeProjectId(), child.id, planDate, mode)?.required_count || 0), 0);
+      if (required > 0) upsert.run(activeProjectId(), Number(group.id), planDate, mode, required, currentUser.id);
     }
   }
 
@@ -2927,6 +2934,7 @@ function createRepository(db, defaultProjectId) {
     if (!snapshot) throw appError('Nie znaleziono komentowanego elementu', 404);
     const commentId = insertRecord('entity_comments', { project_id: activeProjectId(), entity_type: type, entity_id: entityId, content, user_id: currentUser.id });
     db.prepare("UPDATE " + TABLES[type] + " SET updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?").run(entityId, activeProjectId());
+    const entityUpdatedAt = one(`SELECT updated_at FROM ${TABLES[type]} WHERE id=? AND project_id=?`, entityId, activeProjectId())?.updated_at || null;
     db.prepare('INSERT INTO audit_log(project_id,entity_type,entity_id,action,user_id,changes_json,snapshot_json) VALUES(?,?,?,?,?,?,?)').run(
       activeProjectId(), type, entityId, 'update', currentUser.id, JSON.stringify({ comment: { from: null, to: content } }), JSON.stringify({ ...snapshot, updated_at: new Date().toISOString() })
     );
@@ -2940,7 +2948,7 @@ function createRepository(db, defaultProjectId) {
     recipients.delete(currentUser.id); recipients.delete(null); recipients.delete(undefined);
     const label = entityDisplayTitle(type, entityId);
     recipients.forEach(userId => createNotification(userId, 'comment', type, entityId, `Nowy komentarz: ${label}`, `${currentUser.display_name}: ${content.slice(0, 200)}`));
-    return one(`SELECT ec.*,u.display_name user_name FROM entity_comments ec JOIN users u ON u.id=ec.user_id WHERE ec.id=?`, commentId);
+    return { ...one(`SELECT ec.*,u.display_name user_name FROM entity_comments ec JOIN users u ON u.id=ec.user_id WHERE ec.id=?`, commentId), entity_updated_at: entityUpdatedAt };
   }
 
   function saveCompletionRequirement(id, input) {
@@ -3656,22 +3664,27 @@ function createRepository(db, defaultProjectId) {
 
   function automationRuleRows() {
     return all(`SELECT ar.*,u.display_name created_by_name FROM automation_rules ar LEFT JOIN users u ON u.id=ar.created_by
-      WHERE ar.project_id=? ORDER BY ar.active DESC,ar.name`, activeProjectId()).map(row => ({ ...row, entity_types: parseJson(row.entity_types_json, []) }));
+      WHERE ar.project_id=? ORDER BY ar.active DESC,ar.name`, activeProjectId()).map(row => {
+      const savedActions = parseJson(row.actions_json, []);
+      return { ...row, entity_types: parseJson(row.entity_types_json, []), actions: savedActions.length ? savedActions : [row.action_type] };
+    });
   }
 
   function saveAutomationRule(id, input, currentUser) {
     const name = clean(input.name);
     const trigger = ['overdue', 'due_soon', 'reminder_due', 'unassigned', 'blocked', 'in_progress'].includes(clean(input.trigger_type)) ? clean(input.trigger_type) : '';
-    const action = ['notify_assignees', 'notify_managers', 'escalate_priority'].includes(clean(input.action_type)) ? clean(input.action_type) : '';
+    const allowedActions = ['notify_assignees', 'notify_managers', 'escalate_priority'];
+    const actions = [...new Set((Array.isArray(input.actions) ? input.actions : [input.action_type]).map(clean).filter(action => allowedActions.includes(action)))];
+    const action = actions[0] || '';
     const types = [...new Set((Array.isArray(input.entity_types) ? input.entity_types : []).map(clean).filter(type => ['status', 'task', 'point', 'goal'].includes(type)))];
     const targetPriority = ['Low', 'Medium', 'High', 'Critical'].includes(clean(input.target_priority)) ? clean(input.target_priority) : 'High';
     if (!name || !trigger || !action || !types.length) throw appError('Nazwa, warunek, moduły i działanie reguły są wymagane');
     if (trigger === 'reminder_due' && !types.includes('point')) throw appError('Reguła przypomnienia wymaga modułu Otwarte punkty');
-    const values = [name, trigger, JSON.stringify(types), Math.max(0, Math.min(365, Number(input.days_offset || 0))), action, targetPriority, Number(input.active ?? 1) ? 1 : 0];
+    const values = [name, trigger, JSON.stringify(types), Math.max(0, Math.min(365, Number(input.days_offset || 0))), action, JSON.stringify(actions), targetPriority, Number(input.active ?? 1) ? 1 : 0];
     if (id) {
-      const result = db.prepare(`UPDATE automation_rules SET name=?,trigger_type=?,entity_types_json=?,days_offset=?,action_type=?,target_priority=?,active=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND project_id=?`).run(...values, id, activeProjectId());
+      const result = db.prepare(`UPDATE automation_rules SET name=?,trigger_type=?,entity_types_json=?,days_offset=?,action_type=?,actions_json=?,target_priority=?,active=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND project_id=?`).run(...values, id, activeProjectId());
       if (!result.changes) throw appError('Nie znaleziono reguły automatyzacji', 404);
-    } else id = insertRecord('automation_rules', { project_id: activeProjectId(), name, trigger_type: trigger, entity_types_json: JSON.stringify(types), days_offset: values[3], action_type: action, target_priority: targetPriority, active: values[6], created_by: currentUser.id });
+    } else id = insertRecord('automation_rules', { project_id: activeProjectId(), name, trigger_type: trigger, entity_types_json: JSON.stringify(types), days_offset: values[3], action_type: action, actions_json: JSON.stringify(actions), target_priority: targetPriority, active: values[7], created_by: currentUser.id });
     return automationRuleRows().find(row => row.id === Number(id));
   }
 
@@ -3690,22 +3703,24 @@ function createRepository(db, defaultProjectId) {
         const signal = triageSignals(type, row, rule.days_offset, rule.trigger_type === 'in_progress');
         if (!signal.includes(rule.trigger_type)) continue;
         const dateKey = rule.trigger_type === 'reminder_due' ? row.reminder_date : ['overdue', 'due_soon'].includes(rule.trigger_type) ? row.due_date : rule.trigger_type === 'in_progress' ? String(inProgressStartedAt(type, row)).slice(0, 10) : row.status || 'state';
-        const hitKey = `${rule.trigger_type}:${dateKey || todayValue}`;
-        const hit = db.prepare('INSERT OR IGNORE INTO automation_rule_hits(rule_id,entity_type,entity_id,hit_key) VALUES(?,?,?,?)').run(rule.id, type, row.id, hitKey);
-        if (!hit.changes) continue;
         const title = `${rule.name}: ${operationTitle(type, row)}`;
-        if (rule.action_type === 'notify_assignees') {
-          const recipients = ownerIdsForEntity(type, row); if (!recipients.length && row.created_by) recipients.push(row.created_by);
-          [...new Set(recipients)].forEach(userId => createNotification(userId, 'automation', type, row.id, title, `Reguła projektu wykryła: ${rule.trigger_type}.`));
-        } else if (rule.action_type === 'notify_managers') {
-          const recipients = all(`SELECT user_id FROM project_memberships WHERE project_id=? AND active=1 AND role IN ('moderator','project_admin')`, activeProjectId());
-          recipients.forEach(recipient => createNotification(recipient.user_id, 'automation', type, row.id, title, `Reguła projektu wykryła: ${rule.trigger_type}.`));
-        } else if (rule.action_type === 'escalate_priority') {
-          const before = baseSnapshot(type, row.id); const table = TABLES[type]; const field = type === 'status' ? 'criticality' : 'priority';
-          db.prepare(`UPDATE ${table} SET ${field}=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?`).run(rule.target_priority, row.id, activeProjectId());
-          writeAudit(type, row.id, 'update', actor, before, baseSnapshot(type, row.id));
+        for (const action of rule.actions) {
+          const hitKey = `${rule.trigger_type}:${dateKey || todayValue}:${action}${action === 'escalate_priority' ? `:${rule.target_priority}` : ''}`;
+          const hit = db.prepare('INSERT OR IGNORE INTO automation_rule_hits(rule_id,entity_type,entity_id,hit_key) VALUES(?,?,?,?)').run(rule.id, type, row.id, hitKey);
+          if (!hit.changes) continue;
+          if (action === 'notify_assignees') {
+            const recipients = ownerIdsForEntity(type, row); if (!recipients.length && row.created_by) recipients.push(row.created_by);
+            [...new Set(recipients)].forEach(userId => createNotification(userId, 'automation', type, row.id, title, `Reguła projektu wykryła: ${rule.trigger_type}.`));
+          } else if (action === 'notify_managers') {
+            const recipients = all(`SELECT user_id FROM project_memberships WHERE project_id=? AND active=1 AND role IN ('moderator','project_admin')`, activeProjectId());
+            recipients.forEach(recipient => createNotification(recipient.user_id, 'automation', type, row.id, title, `Reguła projektu wykryła: ${rule.trigger_type}.`));
+          } else if (action === 'escalate_priority') {
+            const before = baseSnapshot(type, row.id); const table = TABLES[type]; const field = type === 'status' ? 'criticality' : 'priority';
+            db.prepare(`UPDATE ${table} SET ${field}=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?`).run(rule.target_priority, row.id, activeProjectId());
+            writeAudit(type, row.id, 'update', actor, before, baseSnapshot(type, row.id));
+          }
+          executed += 1;
         }
-        executed += 1;
       }
       db.prepare('UPDATE automation_rules SET last_run_at=CURRENT_TIMESTAMP WHERE id=?').run(rule.id);
     }
@@ -4786,7 +4801,8 @@ function createRepository(db, defaultProjectId) {
       writeAudit('status', recordId, id ? 'update' : 'create', currentUser, before, after);
       if (statusChanged && statusComment) {
         const statusNames = { 'Ready to test': 'Gotowe do sprawdzenia', 'In progress': 'W trakcie', Blocked: 'Zablokowany', 'NOK / Retest required': 'NOK / wymagany retest', Done: 'Gotowe', 'N/A': 'N/A' };
-        const dependencyContext = dependencyOverride ? `\nWymagane niespełnione zależności: ${blockers.map(item => `${item.title} (${item.status})`).join(', ')}` : '';
+        const dependencyTypes = { status: 'Status', task: 'Zadanie', point: 'Otwarty punkt' };
+        const dependencyContext = dependencyOverride ? `\nWymagane niespełnione zależności:\n${blockers.map(item => `• ${dependencyTypes[item.entity_type] || item.entity_type}: ${item.title}; obszar: ${item.controller_path || item.controller_label || item.controller || 'cały projekt'}; status: ${item.status}`).join('\n')}` : '';
         const context = dependencyOverride ? `Ręczne pominięcie blokady zależności przy zmianie statusu na „${statusNames[requestedStatus] || requestedStatus}”` : `Komentarz dodany ze względu na zmianę statusu na „${statusNames[requestedStatus] || requestedStatus}”`;
         addComment({ entity_type: 'status', entity_id: recordId, content: `${context}:${dependencyContext}\n${statusComment}` }, currentUser);
       }

@@ -1103,39 +1103,44 @@ test('edit locks, hierarchical requirements and the refined status workflow are 
     assert.equal(repository.saveTask(task.id, { ...task, title: 'Zmiana managera' }, admin).title, 'Zmiana managera');
     assert.equal(repository.clearEntityEditLock('task', task.id, admin).edit_locked, false);
 
-    const groups = repository.controllerGroups();
-    const child = groups.slice().sort((left, right) => Number(right.depth || 0) - Number(left.depth || 0)).find(item => item.parent_id);
-    const ancestors = []; let parentId = child.parent_id;
-    while (parentId) { const parent = groups.find(item => item.id === Number(parentId)); ancestors.push(parent); parentId = parent?.parent_id; }
-    const root = ancestors.at(-1);
+    const root = repository.saveControllerGroup(null, { name: 'SUMA-OBSZAR' });
+    const child = repository.saveControllerGroup(null, { name: 'SUMA-PODOBSZAR-1', parent_id: root.id });
+    const sibling = repository.saveControllerGroup(null, { name: 'SUMA-PODOBSZAR-2', parent_id: root.id });
     repository.setPlannerRequirementsBatch({ items: [
       { plan_date: '2027-01-15', controller_group_id: child.id, online_required: 2, offline_required: 1 },
+      { plan_date: '2027-01-15', controller_group_id: sibling.id, online_required: 3, offline_required: 2 },
       { plan_date: '2027-01-15', controller_group_id: root.id, online_required: 1, offline_required: 0 }
     ] }, admin);
     const planner = repository.planner('2027-01-15', '2027-01-15', admin);
     const requirement = (groupId, mode) => planner.requirements.find(item => Number(item.controller_group_id) === Number(groupId) && item.work_mode === mode)?.required_count || 0;
     assert.equal(requirement(child.id, 'online'), 2);
-    assert.equal(requirement(root.id, 'online'), 2);
-    assert.equal(requirement(root.id, 'offline'), 1);
-    assert.equal(planner.area_day_summary.find(item => item.id === root.id).days[0].online_required, 2);
+    assert.equal(requirement(child.parent_id, 'online'), 5);
+    assert.equal(requirement(child.parent_id, 'offline'), 3);
+    assert.ok(requirement(root.id, 'online') >= 5);
+    assert.ok(planner.area_day_summary.find(item => item.id === root.id).days[0].online_required >= 5);
 
     let status = repository.saveStatus(null, { controller: controller.code, function_detail: 'Przepływ komentarzy statusu', category: 'General', status: 'Ready to test' }, admin);
+    const comment = repository.addComment({ entity_type: 'status', entity_id: status.id, content: 'Komentarz w otwartej sesji edycji' }, admin);
+    assert.ok(comment.entity_updated_at);
+    status = repository.saveStatus(status.id, { ...status, updated_at: comment.entity_updated_at, current_note: 'Zapis po komentarzu' }, admin);
     status = repository.saveStatus(status.id, { ...status, status: 'In progress' }, admin);
     assert.equal(status.status, 'In progress');
     status = repository.saveStatus(status.id, { ...status, status: 'Blocked', dependency_refs: [{ entity_type: 'task', entity_id: task.id }] }, admin);
     assert.equal(status.status, 'Blocked');
     status = repository.saveStatus(status.id, { ...status, status: 'In progress', status_change_comment: 'Kontynuujemy świadomie mimo zależności' }, admin);
-    assert.match(status.comments.at(-1).content, /Wymagane niespełnione zależności: Zmiana managera \(To do\)/);
+    assert.match(status.comments.at(-1).content, /• Zadanie: Zmiana managera; obszar: .+; status: To do/);
     status = repository.saveStatus(status.id, { ...status, status: 'Ready to test', dependency_refs: [] }, admin);
     assert.throws(() => repository.saveStatus(status.id, { ...status, status: 'Blocked' }, admin), /zależności albo komentarza/);
     status = repository.saveStatus(status.id, { ...status, status: 'Blocked', status_change_comment: 'Oczekiwanie na decyzję techniczną' }, admin);
     assert.match(status.comments.at(-1).content, /zmianę statusu na „Zablokowany”/);
 
     const trackedTask = repository.saveTask(null, { controller: controller.code, title: 'Długotrwałe zadanie', status: 'In progress' }, admin);
-    const rule = repository.saveAutomationRule(null, { name: 'Za długo w trakcie', trigger_type: 'in_progress', entity_types: ['task'], days_offset: 0, action_type: 'notify_managers', active: 1 }, admin);
+    const rule = repository.saveAutomationRule(null, { name: 'Za długo w trakcie', trigger_type: 'in_progress', entity_types: ['task'], days_offset: 0, actions: ['notify_managers', 'escalate_priority'], target_priority: 'Critical', active: 1 }, admin);
     assert.equal(rule.trigger_type, 'in_progress');
-    assert.ok(repository.runAutomations(admin).executed > 0);
+    assert.deepEqual(rule.actions, ['notify_managers', 'escalate_priority']);
+    assert.ok(repository.runAutomations(admin).executed >= 2);
     assert.ok(repository.notifications(admin).some(item => item.entity_type === 'task' && item.entity_id === trackedTask.id && item.title.includes('Za długo w trakcie')));
+    assert.equal(repository.tasks('all', admin).find(item => item.id === trackedTask.id).priority, 'Critical');
   } finally {
     repository.close();
     rmSync(temporary.directory, { recursive: true, force: true });

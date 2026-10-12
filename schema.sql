@@ -704,6 +704,7 @@ CREATE TABLE IF NOT EXISTS automation_rules (
   entity_types_json TEXT NOT NULL DEFAULT '[]',
   days_offset INTEGER NOT NULL DEFAULT 0,
   action_type TEXT NOT NULL CHECK(action_type IN ('notify_assignees','notify_managers','escalate_priority')),
+  actions_json TEXT NOT NULL DEFAULT '[]',
   target_priority TEXT NOT NULL DEFAULT 'High',
   active INTEGER NOT NULL DEFAULT 1,
   created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
