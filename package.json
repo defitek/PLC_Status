@@ -1,6 +1,6 @@
 {
   "name": "plc-commissioning-hub",
-  "version": "14.0.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "description": "Multi-project PLC commissioning and team coordination hub",
@@ -10,5 +10,8 @@
   "scripts": {
     "start": "node server.js",
     "test": "node --test"
+  },
+  "dependencies": {
+    "redis": "^5.12.1"
   }
 }

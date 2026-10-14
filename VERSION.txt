@@ -1,4 +1,4 @@
-PLC Commissioning Hub V14.0.0
-Release: 2026-10-09
+PLC Commissioning Hub 1.0.0
+Release channel: current
 
-Po poprawnym wdrożeniu adres /api/health zwraca release 14.0.0 i version 14.
+The application exposes one current software version. Historical V2-V17 identifiers in database.js are internal, idempotent database migrations retained only to upgrade existing Railway volumes safely.

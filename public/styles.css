@@ -310,7 +310,7 @@ dialog::backdrop { background:#101827a3; }
   .top-actions { gap:4px; }.project-chip { max-width:140px; }.theme-list,.overview-hero { grid-template-columns:1fr; }.page-actions { width:100%; }.pagehead { flex-wrap:wrap; }
 }
 
-/* V13 — test execution, readiness, compact data views and status transfer */
+/* Test execution, readiness, compact data views and status transfer */
 @media(min-width:1025px) {
   .mobile-menu { display:inline-grid; place-items:center; min-width:38px; }
   .layout { transition:grid-template-columns .2s ease; }
@@ -417,7 +417,7 @@ dialog::backdrop { background:#101827a3; }
   #insight-dialog.kpi-expanded { width:98vw; height:96dvh; }.hierarchy-trend-row { min-width:760px; }
 }
 
-/* V6 — compact operational views, hierarchy trends and manpower modes */
+/* Compact operational views, hierarchy trends and manpower modes */
 .danger-outline { color:var(--red)!important; border-color:color-mix(in srgb,var(--red) 42%,var(--line))!important; }
 .danger-outline:hover { background:var(--red-soft)!important; }
 .progress-value { display:grid; grid-template-columns:auto 42px; gap:6px; align-items:center; min-width:78px; color:var(--muted); font-size:10px; }
@@ -477,7 +477,7 @@ dialog::backdrop { background:#101827a3; }
   .hierarchy-trend-row { grid-template-columns:minmax(170px,1fr) 80px minmax(180px,1fr); }.personal-plan-days { overflow:auto; }
 }
 
-/* V5 · compact leadership surfaces */
+/* Compact leadership surfaces */
 .eyebrow { color:var(--blue); font-size:11px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
 .overview-command,.personal-command { display:grid; grid-template-columns:minmax(260px,1fr) auto minmax(220px,.55fr); gap:16px; align-items:center; margin-bottom:10px; padding:14px 17px; background:var(--surface); border:1px solid var(--line); border-radius:13px; box-shadow:0 7px 20px #15549d0c; }
 .overview-command h2,.personal-command h2 { margin:3px 0; font-size:21px; }.overview-command p,.personal-command p { margin:0; color:var(--muted); font-size:12px; }
@@ -518,7 +518,7 @@ dialog::backdrop { background:#101827a3; }
   .daily-module-grid { grid-template-columns:1fr; }.summary-range small { margin-left:0; }
 }
 
-/* Keep V6 density overrides last in the cascade. */
+/* Keep density overrides last in the cascade. */
 .planner-mode { margin-bottom:8px; }.planner-mode>header { display:flex; justify-content:space-between; padding:6px 9px; color:var(--muted); background:var(--panel-alt); border-bottom:1px solid var(--line); font-size:10px; }
 .planner-table { min-width:calc(175px + var(--planner-days) * 88px); }.planner-table .person-col { width:175px; min-width:175px; }
 .planner-table thead th { height:24px; padding:3px; font-size:9px; }.planner-table thead tr:nth-child(2) th { top:24px; }.planner-table thead tr:nth-child(3) th { top:48px; }.planner-table thead tr:nth-child(4) th { top:72px; }
@@ -527,7 +527,7 @@ dialog::backdrop { background:#101827a3; }
 .config-window { max-height:350px; }
 .multi-user-select { overflow:hidden; background:var(--input); border:1px solid var(--line); border-radius:7px; }.multi-user-select summary { padding:8px 10px; overflow:hidden; cursor:pointer; font-size:10px; font-weight:650; list-style-position:inside; text-overflow:ellipsis; white-space:nowrap; }.multi-user-select[open] summary { color:var(--blue); background:var(--blue-soft); border-bottom:1px solid var(--line); }.multi-user-select .mentions { max-height:190px; padding:8px; overflow:auto; background:var(--surface); }
 
-/* V7 — denser hierarchy, readable audit trails and grouped pickers */
+/* Denser hierarchy, readable audit trails and grouped pickers */
 .compact-kpis { grid-template-columns:repeat(4,minmax(0,1fr)); }
 .area-compact-head.four,.area-compact-row.four { grid-template-columns:minmax(150px,1.35fr) repeat(4,minmax(74px,.7fr)); }
 .overview-detail-switch { display:flex; gap:5px; align-items:center; }
@@ -600,7 +600,7 @@ dialog::backdrop { background:#101827a3; }
   .check-row-meta { grid-column:2; grid-template-columns:70px 1fr auto; }
 }
 
-/* V8 — unified typography, leadership overview, one-table Planner and settings dialogs */
+/* Unified typography, leadership overview, one-table Planner and settings dialogs */
 :root { --font-xs:9px; --font-sm:11px; --font-md:13px; --font-lg:16px; --font-xl:22px; }
 body { font-size:var(--font-md); line-height:1.4; }
 h1 { font-size:var(--font-xl)!important; line-height:1.2; }
@@ -676,7 +676,7 @@ button,input,select,textarea { font-size:var(--font-sm); }
   .settings-launchers,.hierarchy-editor { grid-template-columns:1fr; }.hierarchy-editor { min-height:0; }.compact-tree { max-height:310px; }.check-row-meta { grid-template-columns:1fr; }.requirements-form { grid-template-columns:1fr; }.requirement-note { grid-column:auto; }.requirement-row { grid-template-columns:1fr auto auto; }.requirement-row .mini { grid-row:2; }.announcement-audience { align-items:flex-start; flex-direction:column; }
 }
 
-/* V9 — fixed application shell, responsive layout and operational interaction */
+/* Fixed application shell, responsive layout and operational interaction */
 html { width:100%; height:100%; }
 body:not(.login-page) { width:100%; height:100%; overflow:hidden; }
 .topbar { position:fixed; inset:0 0 auto 0; z-index:80; }
@@ -741,7 +741,7 @@ main { display:flex; flex-direction:column; height:100%; min-height:0; overflow:
   .hierarchy-module-split.detailed-series { grid-template-columns:1fr; }
 }
 
-/* V10 — live collaboration, compact configuration and corrected responsive shell */
+/* Live collaboration, compact configuration and corrected responsive shell */
 body:not(.login-page) { height:100vh; overflow:hidden; }
 .layout { height:calc(100vh - 64px); overflow:visible; }
 .layout>main { overflow:hidden; }
@@ -763,7 +763,7 @@ dialog>.dialog-actions .primary,dialog>form>.dialog-actions .primary { min-width
 .importance { color:var(--text); background:var(--panel-alt); border:1px solid var(--line); }.importance-krytyczna { color:var(--red); background:var(--red-soft); }.importance-wysoka { color:var(--amber); background:var(--amber-soft); }.importance-niska { color:var(--muted); }
 .announcement-read-self.neutral { color:var(--muted); background:var(--panel-alt); }
 
-/* V11 — hierarchical multi-filters, focused configuration and time corrections */
+/* Hierarchical multi-filters, focused configuration and time corrections */
 [hidden] { display:none!important; }
 .table-filter-menu { position:relative; width:100%; min-width:120px; color:var(--text); text-align:left; }
 .table-filter-menu>summary { min-height:29px; padding:6px 23px 6px 7px; overflow:hidden; color:var(--muted); text-overflow:ellipsis; white-space:nowrap; background:var(--surface); border:1px solid var(--line); border-radius:5px; cursor:pointer; list-style:none; }
@@ -840,7 +840,7 @@ dialog>.dialog-actions .primary,dialog>form>.dialog-actions .primary { min-width
   body.login-page { padding:10px; }.login-card { padding:24px!important; }
 }
 
-/* V12 — operational cockpit, reusable views and commissioning templates */
+/* Operational cockpit, reusable views and commissioning templates */
 .saved-view-bar { display:flex; gap:6px; align-items:center; min-height:38px; margin:0 0 8px; padding:6px 9px; background:var(--panel-alt); border:1px solid var(--line); border-radius:8px; }
 .saved-view-label { color:var(--muted); font-size:8px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
 .saved-view-bar select { min-width:190px; max-width:330px; padding:6px 8px; color:var(--text); background:var(--input); border:1px solid var(--line); border-radius:6px; }
@@ -869,7 +869,7 @@ dialog>.dialog-actions .primary,dialog>form>.dialog-actions .primary { min-width
   .saved-view-bar { flex-wrap:wrap; }.saved-view-bar select { flex:1 1 180px; min-width:0; }.dependency-picks { grid-template-columns:1fr; }.operation-view { padding:7px; }.operation-head { align-items:flex-start; flex-direction:column; }.signal-strip { overflow-x:auto; }.signal-strip>span { flex:0 0 105px; }.operation-row,.quality-row { grid-template-columns:auto 8px minmax(0,1fr); }.operation-primary { grid-column:3; }.operation-signals,.quality-message,.operation-date { grid-column:3; grid-row:auto; text-align:left; }.handover-card>footer { align-items:flex-start; flex-direction:column; }.handover-card footer>div { width:100%; flex-wrap:wrap; }.automation-row { grid-template-columns:8px minmax(0,1fr) auto; }.automation-row>span:nth-child(3) { grid-column:2/-1; }.automation-row .danger-text { grid-column:3; }.template-card footer button { flex:1 1 auto; }
 }
 
-/* V13 final cascade — wide KPI, floating filters and dense project lists */
+/* Final cascade — wide KPI, floating filters and dense project lists */
 .filters .table-filter-menu>.table-filter-options {
   position:fixed; z-index:1000; top:var(--filter-popup-top); left:var(--filter-popup-left);
   width:var(--filter-popup-width); max-height:min(310px,45vh); margin:0;
@@ -916,7 +916,7 @@ dialog>.dialog-actions .primary,dialog>form>.dialog-actions .primary { min-width
   .filters .table-filter-menu>.table-filter-options { left:8px; width:calc(100vw - 16px); }
 }
 
-/* V14 — global staffing, monthly reviews and denser operational views */
+/* Global staffing, monthly reviews and denser operational views */
 .overview-area-grid { display:grid; gap:8px; padding:8px; }
 .overview-area-block { overflow:hidden; background:var(--surface); border:1px solid var(--line); border-radius:9px; }
 .overview-area-title { display:grid; grid-template-columns:minmax(210px,1fr) 72px auto; gap:10px; align-items:center; width:100%; padding:8px 10px; color:var(--text); text-align:left; background:linear-gradient(90deg,var(--panel-alt),var(--surface)); border:0; border-bottom:1px solid var(--line); }

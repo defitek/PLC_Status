@@ -1,7 +1,7 @@
 const state = {
   view: 'mine', controller: 'all', me: null, projects: [], controllerGroups: [], controllers: [], users: [],
   config: { categories: [], task_categories: [], function_groups: [], options: [], announcement_labels: [], settings: {} },
-  overview: null, announcements: [], notifications: [], mine: null, dashboard: {}, status: [], tasks: [], points: [], notes: [], goals: [], planner: null, calendar: null, history: [], savedViews: [], operations: null, commissioning: null, employeeReviews: [], reviewPeriod: new Date().toISOString().slice(0, 7),
+  overview: null, announcements: [], notifications: [], navigationCounts: {}, mine: null, dashboard: {}, status: [], tasks: [], points: [], notes: [], goals: [], planner: null, calendar: null, history: [], savedViews: [], operations: null, commissioning: null, employeeReviews: [], securityEvents: [], reviewPeriod: new Date().toISOString().slice(0, 7), loadSequence: 0,
   dialog: null, dialogInitial: '', dirtyCloseAttempt: new WeakSet(), goalDraftLinks: [], goalPickerCollections: null, linkDraft: [], statusMode: 'list', taskMode: 'board', taskShowCompleted: false, pointMode: 'list', trendPeriod: 'week',
   functionGroupController: '', functionPointGroup: null, functionPointDraft: [], quickStatusDraft: [],
   notesFrom: '', notesTo: '', notesWeek: '', draggingTask: false, plannerFrom: '', plannerDays: 14, plannerShowHours: false,
@@ -549,6 +549,7 @@ function bindShell() {
   $('#project-switch').addEventListener('click', () => openProjectDialog(false));
   $('#project-close').addEventListener('click', () => { if (state.me.current_project) $('#project-dialog').close(); });
   $('#theme-switch').addEventListener('click', openThemeDialog);
+  $('#security-manage').addEventListener('click', manageAccountSecurity);
   $('#password-change').addEventListener('click', changeOwnPassword);
   $('#daily-summary-open').addEventListener('click', () => state.me.current_project ? openDailySummary(false) : toast('Najpierw wybierz projekt', true));
   $('#daily-summary-close').addEventListener('click', () => $('#daily-summary-dialog').close());
@@ -744,7 +745,7 @@ const themes = [
   ['dark', 'Nocny', 'Ciemny granat do pracy wieczorem', '#08111e', '#071426', '#101c2c'],
   ['graphite', 'Grafitowy', 'Neutralny ciemny interfejs', '#191b1f', '#24262b', '#30333a'],
   ['contrast', 'Wysoki kontrast', 'Wyraźne obramowania i czytelność', '#fff', '#000', '#fff'],
-  ['classic', 'Klasyczny (backup)', 'Poprzednia szata graficzna V3', '#f4f6f9', '#172554', '#fff']
+  ['classic', 'Klasyczny', 'Klasyczna szata graficzna', '#f4f6f9', '#172554', '#fff']
 ];
 function applyTheme(theme) { document.documentElement.dataset.theme = theme === 'blue' ? '' : theme; state.me.theme = theme; }
 function openThemeDialog() {
@@ -864,6 +865,7 @@ function finishAction(result) {
 }
 
 async function loadData(silent = false) {
+  const loadId = ++state.loadSequence;
   if ($('#config-full-dialog')?.open) state.configScroll = $('#config-full-content')?.scrollTop || 0;
   if (!silent) $('#content').innerHTML = '<div class="loading">Ładowanie danych…</div>';
   const query = `?controller=${encodeURIComponent(state.controller)}`;
@@ -877,11 +879,30 @@ async function loadData(silent = false) {
   const calendarParams = new URLSearchParams({ controller: state.controller, from: state.calendarFrom, to: state.calendarTo, only_mine: state.calendarOnlyMine ? '1' : '0', category: state.calendarCategory });
   state.calendarTypes.forEach(type => calendarParams.append('type', type));
   state.calendarPriorities.forEach(priority => calendarParams.append('priority', priority));
-  [state.controllerGroups, state.controllers, state.users, state.config, state.overview, state.announcements, state.notifications, state.mine, state.dashboard, state.status, state.tasks, state.points, state.notes, state.goals, state.planner, state.calendar, state.calendarPlanner, state.history, state.savedViews, state.operations, state.commissioning, state.employeeReviews] = await Promise.all([
-    api('/api/controller-groups'), api('/api/controllers'), api('/api/users'), api('/api/config'), api('/api/overview' + query), api('/api/announcements'), api('/api/notifications'), api('/api/my-summary'),
-    api('/api/dashboard' + query), api('/api/status' + query), api('/api/tasks' + query), api('/api/open-points' + query),
-    api('/api/daily-notes' + notesQuery), api('/api/goals' + query), api('/api/planner' + plannerQuery), api('/api/calendar?' + calendarParams), api(`/api/planner?from=${state.calendarFrom}&to=${state.calendarTo}`), api('/api/history?limit=200'), api('/api/saved-views'), canCoordinate() ? api('/api/operations') : Promise.resolve(null), api('/api/commissioning'), canCoordinate() ? api(`/api/monthly-reviews?period=${state.reviewPeriod}`) : Promise.resolve([])
-  ]);
+  const requests = {
+    controllerGroups: api('/api/controller-groups'), controllers: api('/api/controllers'), users: api('/api/users'), config: api('/api/config'),
+    announcements: api('/api/announcements'), notifications: api('/api/notifications'), navigationCounts: api('/api/navigation-counts'), savedViews: api('/api/saved-views')
+  };
+  const addWorkCollections = (includeGoals = false, includeNotes = false) => {
+    requests.status = api('/api/status' + query); requests.tasks = api('/api/tasks' + query); requests.points = api('/api/open-points' + query);
+    if (includeGoals) requests.goals = api('/api/goals' + query);
+    if (includeNotes) requests.notes = api('/api/daily-notes' + notesQuery);
+  };
+  if (state.view === 'mine') requests.mine = api('/api/my-summary');
+  if (state.view === 'overview') { requests.overview = api('/api/overview' + query); requests.dashboard = api('/api/dashboard' + query); addWorkCollections(true); }
+  if (['status', 'tasks', 'points'].includes(state.view)) { requests.dashboard = api('/api/dashboard' + query); addWorkCollections(); }
+  if (state.view === 'goals') { requests.goals = api('/api/goals' + query); addWorkCollections(); }
+  if (state.view === 'notes') addWorkCollections(true, true);
+  if (state.view === 'planner') requests.planner = api('/api/planner' + plannerQuery);
+  if (state.view === 'calendar') { requests.calendar = api('/api/calendar?' + calendarParams); requests.calendarPlanner = api(`/api/planner?from=${state.calendarFrom}&to=${state.calendarTo}`); }
+  if (state.view === 'history') requests.history = api('/api/history?limit=200');
+  if (state.view === 'operations' && canCoordinate()) { requests.operations = api('/api/operations'); requests.employeeReviews = api(`/api/monthly-reviews?period=${state.reviewPeriod}`); }
+  if (state.view === 'commissioning') requests.commissioning = api('/api/commissioning');
+  if (state.view === 'reviews' && canCoordinate()) requests.employeeReviews = api(`/api/monthly-reviews?period=${state.reviewPeriod}`);
+  const entries = Object.entries(requests);
+  const values = await Promise.all(entries.map(([, request]) => request));
+  if (loadId !== state.loadSequence) return;
+  entries.forEach(([key], index) => { state[key] = values[index]; });
   state.dependencyOptions = { status: state.status, task: state.tasks, point: state.points };
   state.taskDependencyOptions = state.tasks;
   state.dependencyOptionsAll = state.controller === 'all';
@@ -913,6 +934,37 @@ async function changeOwnPassword() {
   if (result.new_password !== result.confirm_password) return toast('Nowe hasła nie są takie same', true);
   try { await api('/api/account/password', { method: 'PUT', body: JSON.stringify(result) }); toast('Hasło zostało zmienione'); }
   catch (error) { toast(error.message, true); }
+}
+
+async function manageAccountSecurity() {
+  try {
+    const security = await api('/api/account/security');
+    if (!security.mfa_enabled) {
+      if (!security.mfa_available) return toast('Administrator musi najpierw ustawić MFA_ENCRYPTION_KEY na Railway.', true);
+      const credentials = await uiForm({ title: 'Włącz uwierzytelnianie dwuskładnikowe', description: 'Potwierdź bieżące hasło. Następnie dodasz konto w aplikacji uwierzytelniającej.', submitLabel: 'Rozpocznij', fields: [
+        { name: 'current_password', label: 'Bieżące hasło', type: 'password', required: true }
+      ] });
+      if (!credentials) return;
+      const setup = await api('/api/account/mfa/setup', { method: 'POST', body: JSON.stringify(credentials) });
+      const confirmation = await uiForm({ title: 'Dodaj konto w aplikacji MFA', description: 'W aplikacji uwierzytelniającej wybierz dodawanie klucza ręcznie. Zapisz kod, który pojawi się w aplikacji.', submitLabel: 'Włącz MFA', fields: [
+        { name: 'secret', label: 'Klucz konfiguracji', value: setup.secret, hint: 'Nazwa konta: PLC Commissioning Hub' },
+        { name: 'code', label: 'Aktualny kod 6-cyfrowy', inputmode: 'numeric', required: true }
+      ] });
+      if (!confirmation) return;
+      const enabled = await api('/api/account/mfa/enable', { method: 'POST', body: JSON.stringify({ code: confirmation.code }) });
+      await uiForm({ title: 'Kody awaryjne MFA', description: 'Zapisz je w bezpiecznym miejscu. Każdego kodu można użyć tylko raz.', submitLabel: 'Zapisałem kody', fields: [
+        { name: 'recovery_codes', label: 'Kody awaryjne', type: 'textarea', rows: 10, value: enabled.recovery_codes.join('\n') }
+      ] });
+      return toast('MFA zostało włączone');
+    }
+    const disabled = await uiForm({ title: 'Bezpieczeństwo konta', description: `MFA jest aktywne. Pozostałe kody awaryjne: ${security.recovery_codes_remaining}. Wyłączenie wymaga hasła i kodu MFA.`, submitLabel: 'Wyłącz MFA', danger: true, fields: [
+      { name: 'current_password', label: 'Bieżące hasło', type: 'password', required: true },
+      { name: 'code', label: 'Kod MFA lub awaryjny', required: true }
+    ] });
+    if (!disabled) return;
+    await api('/api/account/mfa', { method: 'DELETE', body: JSON.stringify(disabled) });
+    toast('MFA zostało wyłączone');
+  } catch (error) { toast(error.message, true); }
 }
 
 function startLiveSync() {
@@ -949,11 +1001,11 @@ function startLiveSync() {
 
 function updateCounts() {
   $('#n-announcements').textContent = state.announcements.length;
-  $('#n-status').textContent = state.status.length;
-  $('#n-tasks').textContent = state.tasks.filter(item => item.status !== 'Done').length;
-  $('#n-goals').textContent = state.goals.filter(item => item.status !== 'Done').length;
-  $('#n-points').textContent = state.points.filter(item => item.status !== 'Closed').length;
-  $('#n-notes').textContent = state.notes.length;
+  $('#n-status').textContent = state.navigationCounts.status || 0;
+  $('#n-tasks').textContent = state.navigationCounts.tasks || 0;
+  $('#n-goals').textContent = state.navigationCounts.goals || 0;
+  $('#n-points').textContent = state.navigationCounts.points || 0;
+  $('#n-notes').textContent = state.navigationCounts.notes || 0;
   $('#n-operations').textContent = state.operations?.triage?.length || 0;
 }
 
@@ -1012,7 +1064,7 @@ async function openNotification(item) {
   $('#notifications-dialog').close();
   if (item.entity_type === 'handover') {
     state.controller = 'all'; fillScopeSelect($('#controller'), 'all');
-    setView('notes');
+    await setView('notes');
     toast('Dawne przekazania zmian zostały przeniesione do modułu „Przekazanie statusu”');
     return;
   }
@@ -1030,7 +1082,10 @@ async function openNotification(item) {
   } catch (error) { toast(`Nie udało się pobrać elementu: ${error.message}`, true); }
   if (item.entity_type === 'announcement') {
     const announcement = notificationTarget(item);
-    if (announcement) { setView('announcements'); openAnnouncementDetails(announcement); }
+    if (announcement) {
+      await setView('announcements');
+      openAnnouncementDetails(notificationTarget(item) || announcement);
+    }
     else toast('Wiadomość nie jest już dostępna', true);
     return;
   }
@@ -1055,7 +1110,7 @@ async function acknowledgeAnnouncement(id) {
   } catch (error) { toast(error.message, true); }
 }
 
-function setView(view) {
+async function setView(view) {
   if (view === 'settings' && state.me.role === 'user') return;
   if (view === 'operations' && !canCoordinate()) return;
   if (view === 'reviews' && !canCoordinate()) return;
@@ -1064,7 +1119,7 @@ function setView(view) {
   document.body.classList.remove('nav-open');
   updateNavigationToggle();
   $$('#nav button').forEach(button => button.classList.toggle('active', button.dataset.view === view));
-  render();
+  await loadData();
 }
 
 function render() {
@@ -3931,6 +3986,7 @@ function renderSettings() {
   const systemAdmin = state.me.role === 'system_admin';
   const launchers = [
     ...(systemAdmin ? [['projects', 'Projekty systemu', 'Globalne projekty, dostęp i bezpieczne usuwanie', state.projects.length, '▦']] : []),
+    ...(systemAdmin ? [['security', 'Dziennik bezpieczeństwa', 'Logowania, MFA, hasła i zmiany dostępu', '', '⌾']] : []),
     ['hierarchy', 'Hierarchia obszarów / sterowników', 'Projekt → obszar → podobszar → sterownik', state.controllerGroups.length + state.controllers.length, '⌘'],
     ['function_groups', 'Grupy funkcyjne i punkty statusu', 'Stacje, roboty, elementy oraz szablony kontroli', state.config.function_groups.length, '⚙'],
     ['ops_templates', 'Szablony uruchomieniowe', 'Powtarzalne komplety grup, elementów i punktów statusu', state.operations?.commissioning_templates?.length || 0, '▧'],
@@ -3946,10 +4002,11 @@ function renderSettings() {
     ...(admin ? [['backup', 'Backup projektu', 'Pobieranie i odtwarzanie kompletnego projektu', '', '⇄'], ['exports', 'Szablony eksportu', 'Predefiniowane raporty statusu do Excel', (state.config.export_templates || []).length, '↗']] : [])
   ];
   $('#content').innerHTML = `<section class="settings-home"><header><div><span class="eyebrow">Ustawienia projektu</span><h2>Wybierz obszar konfiguracji</h2><p>Każda grupa ustawień otwiera się w osobnym, trwałym oknie. Zapis nie zamyka edytowanego widoku.</p></div><span class="settings-role">${escapeHtml(roleName(state.me.role))}</span></header><div class="settings-launchers">${launchers.map(([key, title, description, count, icon]) => `<button type="button" class="settings-launcher" data-config-panel="${key}"><span class="settings-launcher-icon">${icon}</span><span><b>${escapeHtml(title)}</b><small>${escapeHtml(description)}</small></span>${count !== '' ? `<em>${count}</em>` : ''}<i>→</i></button>`).join('')}</div></section>`;
-  $$('[data-config-panel]').forEach(button => button.addEventListener('click', () => {
+  $$('[data-config-panel]').forEach(button => button.addEventListener('click', async () => {
     if (button.dataset.configPanel === 'ops_templates' || button.dataset.configPanel === 'ops_automations') {
-      state.operationsTab = button.dataset.configPanel === 'ops_templates' ? 'templates' : 'automations'; setView('operations'); return;
+      state.operationsTab = button.dataset.configPanel === 'ops_templates' ? 'templates' : 'automations'; await setView('operations'); return;
     }
+    if (button.dataset.configPanel === 'security') state.securityEvents = await api('/api/security/events?limit=200');
     openConfigPanel(button.dataset.configPanel);
   }));
   if ($('#config-full-dialog').open && state.configPanel) refreshConfigPanel();
@@ -3973,6 +4030,7 @@ function configPanelDefinition(key) {
   const plannerConfig = `<section class="config-panel-body planner-config-grid"><section class="config-subsection"><h3>Globalne normy czasu pracy</h3><p class="sub">Jedna konfiguracja obowiązuje we wszystkich projektach.</p><div class="planner-setting-grid">${plannerSettingFields.map(([key, label, fallback]) => `<label class="field"><span>${label}</span><input class="planner-setting" data-key="${key}" type="number" min="0" step="0.25" value="${escapeHtml(state.config.settings[key] || fallback)}"></label>`).join('')}</div></section><section class="config-subsection"><h3>Święta systemowe</h3><p class="sub">Ta lista jest wspólna dla wszystkich projektów.</p><div class="holiday-list-config">${(state.config.planner_holidays || []).map(item => `<div class="settings-row"><span><b>${displayDate(item.holiday_date)}</b> · ${escapeHtml(item.name)}</span><button class="mini edit-planner-holiday" data-id="${item.id}">Edytuj</button><button class="mini delete-planner-holiday" data-id="${item.id}">Usuń</button></div>`).join('') || '<div class="empty compact-empty">Brak zdefiniowanych świąt.</div>'}</div><label class="field"><span>Szybkie dodawanie — DD.MM.RRRR Nazwa święta</span><textarea id="planner-holidays-bulk" rows="7" placeholder="25.12.2026 Boże Narodzenie\n26.12.2026 Drugi dzień świąt"></textarea></label><button class="secondary" id="planner-holidays-bulk-save">Dodaj listę świąt</button></section></section>`;
   const definitions = {
     projects: ['Projekty systemu', `<section class="config-panel-body"><p class="sub">Konta są globalne, a role i dostęp są niezależne dla każdego projektu.</p>${state.projects.map(item => `<div class="settings-row"><span><b>${escapeHtml(item.code)}</b><small class="sub">${escapeHtml(item.description || '')}</small></span><button class="mini edit-project" data-id="${item.id}">Edytuj</button><button class="mini danger-outline delete-project" data-id="${item.id}" ${state.projects.length <= 1 ? 'disabled title="Nie można usunąć ostatniego projektu"' : ''}>Usuń</button></div>`).join('')}<button class="secondary" id="new-project">+ Dodaj projekt</button></section>`],
+    security: ['Dziennik bezpieczeństwa', `<section class="config-panel-body"><p class="sub">Ostatnie zdarzenia uwierzytelniania i zmian dostępu. Rejestr jest przechowywany przez 180 dni.</p>${(state.securityEvents || []).map(item => `<div class="settings-row security-event ${escapeHtml(item.outcome)}"><span><b>${escapeHtml(item.event_type)}</b><small class="sub">${escapeHtml(item.username || 'nieznane konto')} · ${escapeHtml(item.ip_address || 'brak adresu')} · ${displayDateTime(item.created_at)}</small></span><em>${escapeHtml(item.outcome)}</em></div>`).join('') || '<div class="empty compact-empty">Brak zarejestrowanych zdarzeń.</div>'}</section>`],
     hierarchy: ['Hierarchia obszarów / sterowników', `<section class="config-panel-body"><p class="sub">Projekt → obszar → podobszar → sterownik. Wybierz element po lewej, a jego działania pojawią się po prawej.</p>${controllerHierarchyConfig(admin)}</section>`],
     function_groups: ['Grupy funkcyjne i punkty statusu', functionGroupConfig(admin)],
     status_categories: ['Kategorie statusu i otwartych punktów', `<section class="config-panel-body">${categoryConfig('status', state.config.categories, admin, canEdit)}</section>`],
@@ -3983,7 +4041,7 @@ function configPanelDefinition(key) {
     dictionaries: ['Słowniki projektu', `<section class="config-panel-body config-dictionaries">${dictionaries}</section>`],
     completion_requirements: ['Wymagania do spełnienia', `<section class="config-panel-body"><p class="sub">Ta uporządkowana lista jest dostępna jako wielokrotny wybór w Statusie, Zadaniach i Otwartych punktach.</p>${(state.config.requirements || []).map((item, index, items) => `<div class="settings-row">${canEdit ? orderControls('completion_requirements', items, index) : ''}<span><b>${escapeHtml(item.name)}</b><small class="sub">${escapeHtml(item.description || 'Bez opisu')}</small><small class="requirement-flags">${item.requires_evidence ? 'Dowód wymagany' : 'Dowód opcjonalny'} · ${item.requires_second_approval ? 'zatwierdza druga osoba' : 'bez drugiego zatwierdzenia'}</small></span>${canEdit ? `<button class="mini edit-requirement-config" data-id="${item.id}">Edytuj</button>` : ''}${admin ? `<button class="mini delete-requirement-config" data-id="${item.id}">Usuń</button>` : ''}</div>`).join('') || '<div class="empty compact-empty">Nie zdefiniowano jeszcze wymagań.</div>'}${canEdit ? '<button class="secondary" id="new-requirement-config">+ Dodaj wymaganie</button>' : ''}</section>`],
     reminders: ['Ustawienia przypomnień', `<section class="config-panel-body">${admin ? `<p class="sub">Źródło obszarów dla „Mojego podsumowania” każdy użytkownik wybiera indywidualnie w tym module.</p><label class="field"><span>Domyślne przypomnienie po utworzeniu (dni)</span><input id="default-reminder" type="number" min="1" value="${escapeHtml(state.config.settings.default_reminder_days || 14)}"></label><label class="field"><span>Okno „zbliżających się” przypomnień (dni)</span><input id="warning-days" type="number" min="1" value="${escapeHtml(state.config.settings.reminder_warning_days || 7)}"></label>` : '<p class="sub">Tylko administrator może zmieniać ustawienia projektu.</p>'}</section>`],
-    backup: ['Backup projektu', `<section class="config-panel-body"><p class="sub">Plik JSON zawiera konfigurację, status, zadania, cele, otwarte punkty, dziennik, Planner, Informator, powiązania i historię zmian.</p><div class="backup-actions"><button class="secondary" id="download-backup">Pobierz backup</button><label class="secondary file-button">Wczytaj backup<input id="restore-backup" type="file" accept="application/json,.json"></label></div></section>`],
+    backup: ['Backup projektu', `<section class="config-panel-body"><p class="sub">Backup zawiera konfigurację i dane projektu. Nowe pliki są szyfrowane hasłem lokalnie w przeglądarce; hasło nie trafia na serwer.</p><div class="backup-actions"><button class="secondary" id="download-backup">Pobierz zaszyfrowany backup</button><label class="secondary file-button">Wczytaj backup<input id="restore-backup" type="file" accept="application/json,.json,.plcbak"></label></div></section>`],
     exports: ['Szablony eksportu statusu', `<section class="config-panel-body">${(state.config.export_templates || []).map((item, index) => `<div class="settings-row">${orderControls('export_templates', state.config.export_templates, index)}<span><b>${escapeHtml(item.name)}</b><small class="sub">${escapeHtml(item.detail_level)}</small></span><button class="mini edit-export-template" data-id="${item.id}">Edytuj</button><button class="mini delete-export-template" data-id="${item.id}">Usuń</button></div>`).join('') || '<p class="sub">Brak własnych szablonów.</p>'}<button class="secondary" id="new-export-template">+ Nowy szablon</button></section>`]
   };
   return definitions[key] || ['Konfiguracja', '<div class="empty">Nie znaleziono tej grupy ustawień.</div>'];
@@ -4285,17 +4343,53 @@ async function editUserAreas(userId) {
   try { await api(`/api/users/${userId}/areas`, { method: 'PUT', body: JSON.stringify({ area_ids }) }); toast('Przypisania obszarów zapisano'); await loadData(); } catch (error) { toast(error.message, true); }
 }
 
+const bytesToBase64 = bytes => { let binary = ''; for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000)); return btoa(binary); };
+const base64ToBytes = value => Uint8Array.from(atob(value), character => character.charCodeAt(0));
+async function backupKey(password, salt) {
+  const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: 250000 }, material, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+async function encryptBackup(backup, password) {
+  const salt = crypto.getRandomValues(new Uint8Array(16)); const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await backupKey(password, salt), new TextEncoder().encode(JSON.stringify(backup)));
+  return { format: 'plc-hub-encrypted-backup', version: 1, kdf: 'PBKDF2-SHA256', iterations: 250000, salt: bytesToBase64(salt), iv: bytesToBase64(iv), data: bytesToBase64(new Uint8Array(encrypted)) };
+}
+async function decryptBackup(envelope, password) {
+  if (envelope.format !== 'plc-hub-encrypted-backup' || Number(envelope.version) !== 1) return envelope;
+  const salt = base64ToBytes(envelope.salt); const iv = base64ToBytes(envelope.iv); const data = base64ToBytes(envelope.data);
+  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, await backupKey(password, salt), data);
+  return JSON.parse(new TextDecoder().decode(plain));
+}
+function downloadBlob(blob, filename) {
+  const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = filename; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
 async function downloadBackup() {
+  const password = await uiForm({ title: 'Zabezpiecz backup hasłem', description: 'Użyj osobnego, długiego hasła i przechowuj je poza aplikacją.', submitLabel: 'Szyfruj i pobierz', fields: [
+    { name: 'password', label: 'Hasło backupu (min. 12 znaków)', type: 'password', required: true },
+    { name: 'confirmation', label: 'Powtórz hasło', type: 'password', required: true }
+  ] });
+  if (!password) return;
+  if (password.password.length < 12 || password.password !== password.confirmation) return toast('Hasła muszą być identyczne i mieć co najmniej 12 znaków.', true);
   try {
     const response = await fetch('/api/backup'); if (!response.ok) throw new Error((await response.json()).error);
-    const blob = await response.blob(); const filename = response.headers.get('content-disposition')?.match(/filename="([^"]+)"/)?.[1] || 'backup.json';
-    const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = filename; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    const backup = await response.json(); const envelope = await encryptBackup(backup, password.password);
+    const sourceName = response.headers.get('content-disposition')?.match(/filename="([^"]+)"/)?.[1] || 'backup.json';
+    downloadBlob(new Blob([JSON.stringify(envelope)], { type: 'application/json' }), sourceName.replace(/\.json$/i, '.plcbak'));
+    toast('Zaszyfrowany backup został pobrany');
   } catch (error) { toast(error.message, true); }
 }
 async function restoreBackup(event) {
   const file = event.target.files[0]; if (!file) return;
   if (!await uiConfirm('Odtwórz backup projektu', 'Wczytanie pliku zastąpi wszystkie dane bieżącego projektu. Tej operacji nie można cofnąć bez innego backupu.', 'Odtwórz backup', true)) { event.target.value = ''; return; }
-  try { const backup = JSON.parse(await file.text()); await api('/api/backup/restore', { method: 'POST', body: JSON.stringify({ backup }) }); toast('Backup został odtworzony'); await loadData(); } catch (error) { toast(error.message, true); }
+  try {
+    const parsed = JSON.parse(await file.text()); let backup = parsed;
+    if (parsed.format === 'plc-hub-encrypted-backup') {
+      const password = await uiForm({ title: 'Odszyfruj backup', submitLabel: 'Odszyfruj', fields: [{ name: 'password', label: 'Hasło backupu', type: 'password', required: true }] });
+      if (!password) return;
+      try { backup = await decryptBackup(parsed, password.password); } catch { throw new Error('Nieprawidłowe hasło lub uszkodzony plik backupu'); }
+    }
+    await api('/api/backup/restore', { method: 'POST', body: JSON.stringify({ backup }) }); toast('Backup został odtworzony'); await loadData();
+  } catch (error) { toast(error.message, true); }
   finally { event.target.value = ''; }
 }
 async function editExportTemplate(id = null) {
@@ -5150,7 +5244,7 @@ async function loadAudit(type, id) {
   $('#audit-list').innerHTML = entries.map(entry => `<article class="audit-entry"><strong>${escapeHtml(entry.user_name || 'System')} · ${displayDateTime(entry.changed_at)} · ${auditAction(entry.action)}</strong>${Object.entries(entry.changes).map(([field, change]) => auditChangeHtml(field, change)).join('') || '<span>Brak szczegółowych różnic</span>'}</article>`).join('') || '<div class="empty">Historia jest pusta</div>';
 }
 
-function auditAction(action) { return ({ create: 'utworzenie', update: 'edycja', delete: 'usunięcie', migrate: 'migracja do V3' })[action] || action; }
+function auditAction(action) { return ({ create: 'utworzenie', update: 'edycja', delete: 'usunięcie', migrate: 'migracja danych' })[action] || action; }
 function fieldLabel(field) { return ({
   created: 'Utworzenie elementu', migrated: 'Migracja danych', controller_id: 'Sterownik', controller_group_id: 'Zakres hierarchii',
   title: 'Tytuł', description: 'Opis', status: 'Status', priority: 'Priorytet', category: 'Kategoria', subcategory: 'Podkategoria',
@@ -5301,7 +5395,7 @@ async function jumpTo(type, id, projectId = null) {
     } catch (error) { return toast(error.message, true); }
   }
   const view = type === 'task' || type === 'tasks' ? 'tasks' : type === 'point' || type === 'points' ? 'points' : type === 'note' || type === 'notes' ? 'notes' : type === 'goal' || type === 'goals' ? 'goals' : 'status';
-  setView(view);
+  await setView(view);
   const item = entity(type, id);
   if (item) {
     if (view === 'notes') openStatusTransferEditor(item);

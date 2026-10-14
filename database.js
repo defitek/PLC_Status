@@ -41,6 +41,7 @@ export function verifyPassword(password, storedHash) {
 }
 
 export function openDatabase(databasePath) {
+  const seedDemo = String(process.env.SEED_DEMO_DATA || (process.env.NODE_ENV === 'production' ? 'false' : 'true')).toLowerCase() === 'true';
   mkdirSync(dirname(databasePath), { recursive: true });
   const db = new DatabaseSync(databasePath, { timeout: 5000 });
   db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;');
@@ -60,6 +61,7 @@ export function openDatabase(databasePath) {
   migrateToV15(db);
   migrateToV16(db);
   migrateToV17(db);
+  migrateSecurityFoundation(db);
   migrateStatusWorkflow(db);
   migrateEntityDependencies(db);
   const defaultProjectId = primaryProjectId(db);
@@ -72,7 +74,7 @@ export function openDatabase(databasePath) {
   db.exec('CREATE INDEX IF NOT EXISTS idx_notes_project_date ON daily_notes(project_id,note_date DESC,controller_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_audit_project_changed ON audit_log(project_id,changed_at DESC,id DESC)');
   seedConfiguration(db, defaultProjectId);
-  if (String(process.env.SEED_DEMO_DATA || 'true').toLowerCase() !== 'false') {
+  if (seedDemo) {
     if (defaultProjectId === 1) seedDemoData(db, hashPassword, process.env.DEMO_DATA_LIMIT || 100);
     seedControllerHierarchy(db, defaultProjectId);
     seedSecondProject(db, hashPassword);
@@ -83,6 +85,7 @@ export function openDatabase(databasePath) {
   migrateToV15(db);
   migrateToV16(db);
   migrateToV17(db);
+  migrateSecurityFoundation(db);
   migrateStatusWorkflow(db);
   migrateEntityDependencies(db);
   migrateGlobalPlannerData(db);
@@ -94,9 +97,9 @@ export function openDatabase(databasePath) {
   backfillV5(db);
   backfillV6(db);
   backfillV7(db);
-  if (String(process.env.SEED_DEMO_DATA || 'true').toLowerCase() !== 'false') { seedV5Demo(db); seedV8Demo(db); }
+  if (seedDemo) { seedV5Demo(db); seedV8Demo(db); }
   seedMigrationAudit(db, defaultProjectId);
-  db.prepare("INSERT INTO app_meta(key,value) VALUES('schema_version','14.0') ON CONFLICT(key) DO UPDATE SET value='14.0'").run();
+  db.prepare("INSERT INTO app_meta(key,value) VALUES('schema_version','current') ON CONFLICT(key) DO UPDATE SET value='current'").run();
   return createRepository(db, defaultProjectId);
 }
 
@@ -167,6 +170,26 @@ function migrateToV17(db) {
   db.exec(`UPDATE planner_requirements
     SET manual_required_count=CASE WHEN note='Automatyczne minimum z sumy podobszarów' THEN 0 ELSE required_count END
     WHERE manual_required_count IS NULL`);
+}
+
+function migrateSecurityFoundation(db) {
+  ensureColumn(db, 'users', 'mfa_secret_cipher', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, 'users', 'mfa_pending_secret_cipher', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, 'users', 'mfa_enabled', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'users', 'mfa_recovery_codes_json', "TEXT NOT NULL DEFAULT '[]'");
+  db.exec(`CREATE TABLE IF NOT EXISTS security_events (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    username TEXT NOT NULL DEFAULT '',
+    event_type TEXT NOT NULL,
+    outcome TEXT NOT NULL CHECK(outcome IN ('success','failure','blocked','info')),
+    ip_address TEXT NOT NULL DEFAULT '',
+    user_agent TEXT NOT NULL DEFAULT '',
+    details_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  ) STRICT;
+  CREATE INDEX IF NOT EXISTS idx_security_events_created ON security_events(created_at DESC,id DESC);
+  CREATE INDEX IF NOT EXISTS idx_security_events_user ON security_events(user_id,created_at DESC,id DESC);`);
 }
 
 const globalPlannerSettingKeys = [
@@ -1063,7 +1086,7 @@ function seedMigrationAudit(db, defaultProjectId) {
     const insertAudit = db.prepare('INSERT INTO audit_log(project_id,entity_type,entity_id,action,user_id,changes_json,snapshot_json) VALUES(?,?,?,?,?,?,?)');
     for (const row of rows) {
       const existing = db.prepare('SELECT 1 FROM audit_log WHERE entity_type=? AND entity_id=? LIMIT 1').get(type, row.id);
-      if (!existing) insertAudit.run(row.project_id || defaultProjectId, type, row.id, 'migrate', null, JSON.stringify({ migrated: { from: null, to: 'V4' } }), JSON.stringify(row));
+      if (!existing) insertAudit.run(row.project_id || defaultProjectId, type, row.id, 'migrate', null, JSON.stringify({ migrated: { from: null, to: 'bieżący schemat' } }), JSON.stringify(row));
     }
   }
 }
@@ -2063,7 +2086,7 @@ function createRepository(db, defaultProjectId) {
     const project = one('SELECT * FROM projects WHERE id=?', projectId);
     const tables = Object.fromEntries(projectBackupTables.map(([table, condition]) => [table, all(`SELECT * FROM ${table} WHERE ${condition}`, projectId)]));
     return {
-      format: 'plc-commissioning-hub-project-backup', version: 14,
+      format: 'plc-commissioning-hub-project-backup', version: 1, schema: 'current',
       generated_at: new Date().toISOString(), project,
       users: all(`SELECT u.id,u.username,u.display_name,u.system_role,u.theme,u.active,u.sort_order,u.created_at,pm.role project_role,pm.active project_active,pm.assignable
         FROM users u JOIN project_memberships pm ON pm.user_id=u.id WHERE pm.project_id=? ORDER BY u.id`, projectId),
@@ -2098,7 +2121,9 @@ function createRepository(db, defaultProjectId) {
   }
 
   function restoreProjectBackup(payload) {
-    if (!payload || payload.format !== 'plc-commissioning-hub-project-backup' || ![4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14].includes(Number(payload.version)) || !payload.tables) throw appError('Nieprawidłowy lub nieobsługiwany plik backupu');
+    const supportedLegacyBackupVersions = new Set([4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+    const currentBackup = Number(payload?.version) === 1 && payload?.schema === 'current';
+    if (!payload || payload.format !== 'plc-commissioning-hub-project-backup' || (!currentBackup && !supportedLegacyBackupVersions.has(Number(payload.version))) || !payload.tables) throw appError('Nieprawidłowy lub nieobsługiwany plik backupu');
     const projectId = activeProjectId();
     const currentProject = one('SELECT * FROM projects WHERE id=?', projectId);
     if (!currentProject || clean(payload.project?.code).toLowerCase() !== clean(currentProject.code).toLowerCase()) throw appError(`Backup dotyczy innego projektu (${payload.project?.code || 'brak kodu'})`);
@@ -4059,6 +4084,53 @@ function createRepository(db, defaultProjectId) {
     withProject(projectId, callback) { return projectStorage.run(asId(projectId), callback); },
     activeProjectIds() { return all('SELECT id FROM projects WHERE active=1 ORDER BY sort_order,id').map(row => row.id); },
     authenticate(username) { return one('SELECT * FROM users WHERE username=? COLLATE NOCASE AND active=1', clean(username)); },
+    securityAccount(userId) {
+      return one(`SELECT id,username,display_name,password_hash,system_role,mfa_secret_cipher,mfa_pending_secret_cipher,mfa_enabled,mfa_recovery_codes_json
+        FROM users WHERE id=? AND active=1`, asId(userId));
+    },
+    beginMfaSetup(userId, secretCipher) {
+      const result = db.prepare('UPDATE users SET mfa_pending_secret_cipher=? WHERE id=? AND active=1').run(clean(secretCipher), asId(userId));
+      if (!result.changes) throw appError('Nie znaleziono użytkownika', 404);
+      return { pending: true };
+    },
+    enableMfa(userId, recoveryCodeHashes) {
+      const account = one('SELECT mfa_pending_secret_cipher FROM users WHERE id=? AND active=1', asId(userId));
+      if (!account?.mfa_pending_secret_cipher) throw appError('Najpierw rozpocznij konfigurację MFA');
+      db.prepare("UPDATE users SET mfa_secret_cipher=mfa_pending_secret_cipher,mfa_pending_secret_cipher='',mfa_enabled=1,mfa_recovery_codes_json=? WHERE id=?").run(JSON.stringify(recoveryCodeHashes || []), asId(userId));
+      return { enabled: true };
+    },
+    disableMfa(userId) {
+      const result = db.prepare("UPDATE users SET mfa_secret_cipher='',mfa_pending_secret_cipher='',mfa_enabled=0,mfa_recovery_codes_json='[]' WHERE id=? AND active=1").run(asId(userId));
+      if (!result.changes) throw appError('Nie znaleziono użytkownika', 404);
+      return { enabled: false };
+    },
+    consumeMfaRecoveryCode(userId, codeHash) {
+      const account = one('SELECT mfa_recovery_codes_json FROM users WHERE id=? AND active=1 AND mfa_enabled=1', asId(userId));
+      if (!account) return false;
+      const parsed = parseJson(account.mfa_recovery_codes_json, []);
+      const hashes = Array.isArray(parsed) ? parsed : [];
+      const index = hashes.indexOf(clean(codeHash));
+      if (index < 0) return false;
+      hashes.splice(index, 1);
+      db.prepare('UPDATE users SET mfa_recovery_codes_json=? WHERE id=?').run(JSON.stringify(hashes), asId(userId));
+      return true;
+    },
+    logSecurityEvent(input = {}) {
+      const outcome = ['success', 'failure', 'blocked', 'info'].includes(clean(input.outcome)) ? clean(input.outcome) : 'info';
+      const details = input.details && typeof input.details === 'object' ? input.details : {};
+      const result = db.prepare(`INSERT INTO security_events(user_id,username,event_type,outcome,ip_address,user_agent,details_json)
+        VALUES(?,?,?,?,?,?,?)`).run(asId(input.user_id), clean(input.username).slice(0, 100), clean(input.event_type).slice(0, 80) || 'unknown', outcome,
+        clean(input.ip_address).slice(0, 128), clean(input.user_agent).slice(0, 300), JSON.stringify(details).slice(0, 5000));
+      if (Number(result.lastInsertRowid) % 100 === 0) db.prepare("DELETE FROM security_events WHERE created_at<datetime('now','-180 days')").run();
+      return Number(result.lastInsertRowid);
+    },
+    securityEvents(userId = null, limit = 100) {
+      const safeLimit = Math.max(10, Math.min(500, Number(limit) || 100));
+      const rows = userId
+        ? all('SELECT * FROM security_events WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT ?', asId(userId), safeLimit)
+        : all('SELECT * FROM security_events ORDER BY created_at DESC,id DESC LIMIT ?', safeLimit);
+      return rows.map(row => ({ ...row, details: parseJson(row.details_json, {}), details_json: undefined }));
+    },
     availableProjects(userId) {
       const account = one('SELECT system_role FROM users WHERE id=? AND active=1', userId);
       if (!account) return [];
@@ -5184,6 +5256,16 @@ function createRepository(db, defaultProjectId) {
         status_updates: mine.status_updates.length
       };
       return mine;
+    },
+    navigationCounts(currentUser) {
+      return {
+        announcements: announcementRows(currentUser).length,
+        status: Number(one('SELECT COUNT(*) count FROM status_items WHERE project_id=?', activeProjectId())?.count || 0),
+        tasks: Number(one("SELECT COUNT(*) count FROM tasks WHERE project_id=? AND status!='Done'", activeProjectId())?.count || 0),
+        goals: Number(one("SELECT COUNT(*) count FROM goals WHERE project_id=? AND status!='Done'", activeProjectId())?.count || 0),
+        points: Number(one("SELECT COUNT(*) count FROM open_points WHERE project_id=? AND status!='Closed'", activeProjectId())?.count || 0),
+        notes: Number(one('SELECT COUNT(*) count FROM daily_notes WHERE project_id=?', activeProjectId())?.count || 0)
+      };
     }
   };
 }

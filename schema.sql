@@ -23,11 +23,30 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'user' CHECK(role IN ('admin','moderator','user')),
   system_role TEXT NOT NULL DEFAULT 'user' CHECK(system_role IN ('system_admin','user')),
+  mfa_secret_cipher TEXT NOT NULL DEFAULT '',
+  mfa_pending_secret_cipher TEXT NOT NULL DEFAULT '',
+  mfa_enabled INTEGER NOT NULL DEFAULT 0 CHECK(mfa_enabled IN (0,1)),
+  mfa_recovery_codes_json TEXT NOT NULL DEFAULT '[]',
   theme TEXT NOT NULL DEFAULT 'blue',
   active INTEGER NOT NULL DEFAULT 1,
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS security_events (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  username TEXT NOT NULL DEFAULT '',
+  event_type TEXT NOT NULL,
+  outcome TEXT NOT NULL CHECK(outcome IN ('success','failure','blocked','info')),
+  ip_address TEXT NOT NULL DEFAULT '',
+  user_agent TEXT NOT NULL DEFAULT '',
+  details_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_security_events_created ON security_events(created_at DESC,id DESC);
+CREATE INDEX IF NOT EXISTS idx_security_events_user ON security_events(user_id,created_at DESC,id DESC);
 
 CREATE TABLE IF NOT EXISTS project_memberships (
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

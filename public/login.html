@@ -1,1 +1,30 @@
-<!doctype html><html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#172554"><title>Logowanie · PLC Hub V14</title><link rel="stylesheet" href="/styles.css?v=14.0.0"><script type="module" src="/login.js?v=14.0.0"></script></head><body class="login-page"><main class="login-card"><div class="login-logo">PLC</div><h1>Commissioning Hub</h1><p>Zaloguj się, a następnie wybierz dostępny projekt</p><form id="login"><label>Login<input name="username" autocomplete="username" required autofocus></label><label>Hasło<input name="password" type="password" autocomplete="current-password" required></label><div id="login-error" class="login-error"></div><button class="primary">Zaloguj</button></form></main></body></html>
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#172554">
+  <title>Logowanie · PLC Commissioning Hub</title>
+  <link rel="stylesheet" href="/styles.css?v=1.0.0">
+  <script type="module" src="/login.js?v=1.0.0"></script>
+</head>
+<body class="login-page">
+  <main class="login-card">
+    <div class="login-logo">PLC</div>
+    <h1>Commissioning Hub</h1>
+    <p id="login-description">Zaloguj się, a następnie wybierz dostępny projekt</p>
+    <form id="login">
+      <div id="password-step">
+        <label>Login<input name="username" autocomplete="username" maxlength="100" required autofocus></label>
+        <label>Hasło<input name="password" type="password" autocomplete="current-password" maxlength="256" required></label>
+      </div>
+      <div id="mfa-step" class="hidden">
+        <label>Kod MFA lub kod awaryjny<input name="code" inputmode="text" autocomplete="one-time-code" maxlength="12"></label>
+        <button type="button" class="secondary" id="mfa-back">Wróć do logowania hasłem</button>
+      </div>
+      <div id="login-error" class="login-error" role="alert"></div>
+      <button class="primary" id="login-submit">Zaloguj</button>
+    </form>
+  </main>
+</body>
+</html>

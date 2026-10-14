@@ -284,6 +284,11 @@ test('V4 isolates projects, supports hierarchy, immutable IDs, elements, links a
       assert.equal(repository.tasks('all', admin).length, countBefore + 1);
       repository.restoreProjectBackup(backup);
       assert.equal(repository.tasks('all', admin).length, countBefore);
+      const legacyBackup = { ...backup, version: 14 };
+      delete legacyBackup.schema;
+      repository.saveTask(null, { controller: 'HB522', title: 'Temporary legacy restore record' }, admin);
+      repository.restoreProjectBackup(legacyBackup);
+      assert.equal(repository.tasks('all', admin).length, countBefore);
     });
 
     repository.withProject(2, () => {
@@ -353,7 +358,8 @@ test('V5 data remains compatible with planner, calendar, weighted teamwork, cano
       assert.throws(() => repository.dailySummary('2026-01-01', '2026-01-15'), /14 dni/);
 
       const backup = repository.projectBackup();
-      assert.equal(backup.version, 14);
+      assert.equal(backup.version, 1);
+      assert.equal(backup.schema, 'current');
       assert.ok(Array.isArray(backup.tables.planner_entries));
       assert.ok(Array.isArray(backup.tables.task_assignees));
       assert.ok(Array.isArray(backup.tables.calendar_annotations));
@@ -512,7 +518,7 @@ test('V7 supports canonical hierarchy IDs, area tasks, goal links and configurab
       assert.ok(overview.overall.goals.total >= 1);
       assert.ok(Array.isArray(overview.status_breakdown));
       assert.ok(overview.trends.week.every(point => point.goals && Number.isFinite(point.goals.total)));
-      assert.equal(repository.projectBackup().version, 14);
+      assert.equal(repository.projectBackup().version, 1);
     });
   } finally {
     repository.close();
@@ -571,7 +577,7 @@ test('V8 supports announcements, aggregated KPI trends, unified Planner requirem
       assert.ok(Array.isArray(rootTrend.trends.day));
       assert.ok(Array.isArray(rootTrend.trends.week));
       assert.ok(Array.isArray(rootTrend.trends.month));
-      assert.equal(repository.projectBackup().version, 14);
+      assert.equal(repository.projectBackup().version, 1);
 
       repository.deleteAnnouncement(announcement.id);
       assert.equal(repository.announcements(admin).some(item => item.id === announcement.id), false);
@@ -677,7 +683,7 @@ test('V9 supports requirements, guarded duplication, comments, pushes, calendar 
       assert.equal(workerPlanner.requirements.length, 0);
       assert.equal(workerPlanner.time_details, null);
 
-      assert.equal(repository.projectBackup().version, 14);
+      assert.equal(repository.projectBackup().version, 1);
       assert.ok(Array.isArray(repository.projectBackup().tables.completion_requirements));
       assert.ok(Array.isArray(repository.projectBackup().tables.entity_comments));
       assert.ok(Array.isArray(repository.projectBackup().tables.planner_absences));
@@ -734,7 +740,7 @@ test('V10 supports live-safe edits, scoped notes, targeted news, passwords and P
       assert.ok(verifyPassword('worker-password-10', repository.authenticate('v10worker').password_hash));
 
       const backup = repository.projectBackup();
-      assert.equal(backup.version, 14);
+      assert.equal(backup.version, 1);
       assert.ok(Array.isArray(backup.tables.announcement_labels));
       assert.ok(Array.isArray(backup.tables.planner_time_adjustments));
     });
@@ -771,7 +777,7 @@ test('V11 supports assignment visibility and manual working-time balance overrid
       assert.equal(detail.overtime_raw_cumulative, 7.5);
       assert.equal(detail.overtime_weighted_cumulative, 10.75);
       assert.equal(planner.time_details.users.find(item => item.user_id === worker.id).overtime_balance, 10.75);
-      assert.equal(repository.projectBackup().version, 14);
+      assert.equal(repository.projectBackup().version, 1);
     });
   } finally {
     repository.close();
@@ -829,7 +835,7 @@ test('V12 supports operational views, dependencies, handovers, automation and co
       assert.ok(applied.statuses_created >= template.check_count);
 
       const backup = repository.projectBackup();
-      assert.equal(backup.version, 14);
+      assert.equal(backup.version, 1);
       for (const table of ['saved_views', 'task_dependencies', 'entity_dependencies', 'shift_handovers', 'automation_rules', 'commissioning_templates']) assert.ok(Array.isArray(backup.tables[table]));
     });
   } finally {
@@ -978,7 +984,7 @@ test('V13 supports status handovers, campaigns, readiness gates, DoD approval, m
       assert.deepEqual(absences.map(item => item.absence_date), ['2026-10-12', '2026-10-13']);
 
       const backup = repository.projectBackup();
-      assert.equal(backup.version, 14);
+      assert.equal(backup.version, 1);
       for (const table of ['daily_note_sections', 'test_campaigns', 'readiness_gates', 'project_meetings', 'external_dependencies', 'knowledge_articles', 'entity_requirement_status']) assert.ok(Array.isArray(backup.tables[table]));
       const taskCount = repository.tasks('all', admin).length;
       repository.saveTask(null, { controller: controller.code, title: 'Tymczasowy rekord V13' }, admin);
@@ -1081,7 +1087,7 @@ test('V14 shares users across projects, exposes cross-project plans and supports
     const summary = repository.mySummary(workerInCurrentProject);
     assert.ok(summary.projects_in_scope.some(item => item.id === project.id));
     assert.ok(summary.assigned_tasks.some(item => item.project_id === project.id && item.id === completedTask.id));
-    assert.equal(repository.projectBackup().version, 14);
+    assert.equal(repository.projectBackup().version, 1);
   } finally {
     repository.close();
     rmSync(temporary.directory, { recursive: true, force: true });

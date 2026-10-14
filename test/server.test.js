@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { createHmac } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -13,7 +14,7 @@ async function startApplication(t) {
   const baseUrl = `http://127.0.0.1:${port}`;
   const child = spawn(process.execPath, ['server.js'], {
     cwd: new URL('..', import.meta.url),
-    env: { ...process.env, PORT: String(port), DB_PATH: join(directory, 'test.db'), APP_USER: 'security-admin', APP_PASSWORD: 'security-test-password', SEED_DEMO_DATA: 'false', NODE_ENV: 'test' },
+    env: { ...process.env, PORT: String(port), DB_PATH: join(directory, 'test.db'), APP_USER: 'security-admin', APP_PASSWORD: 'security-test-password', MFA_ENCRYPTION_KEY: '11'.repeat(32), SEED_DEMO_DATA: 'false', NODE_ENV: 'test' },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   let output = '';
@@ -56,9 +57,23 @@ async function selectProject(baseUrl, cookie, projectId) {
   return response.json();
 }
 
+function totp(secret) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = '';
+  for (const character of secret) bits += alphabet.indexOf(character).toString(2).padStart(5, '0');
+  const bytes = [];
+  for (let index = 0; index + 8 <= bits.length; index += 8) bytes.push(parseInt(bits.slice(index, index + 8), 2));
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30000)));
+  const digest = createHmac('sha1', Buffer.from(bytes)).update(counter).digest();
+  const offset = digest.at(-1) & 15;
+  return String((digest.readUInt32BE(offset) & 0x7fffffff) % 1_000_000).padStart(6, '0');
+}
+
 test('API protects manager data, project directory and account sessions', async t => {
   const { baseUrl } = await startApplication(t);
   const health = await request(baseUrl, '/api/health');
+  assert.equal((await health.clone().json()).version, '1.0.0');
   assert.equal(health.headers.get('x-frame-options'), 'DENY');
   assert.match(health.headers.get('permissions-policy'), /camera=\(\)/);
 
@@ -117,6 +132,7 @@ test('API protects manager data, project directory and account sessions', async 
     const response = await request(baseUrl, privatePath, { cookie: workerLogin.cookie });
     assert.equal(response.status, 403, privatePath);
   }
+  assert.equal((await request(baseUrl, '/api/security/events', { cookie: workerLogin.cookie })).status, 403);
 
   const managerLogin = await login(baseUrl, 'security-manager', 'manager-password');
   assert.equal(managerLogin.response.status, 200);
@@ -161,6 +177,58 @@ test('API protects manager data, project directory and account sessions', async 
   const duplicateError = await duplicate.json();
   assert.equal(duplicateError.error, 'Taki rekord już istnieje');
   assert.doesNotMatch(JSON.stringify(duplicateError), /UNIQUE|users\.username/i);
+});
+
+test('MFA protects logins, consumes recovery codes and records security events', async t => {
+  const { baseUrl } = await startApplication(t);
+  const initial = await login(baseUrl, 'security-admin', 'security-test-password');
+  assert.equal(initial.response.status, 200);
+
+  const setupResponse = await request(baseUrl, '/api/account/mfa/setup', {
+    cookie: initial.cookie, method: 'POST', body: { current_password: 'security-test-password' }
+  });
+  assert.equal(setupResponse.status, 200);
+  const setup = await setupResponse.json();
+  assert.match(setup.secret, /^[A-Z2-7]{32}$/);
+
+  const enableResponse = await request(baseUrl, '/api/account/mfa/enable', {
+    cookie: initial.cookie, method: 'POST', body: { code: totp(setup.secret) }
+  });
+  assert.equal(enableResponse.status, 200);
+  const enabled = await enableResponse.json();
+  assert.equal(enabled.recovery_codes.length, 10);
+
+  const security = await (await request(baseUrl, '/api/account/security', { cookie: initial.cookie })).json();
+  assert.equal(security.mfa_enabled, true);
+  assert.equal(security.recovery_codes_remaining, 10);
+  await request(baseUrl, '/api/logout', { cookie: initial.cookie, method: 'POST', body: {} });
+
+  const passwordStep = await login(baseUrl, 'security-admin', 'security-test-password');
+  assert.equal(passwordStep.response.status, 202);
+  assert.equal(passwordStep.cookie, '');
+  assert.equal(passwordStep.data.mfa_required, true);
+  const mfaResponse = await request(baseUrl, '/api/login/mfa', {
+    method: 'POST', body: { challenge_token: passwordStep.data.challenge_token, code: totp(setup.secret) }
+  });
+  assert.equal(mfaResponse.status, 200);
+  const mfaCookie = String(mfaResponse.headers.get('set-cookie') || '').split(';')[0];
+  assert.ok(mfaCookie);
+
+  await request(baseUrl, '/api/logout', { cookie: mfaCookie, method: 'POST', body: {} });
+  const recoveryPasswordStep = await login(baseUrl, 'security-admin', 'security-test-password');
+  const recoveryResponse = await request(baseUrl, '/api/login/mfa', {
+    method: 'POST', body: { challenge_token: recoveryPasswordStep.data.challenge_token, code: enabled.recovery_codes[0] }
+  });
+  assert.equal(recoveryResponse.status, 200);
+  const recoveryCookie = String(recoveryResponse.headers.get('set-cookie') || '').split(';')[0];
+  const afterRecovery = await (await request(baseUrl, '/api/account/security', { cookie: recoveryCookie })).json();
+  assert.equal(afterRecovery.recovery_codes_remaining, 9);
+
+  const eventsResponse = await request(baseUrl, '/api/security/events', { cookie: recoveryCookie });
+  assert.equal(eventsResponse.status, 200);
+  const events = await eventsResponse.json();
+  assert.ok(events.some(event => event.event_type === 'mfa_enabled' && event.outcome === 'success'));
+  assert.ok(events.some(event => event.event_type === 'login' && event.details.mfa === true));
 });
 
 test('login throttling blocks repeated password guessing', async t => {
