@@ -2,12 +2,7 @@ FROM public.ecr.aws/docker/library/node:24-alpine
 
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN --mount=type=secret,id=proxy_ca \
-    if [ -f /run/secrets/proxy_ca ]; then \
-      NODE_EXTRA_CA_CERTS=/run/secrets/proxy_ca npm ci --omit=dev --no-audit --no-fund; \
-    else \
-      npm ci --omit=dev --no-audit --no-fund; \
-    fi
+RUN npm ci --omit=dev --no-audit --no-fund
 COPY server.js database.js demo-data.js schema.sql exports.js xlsx.js ./
 COPY public ./public
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
