@@ -785,7 +785,7 @@ test('V11 supports assignment visibility and manual working-time balance overrid
   }
 });
 
-test('V12 supports operational views, dependencies, handovers, automation and commissioning templates', () => {
+test('operational views support dependencies, handovers and automation', () => {
   const temporary = temporaryDatabase();
   const repository = openDatabase(temporary.path);
   try {
@@ -825,18 +825,9 @@ test('V12 supports operational views, dependencies, handovers, automation and co
       assert.ok(repository.runAutomations(admin).executed >= 1);
       assert.ok(repository.notifications(worker, 200).some(item => item.kind === 'automation'));
 
-      const source = repository.config().function_groups.find(item => item.check_count > 0);
-      assert.ok(source);
-      const template = repository.saveCommissioningTemplate(null, { name: 'V12 Standard stacji', description: 'Pełny pakiet prób', source_function_group_id: source.id }, admin);
-      assert.ok(template.check_count > 0);
-      const target = repository.controllers().find(item => item.code !== source.controller) || repository.controllers()[0];
-      const applied = repository.applyCommissioningTemplate(template.id, { controller: target.code, group_name: `V12 ${source.name}` }, admin);
-      assert.equal(applied.checks_created, template.check_count);
-      assert.ok(applied.statuses_created >= template.check_count);
-
       const backup = repository.projectBackup();
       assert.equal(backup.version, 1);
-      for (const table of ['saved_views', 'task_dependencies', 'entity_dependencies', 'shift_handovers', 'automation_rules', 'commissioning_templates']) assert.ok(Array.isArray(backup.tables[table]));
+      for (const table of ['saved_views', 'task_dependencies', 'entity_dependencies', 'shift_handovers', 'automation_rules']) assert.ok(Array.isArray(backup.tables[table]));
     });
   } finally {
     repository.close();
@@ -901,7 +892,7 @@ test('dependency queue spans tasks, status and open points and rejects cross-mod
   }
 });
 
-test('V13 supports status handovers, campaigns, readiness gates, DoD approval, meetings, risk and knowledge', () => {
+test('status handovers support DoD approval, meetings, risk and knowledge', () => {
   const temporary = temporaryDatabase();
   const repository = openDatabase(temporary.path);
   try {
@@ -943,21 +934,10 @@ test('V13 supports status handovers, campaigns, readiness gates, DoD approval, m
       assert.equal(note.sections[0].links[0].entity_id, task.id);
       assert.equal(repository.notes(`group:${root.id}`, '2026-10-09', '2026-10-09', admin).some(item => item.id === note.id), true);
 
-      const campaignStatuses = repository.status('all', admin).slice(0, 2);
-      let campaign = repository.saveTestCampaign(null, {
-        name: 'V13 Próby funkcjonalne', scope_type: 'project', status_item_ids: campaignStatuses.map(item => item.id), owner_user_id: workerRecord.id
+      const riskPoint = repository.savePoint(null, {
+        controller: controller.code, title: 'V13 Krytyczny punkt ryzyka', description: 'Brak komunikacji Profinet',
+        status: 'Open', priority: 'Critical', owner_user_id: workerRecord.id, due_date: '2020-01-01'
       }, admin);
-      campaign = repository.updateTestCampaignItem(campaign.id, campaign.items[0].id, { result: 'fail', note: 'Brak komunikacji Profinet' }, workerRecord);
-      assert.ok(campaign.items[0].created_point_id);
-      campaign = repository.updateTestCampaignItem(campaign.id, campaign.items[1].id, { result: 'pass', evidence_link: 'https://example.test/pass' }, workerRecord);
-      assert.equal(campaign.status, 'completed');
-      assert.equal(repository.points('all', admin).some(item => item.id === campaign.items[0].created_point_id), true);
-
-      let gate = repository.saveReadinessGate(null, { name: 'V13 Gotowość odbiorowa', scope_type: 'project', criteria: { max_blockers: 9999 } }, admin);
-      assert.equal(gate.ready, true);
-      gate = repository.actionReadinessGate(gate.id, { action: 'approve' }, manager);
-      assert.equal(gate.status, 'approved');
-      assert.equal(gate.approved_by, manager.id);
 
       const meeting = repository.saveProjectMeeting(null, {
         meeting_date: '2026-10-09', title: 'V13 Odprawa projektowa', summary: 'Ustalono kolejność retestów.',
@@ -976,7 +956,7 @@ test('V13 supports status handovers, campaigns, readiness gates, DoD approval, m
       }, admin);
       assert.ok(article.id);
       assert.ok(repository.similarKnowledge('task', task.id, admin).some(item => item.id === article.id && item.similarity > 0));
-      assert.ok(repository.operations(admin).risk_radar.some(item => item.entity_type === 'point' && item.entity_id === campaign.items[0].created_point_id));
+      assert.ok(repository.operations(admin).risk_radar.some(item => item.entity_type === 'point' && item.entity_id === riskPoint.id));
 
       repository.savePlannerDay({ user_id: workerRecord.id, plan_date: '2026-10-12', absence_type: 'vacation', absence_note: 'Urlop V13' }, admin);
       repository.movePlannerDay({ source_user_id: workerRecord.id, source_date: '2026-10-12', target_user_id: workerRecord.id, target_date: '2026-10-13', copy: 1 }, admin);
@@ -985,13 +965,11 @@ test('V13 supports status handovers, campaigns, readiness gates, DoD approval, m
 
       const backup = repository.projectBackup();
       assert.equal(backup.version, 1);
-      for (const table of ['daily_note_sections', 'test_campaigns', 'readiness_gates', 'project_meetings', 'external_dependencies', 'knowledge_articles', 'entity_requirement_status']) assert.ok(Array.isArray(backup.tables[table]));
+      for (const table of ['daily_note_sections', 'project_meetings', 'external_dependencies', 'knowledge_articles', 'entity_requirement_status']) assert.ok(Array.isArray(backup.tables[table]));
       const taskCount = repository.tasks('all', admin).length;
       repository.saveTask(null, { controller: controller.code, title: 'Tymczasowy rekord V13' }, admin);
       repository.restoreProjectBackup(backup);
       assert.equal(repository.tasks('all', admin).length, taskCount);
-      assert.equal(repository.commissioning(admin).campaigns.some(item => item.id === campaign.id), true);
-      assert.equal(repository.commissioning(admin).gates.some(item => item.id === gate.id), true);
       assert.equal(repository.operations(admin).meetings.some(item => item.id === meeting.id), true);
       assert.equal(repository.similarKnowledge('task', task.id, admin).some(item => item.id === article.id), true);
     });
@@ -1162,24 +1140,59 @@ test('edit locks, hierarchical requirements and the refined status workflow are 
   }
 });
 
+test('retired commissioning module is removed from existing databases', () => {
+  const temporary = temporaryDatabase();
+  const initial = openDatabase(temporary.path);
+  initial.close();
+  const legacy = new DatabaseSync(temporary.path);
+  legacy.exec(`
+    CREATE TABLE commissioning_templates(id INTEGER PRIMARY KEY);
+    CREATE TABLE test_campaigns(id INTEGER PRIMARY KEY);
+    CREATE TABLE test_campaign_items(id INTEGER PRIMARY KEY);
+    CREATE TABLE readiness_gates(id INTEGER PRIMARY KEY);
+  `);
+  legacy.close();
+
+  const repository = openDatabase(temporary.path);
+  try {
+    assert.equal(repository.commissioning, undefined);
+    assert.equal(repository.saveTestCampaign, undefined);
+    assert.equal(repository.saveReadinessGate, undefined);
+    assert.equal(repository.saveCommissioningTemplate, undefined);
+    const backupTables = repository.projectBackup().tables;
+    for (const table of ['commissioning_templates', 'test_campaigns', 'test_campaign_items', 'readiness_gates']) assert.equal(Object.hasOwn(backupTables, table), false);
+  } finally {
+    repository.close();
+  }
+
+  const database = new DatabaseSync(temporary.path);
+  try {
+    const removedTables = database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('commissioning_templates','test_campaigns','test_campaign_items','readiness_gates')").all();
+    assert.deepEqual(removedTables, []);
+  } finally {
+    database.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
 test('project-scoped generic updates cannot move records between projects', () => {
   const temporary = temporaryDatabase();
   const repository = openDatabase(temporary.path);
   try {
     const account = repository.authenticate('admin');
     const firstProjectAdmin = repository.me(account.id, 1);
-    let gate;
+    let meeting;
     repository.withProject(1, () => {
-      gate = repository.saveReadinessGate(null, { name: 'Brama projektu źródłowego', scope_type: 'project', criteria: { max_blockers: 9999 } }, firstProjectAdmin);
+      meeting = repository.saveProjectMeeting(null, { meeting_date: '2026-10-14', title: 'Odprawa projektu źródłowego', items: [] }, firstProjectAdmin);
     });
     const secondProject = repository.availableProjects(account.id).find(project => project.id !== 1);
     assert.ok(secondProject);
     repository.withProject(secondProject.id, () => {
       const secondProjectAdmin = repository.me(account.id, secondProject.id);
-      assert.throws(() => repository.saveReadinessGate(gate.id, { name: 'Próba przejęcia rekordu', scope_type: 'project', criteria: { max_blockers: 9999 } }, secondProjectAdmin), /Nie znaleziono rekordu/);
+      assert.throws(() => repository.saveProjectMeeting(meeting.id, { meeting_date: '2026-10-14', title: 'Próba przejęcia rekordu', items: [] }, secondProjectAdmin), /Nie znaleziono rekordu/);
     });
     repository.withProject(1, () => {
-      assert.equal(repository.commissioning(firstProjectAdmin).gates.find(item => item.id === gate.id)?.name, 'Brama projektu źródłowego');
+      assert.equal(repository.operations(firstProjectAdmin).meetings.find(item => item.id === meeting.id)?.title, 'Odprawa projektu źródłowego');
     });
   } finally {
     repository.close();

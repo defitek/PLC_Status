@@ -89,6 +89,7 @@ export function openDatabase(databasePath) {
   migrateStatusWorkflow(db);
   migrateEntityDependencies(db);
   migrateGlobalPlannerData(db);
+  removeCommissioningModule(db);
   syncProjectMemberships(db);
   removeEmptyDuplicateControllerRoots(db);
   backfillV3(db);
@@ -115,6 +116,30 @@ function migrateEntityDependencies(db) {
   db.exec(`INSERT OR IGNORE INTO entity_dependencies(
     project_id,dependent_type,dependent_id,prerequisite_type,prerequisite_id,created_by,created_at
   ) SELECT project_id,'task',task_id,'task',prerequisite_task_id,created_by,created_at FROM task_dependencies`);
+}
+
+function removeCommissioningModule(db) {
+  const affectedReviews = db.prepare("SELECT DISTINCT review_id FROM monthly_employee_review_items WHERE entity_type='campaign'").all();
+  db.prepare("DELETE FROM monthly_employee_review_items WHERE entity_type='campaign'").run();
+  for (const { review_id: reviewId } of affectedReviews) {
+    const review = db.prepare('SELECT * FROM monthly_employee_reviews WHERE id=?').get(reviewId);
+    if (!review) continue;
+    const items = db.prepare('SELECT * FROM monthly_employee_review_items WHERE review_id=? AND excluded=0').all(reviewId);
+    const weight = items.reduce((sum, item) => sum + Number(item.contribution_share || 0), 0);
+    const itemScore = weight ? items.reduce((sum, item) => sum + ((Number(item.difficulty) + Number(item.effort) + Number(item.impact) + Number(item.quality)) / 4) * Number(item.contribution_share || 0), 0) / weight * 20 : 0;
+    const dimensionScore = ['delivery_score', 'quality_score', 'timeliness_score', 'communication_score', 'collaboration_score'].reduce((sum, key) => sum + Number(review[key] || 0), 0) / 5 * 20;
+    const itemWeight = Number(db.prepare("SELECT value FROM settings WHERE project_id=? AND key='employee_review_item_weight'").get(review.project_id)?.value || 60);
+    const dimensionWeight = Number(db.prepare("SELECT value FROM settings WHERE project_id=? AND key='employee_review_dimension_weight'").get(review.project_id)?.value || 40);
+    const denominator = (items.length ? itemWeight : 0) + dimensionWeight;
+    const overall = denominator ? ((items.length ? itemScore * itemWeight : 0) + dimensionScore * dimensionWeight) / denominator : 0;
+    db.prepare('UPDATE monthly_employee_reviews SET overall_score=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(Math.round(overall * 10) / 10, reviewId);
+  }
+  db.exec(`
+    DROP TABLE IF EXISTS test_campaign_items;
+    DROP TABLE IF EXISTS test_campaigns;
+    DROP TABLE IF EXISTS readiness_gates;
+    DROP TABLE IF EXISTS commissioning_templates;
+  `);
 }
 
 function migrateStatusWorkflow(db) {
@@ -504,16 +529,6 @@ function migrateToV13(db) {
     db.prepare("INSERT INTO app_meta(key,value) VALUES('v13_handover_to_notes','1') ON CONFLICT(key) DO UPDATE SET value='1'").run();
   }
 
-  const insertGate = db.prepare(`INSERT INTO readiness_gates(project_id,name,stage_order,scope_type,scope_id,criteria_json,status)
-    SELECT ?,?,?,?,?,?,'open' WHERE NOT EXISTS(SELECT 1 FROM readiness_gates WHERE project_id=? AND name=?)`);
-  for (const project of db.prepare('SELECT id FROM projects').all()) {
-    const defaults = [
-      ['Hardware Ready', 10, { status_progress: 80, tasks_progress: 60, max_blockers: 0 }],
-      ['Automatic Mode Ready', 20, { status_progress: 90, tasks_progress: 80, points_progress: 70, max_blockers: 0 }],
-      ['Production Ready', 30, { status_progress: 100, tasks_progress: 100, points_progress: 100, goals_progress: 100, max_blockers: 0 }]
-    ];
-    for (const [name, order, criteria] of defaults) insertGate.run(project.id, name, order, 'project', 0, JSON.stringify(criteria), project.id, name);
-  }
 }
 
 function migrateToV14(db) {
@@ -2060,9 +2075,8 @@ function createRepository(db, defaultProjectId) {
     ['announcement_reads', 'announcement_id IN (SELECT id FROM announcements WHERE project_id=?)'],
     ['shift_handovers', 'project_id=?'], ['shift_handover_items', 'handover_id IN (SELECT id FROM shift_handovers WHERE project_id=?)'],
     ['automation_rules', 'project_id=?'], ['automation_rule_hits', 'rule_id IN (SELECT id FROM automation_rules WHERE project_id=?)'],
-    ['commissioning_templates', 'project_id=?'], ['saved_views', 'project_id=?'],
-    ['test_campaigns', 'project_id=?'], ['test_campaign_items', 'campaign_id IN (SELECT id FROM test_campaigns WHERE project_id=?)'],
-    ['readiness_gates', 'project_id=?'], ['project_meetings', 'project_id=?'], ['project_meeting_items', 'meeting_id IN (SELECT id FROM project_meetings WHERE project_id=?)'],
+    ['saved_views', 'project_id=?'],
+    ['project_meetings', 'project_id=?'], ['project_meeting_items', 'meeting_id IN (SELECT id FROM project_meetings WHERE project_id=?)'],
     ['external_dependencies', 'project_id=?'], ['knowledge_articles', 'project_id=?'],
     ['monthly_employee_reviews', 'project_id=?'], ['monthly_employee_review_items', 'project_id=?'],
     ['monthly_employee_review_audit', 'review_id IN (SELECT id FROM monthly_employee_reviews WHERE project_id=?)'],
@@ -2076,8 +2090,8 @@ function createRepository(db, defaultProjectId) {
     'daily_notes', 'daily_note_sections', 'daily_note_section_scopes', 'daily_note_section_links', 'goals', 'goal_links', 'entity_mentions', 'entity_links', 'entity_requirements', 'entity_requirement_status', 'entity_edit_locks', 'entity_comments', 'notifications', 'audit_log',
     'export_templates', 'project_sequences', 'project_user_areas', 'planner_entries', 'planner_requirements', 'planner_holidays', 'planner_absences', 'planner_time_adjustments',
     'announcements', 'announcement_labels', 'announcement_scopes', 'announcement_users', 'announcement_links', 'announcement_label_links', 'announcement_reads', 'calendar_annotations', 'calendar_item_dates',
-    'shift_handovers', 'shift_handover_items', 'automation_rules', 'automation_rule_hits', 'commissioning_templates', 'saved_views',
-    'test_campaigns', 'test_campaign_items', 'readiness_gates', 'project_meetings', 'project_meeting_items', 'external_dependencies', 'knowledge_articles',
+    'shift_handovers', 'shift_handover_items', 'automation_rules', 'automation_rule_hits', 'saved_views',
+    'project_meetings', 'project_meeting_items', 'external_dependencies', 'knowledge_articles',
     'monthly_employee_reviews', 'monthly_employee_review_items', 'monthly_employee_review_audit'
   ];
 
@@ -2096,7 +2110,7 @@ function createRepository(db, defaultProjectId) {
 
   function insertBackupRows(table, rows, projectId) {
     if (!Array.isArray(rows)) return;
-    let orderedRows = rows;
+    let orderedRows = table === 'monthly_employee_review_items' ? rows.filter(row => row.entity_type !== 'campaign') : rows;
     if (table === 'controller_groups') {
       const remaining = [...rows];
       const inserted = new Set();
@@ -3341,145 +3355,6 @@ function createRepository(db, defaultProjectId) {
     };
   }
 
-  function testCampaignRows(currentUser) {
-    const statusMap = new Map(statusRows('all', currentUser).map(item => [item.id, item]));
-    return all(`SELECT tc.*,owner.display_name owner_name,creator.display_name created_by_name
-      FROM test_campaigns tc LEFT JOIN users owner ON owner.id=tc.owner_user_id LEFT JOIN users creator ON creator.id=tc.created_by
-      WHERE tc.project_id=? ORDER BY tc.planned_start IS NULL,tc.planned_start,tc.id DESC`, activeProjectId()).map(campaign => {
-      const items = all(`SELECT tci.*,tester.display_name tested_by_name FROM test_campaign_items tci LEFT JOIN users tester ON tester.id=tci.tested_by
-        WHERE tci.campaign_id=? ORDER BY tci.sort_order,tci.id`, campaign.id).map(item => {
-        const statusItem = statusMap.get(Number(item.status_item_id));
-        return { ...item, title: statusItem?.function_detail || 'Usunięty punkt statusu', status_label: statusItem?.status || '', scope_label: statusItem ? operationScope(statusItem) : '', category: statusItem?.category || '', subcategory: statusItem?.subcategory || '' };
-      });
-      const counts = Object.fromEntries(['pending', 'pass', 'fail', 'skipped'].map(value => [value, items.filter(item => item.result === value).length]));
-      const completed = counts.pass + counts.fail + counts.skipped;
-      return { ...campaign, scope_label: scopeDescription(campaign.scope_type, campaign.scope_id), items, counts, progress: items.length ? Math.round(completed * 100 / items.length) : 0 };
-    });
-  }
-
-  function saveTestCampaign(id, input, currentUser) {
-    const name = clean(input.name);
-    if (!name) throw appError('Nazwa sesji testowej jest wymagana');
-    const scopeType = ['project', 'group', 'controller'].includes(clean(input.scope_type)) ? clean(input.scope_type) : 'project';
-    const scopeId = scopeType === 'project' ? 0 : asId(input.scope_id);
-    const controllerIds = scopeControllerIds(scopeType, scopeId);
-    const requested = [...new Set((Array.isArray(input.status_item_ids) ? input.status_item_ids : []).map(asId).filter(Boolean))];
-    const candidates = controllerIds.length ? all(`SELECT id FROM status_items WHERE project_id=? AND controller_id IN (${controllerIds.map(() => '?').join(',')}) ORDER BY id`, activeProjectId(), ...controllerIds).map(item => item.id) : [];
-    const candidateSet = new Set(candidates);
-    const itemIds = requested.length ? requested : candidates;
-    if (!itemIds.length) throw appError('Zakres sesji nie zawiera punktów statusu');
-    if (itemIds.some(itemId => !candidateSet.has(itemId))) throw appError('Co najmniej jeden wybrany test jest poza zakresem sesji');
-    const values = {
-      project_id: activeProjectId(), name, campaign_type: clean(input.campaign_type) || 'Functional test', model: clean(input.model),
-      shift: clean(input.shift) || 'Dzień', scope_type: scopeType, scope_id: scopeId || 0, planned_start: nullableDate(input.planned_start),
-      planned_end: nullableDate(input.planned_end), status: ['planned', 'active', 'completed', 'cancelled'].includes(clean(input.status)) ? clean(input.status) : 'planned',
-      description: clean(input.description), owner_user_id: asId(input.owner_user_id)
-    };
-    let recordId = asId(id);
-    db.exec('BEGIN IMMEDIATE');
-    try {
-      if (recordId) updateRecord('test_campaigns', recordId, values, Object.keys(values));
-      else recordId = insertRecord('test_campaigns', { ...values, created_by: currentUser.id });
-      if (!one('SELECT 1 FROM test_campaigns WHERE id=? AND project_id=?', recordId, activeProjectId())) throw appError('Nie znaleziono sesji testowej', 404);
-      db.prepare(`DELETE FROM test_campaign_items WHERE campaign_id=? AND status_item_id NOT IN (${itemIds.map(() => '?').join(',')})`).run(recordId, ...itemIds);
-      const insert = db.prepare('INSERT OR IGNORE INTO test_campaign_items(campaign_id,status_item_id,sort_order) VALUES(?,?,?)');
-      itemIds.forEach((statusId, index) => insert.run(recordId, statusId, index));
-      db.exec('COMMIT');
-    } catch (error) { db.exec('ROLLBACK'); throw error; }
-    return testCampaignRows(currentUser).find(item => item.id === recordId);
-  }
-
-  function updateTestCampaignItem(campaignId, itemId, input, currentUser) {
-    const row = one(`SELECT tci.*,tc.project_id,tc.owner_user_id FROM test_campaign_items tci JOIN test_campaigns tc ON tc.id=tci.campaign_id
-      WHERE tci.id=? AND tci.campaign_id=? AND tc.project_id=?`, asId(itemId), asId(campaignId), activeProjectId());
-    if (!row) throw appError('Nie znaleziono testu w sesji', 404);
-    const result = ['pending', 'pass', 'fail', 'skipped'].includes(clean(input.result)) ? clean(input.result) : 'pending';
-    const retest = row.result === 'fail' && result !== 'fail' && result !== 'pending' ? Number(row.retest_number || 0) + 1 : Number(row.retest_number || 0);
-    db.prepare(`UPDATE test_campaign_items SET result=?,note=?,evidence_link=?,retest_number=?,tested_by=?,tested_at=? WHERE id=?`)
-      .run(result, clean(input.note), clean(input.evidence_link), retest, result === 'pending' ? null : currentUser.id, result === 'pending' ? null : new Date().toISOString(), row.id);
-    const statusItem = one('SELECT * FROM status_items WHERE id=? AND project_id=?', row.status_item_id, activeProjectId());
-    if (statusItem && result === 'pass' && statusItem.status !== 'Done') {
-      const before = baseSnapshot('status', statusItem.id);
-      db.prepare("UPDATE status_items SET status='Done',checked_by=?,checked_on=date('now'),updated_at=CURRENT_TIMESTAMP WHERE id=?").run(currentUser.display_name, statusItem.id);
-      writeAudit('status', statusItem.id, 'update', currentUser, before, baseSnapshot('status', statusItem.id));
-    }
-    if (statusItem && result === 'fail' && !row.created_point_id) {
-      const due = new Date(); due.setUTCDate(due.getUTCDate() + 2);
-      const pointId = insertRecord('open_points', {
-        project_id: activeProjectId(), controller_id: statusItem.controller_id, issue_id: nextProjectIdentifier('point', 'OP', 'open_points', 'issue_id'),
-        title: `Test FAIL · ${statusItem.function_detail}`, description: clean(input.note) || 'Punkt utworzony automatycznie z nieudanego testu.', impact: 'Blokada sesji testowej',
-        priority: ['Critical', 'High'].includes(statusItem.criticality) ? statusItem.criticality : 'High', owner: userName(row.owner_user_id), owner_user_id: row.owner_user_id,
-        status: 'Open', waiting_for: '', next_action: 'Usunąć przyczynę i wykonać retest', start_date: new Date().toISOString().slice(0, 10), due_date: due.toISOString().slice(0, 10),
-        reminder_date: due.toISOString().slice(0, 10), category: statusItem.category || '', subcategory: statusItem.subcategory || '', info_link: clean(input.evidence_link), linked_entity_type: '', linked_entity_id: null, created_by: currentUser.id
-      });
-      setEntityLinks('point', pointId, [{ entity_type: 'status', entity_id: statusItem.id }], currentUser);
-      db.prepare('UPDATE test_campaign_items SET created_point_id=? WHERE id=?').run(pointId, row.id);
-      writeAudit('point', pointId, 'create', currentUser, null, baseSnapshot('point', pointId));
-    }
-    const remaining = Number(one("SELECT COUNT(*) count FROM test_campaign_items WHERE campaign_id=? AND result='pending'", row.campaign_id)?.count || 0);
-    db.prepare("UPDATE test_campaigns SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(remaining ? 'active' : 'completed', row.campaign_id);
-    return testCampaignRows(currentUser).find(item => item.id === Number(campaignId));
-  }
-
-  function deleteTestCampaign(id) {
-    const result = db.prepare('DELETE FROM test_campaigns WHERE id=? AND project_id=?').run(asId(id), activeProjectId());
-    if (!result.changes) throw appError('Nie znaleziono sesji testowej', 404);
-  }
-
-  function readinessGateRows(currentUser) {
-    return all(`SELECT rg.*,owner.display_name owner_name,approved.display_name approved_by_name,creator.display_name created_by_name
-      FROM readiness_gates rg LEFT JOIN users owner ON owner.id=rg.owner_user_id LEFT JOIN users approved ON approved.id=rg.approved_by
-      LEFT JOIN users creator ON creator.id=rg.created_by WHERE rg.project_id=? ORDER BY rg.stage_order,rg.id`, activeProjectId()).map(gate => {
-      const metrics = dashboardForControllers(scopeControllerIds(gate.scope_type, gate.scope_id));
-      const criteria = parseJson(gate.criteria_json, {});
-      const checks = [
-        ['status_progress', 'Status', metrics.status.progress, value => value >= Number(criteria.status_progress)],
-        ['tasks_progress', 'Zadania', metrics.tasks.progress, value => value >= Number(criteria.tasks_progress)],
-        ['points_progress', 'Otwarte punkty', metrics.points.progress, value => value >= Number(criteria.points_progress)],
-        ['goals_progress', 'Cele', metrics.goals.progress, value => value >= Number(criteria.goals_progress)],
-        ['max_blockers', 'Blokady', metrics.status.blocked + metrics.tasks.blocked + metrics.points.blocked + metrics.goals.blocked, value => value <= Number(criteria.max_blockers)]
-      ].filter(([key]) => criteria[key] !== undefined).map(([key, label, actual, test]) => ({ key, label, actual, target: Number(criteria[key]), passed: test(actual) }));
-      const ready = checks.length > 0 && checks.every(item => item.passed);
-      return { ...gate, criteria, checks, metrics, ready, calculated_status: ['approved', 'overridden'].includes(gate.status) ? gate.status : ready ? 'ready' : 'open', scope_label: scopeDescription(gate.scope_type, gate.scope_id) };
-    });
-  }
-
-  function saveReadinessGate(id, input, currentUser) {
-    const name = clean(input.name); if (!name) throw appError('Nazwa bramy gotowości jest wymagana');
-    const scopeType = ['project', 'group', 'controller'].includes(clean(input.scope_type)) ? clean(input.scope_type) : 'project';
-    const scopeId = scopeType === 'project' ? 0 : asId(input.scope_id); scopeControllerIds(scopeType, scopeId);
-    const criteriaInput = input.criteria && typeof input.criteria === 'object' ? input.criteria : {};
-    const criteria = {};
-    for (const key of ['status_progress', 'tasks_progress', 'points_progress', 'goals_progress', 'max_blockers']) if (criteriaInput[key] !== '' && criteriaInput[key] !== undefined && Number.isFinite(Number(criteriaInput[key]))) criteria[key] = Math.max(0, Math.min(key === 'max_blockers' ? 9999 : 100, Number(criteriaInput[key])));
-    if (!Object.keys(criteria).length) throw appError('Zdefiniuj co najmniej jedno kryterium bramy');
-    const values = { project_id: activeProjectId(), name, stage_order: Number(input.stage_order || 0), scope_type: scopeType, scope_id: scopeId || 0, criteria_json: JSON.stringify(criteria), owner_user_id: asId(input.owner_user_id), status: 'open', approved_by: null, approved_at: null, override_reason: '' };
-    let recordId = asId(id);
-    if (recordId) updateRecord('readiness_gates', recordId, values, Object.keys(values));
-    else recordId = insertRecord('readiness_gates', { ...values, created_by: currentUser.id });
-    return readinessGateRows(currentUser).find(item => item.id === recordId);
-  }
-
-  function actionReadinessGate(id, input, currentUser) {
-    const gate = readinessGateRows(currentUser).find(item => item.id === asId(id));
-    if (!gate) throw appError('Nie znaleziono bramy gotowości', 404);
-    const action = clean(input.action);
-    if (action === 'approve') {
-      if (!gate.ready) throw appError('Nie wszystkie kryteria bramy są spełnione');
-      if (Number(gate.created_by) === Number(currentUser.id)) throw appError('Bramę musi zatwierdzić druga osoba');
-      db.prepare("UPDATE readiness_gates SET status='approved',approved_by=?,approved_at=CURRENT_TIMESTAMP,override_reason='',updated_at=CURRENT_TIMESTAMP WHERE id=?").run(currentUser.id, gate.id);
-    } else if (action === 'override') {
-      const reason = clean(input.reason); if (!reason) throw appError('Podaj powód świadomego obejścia bramy');
-      db.prepare("UPDATE readiness_gates SET status='overridden',approved_by=?,approved_at=CURRENT_TIMESTAMP,override_reason=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(currentUser.id, reason, gate.id);
-    } else if (action === 'reopen') db.prepare("UPDATE readiness_gates SET status='open',approved_by=NULL,approved_at=NULL,override_reason='',updated_at=CURRENT_TIMESTAMP WHERE id=?").run(gate.id);
-    else throw appError('Nieznana akcja bramy');
-    return readinessGateRows(currentUser).find(item => item.id === gate.id);
-  }
-
-  function deleteReadinessGate(id) {
-    const result = db.prepare('DELETE FROM readiness_gates WHERE id=? AND project_id=?').run(asId(id), activeProjectId());
-    if (!result.changes) throw appError('Nie znaleziono bramy gotowości', 404);
-  }
-
   function projectMeetingRows(currentUser) {
     return all(`SELECT pm.*,creator.display_name created_by_name,closer.display_name closed_by_name FROM project_meetings pm
       LEFT JOIN users creator ON creator.id=pm.created_by LEFT JOIN users closer ON closer.id=pm.closed_by
@@ -3592,7 +3467,6 @@ function createRepository(db, defaultProjectId) {
       external_dependencies: externalDependencyRows(currentUser),
       knowledge: knowledgeRows(),
       automation_rules: automationRuleRows(),
-      commissioning_templates: commissioningTemplateRows(),
       can_coordinate: ['system_admin', 'project_admin', 'moderator'].includes(currentUser.role)
     };
   }
@@ -3776,135 +3650,6 @@ function createRepository(db, defaultProjectId) {
     return { executed };
   }
 
-  function commissioningTemplateRows() {
-    return all(`SELECT ct.*,u.display_name created_by_name FROM commissioning_templates ct
-      LEFT JOIN users u ON u.id=ct.created_by WHERE ct.project_id=? ORDER BY ct.active DESC,ct.name`, activeProjectId()).map(row => {
-      const template = parseJson(row.template_json, { elements: [], group_subcategories: [], checks: [] });
-      return {
-        ...row,
-        template,
-        element_count: Array.isArray(template.elements) ? template.elements.length : 0,
-        group_subcategory_count: Array.isArray(template.group_subcategories) ? template.group_subcategories.length : 0,
-        check_count: Array.isArray(template.checks) ? template.checks.length : 0
-      };
-    });
-  }
-
-  function captureCommissioningTemplate(functionGroupId) {
-    const group = functionGroup(functionGroupId);
-    const elements = all('SELECT id,name,description FROM function_group_elements WHERE function_group_id=? AND active=1 ORDER BY sort_order,name', group.id);
-    const elementNames = new Map(elements.map(item => [item.id, item.name]));
-    const groupSubcategories = all('SELECT id,name,description FROM function_group_subcategories WHERE function_group_id=? AND active=1 ORDER BY sort_order,name', group.id);
-    const groupSubcategoryNames = new Map(groupSubcategories.map(item => [item.id, item.name]));
-    const checks = all('SELECT * FROM function_group_checks WHERE function_group_id=? AND active=1 ORDER BY sort_order,title', group.id).map(check => ({
-      title: check.title,
-      category: check.category,
-      criticality: check.criticality,
-      element_name: elementNames.get(Number(check.element_id)) || '',
-      group_subcategory_name: groupSubcategoryNames.get(Number(check.group_subcategory_id)) || '',
-      subcategory_names: all(`SELECT s.name FROM function_group_check_subcategories fgcs
-        JOIN subcategories s ON s.id=fgcs.subcategory_id WHERE fgcs.check_id=? ORDER BY s.sort_order,s.name`, check.id).map(item => item.name)
-    }));
-    return {
-      source: { function_group_id: group.id, controller: group.controller, name: group.name },
-      elements: elements.map(({ name, description }) => ({ name, description })),
-      group_subcategories: groupSubcategories.map(({ name, description }) => ({ name, description })),
-      checks
-    };
-  }
-
-  function saveCommissioningTemplate(id, input, currentUser) {
-    const name = clean(input.name);
-    const description = clean(input.description);
-    if (!name) throw appError('Nazwa szablonu jest wymagana');
-    const existing = id ? one('SELECT * FROM commissioning_templates WHERE id=? AND project_id=?', asId(id), activeProjectId()) : null;
-    if (id && !existing) throw appError('Nie znaleziono szablonu uruchomieniowego', 404);
-    let template;
-    if (asId(input.source_function_group_id)) template = captureCommissioningTemplate(input.source_function_group_id);
-    else if (existing) template = parseJson(existing.template_json, null);
-    if (!template) throw appError('Wybierz grupę funkcyjną, z której ma powstać szablon');
-    if (!Array.isArray(template.checks) || !template.checks.length) throw appError('Grupa źródłowa nie zawiera punktów statusu');
-    const active = Number(input.active ?? existing?.active ?? 1) ? 1 : 0;
-    if (existing) {
-      const result = db.prepare(`UPDATE commissioning_templates SET name=?,description=?,template_json=?,active=?,updated_at=CURRENT_TIMESTAMP
-        WHERE id=? AND project_id=?`).run(name, description, JSON.stringify(template), active, existing.id, activeProjectId());
-      if (!result.changes) throw appError('Nie udało się zaktualizować szablonu');
-    } else {
-      id = insertRecord('commissioning_templates', { project_id: activeProjectId(), name, description, template_json: JSON.stringify(template), active, created_by: currentUser.id });
-    }
-    return commissioningTemplateRows().find(item => item.id === Number(id));
-  }
-
-  function deleteCommissioningTemplate(id) {
-    const result = db.prepare('DELETE FROM commissioning_templates WHERE id=? AND project_id=?').run(asId(id), activeProjectId());
-    if (!result.changes) throw appError('Nie znaleziono szablonu uruchomieniowego', 404);
-  }
-
-  function applyCommissioningTemplate(id, input, currentUser) {
-    const stored = one('SELECT * FROM commissioning_templates WHERE id=? AND project_id=? AND active=1', asId(id), activeProjectId());
-    if (!stored) throw appError('Nie znaleziono aktywnego szablonu uruchomieniowego', 404);
-    const template = parseJson(stored.template_json, null);
-    if (!template || !Array.isArray(template.checks)) throw appError('Szablon ma nieprawidłową strukturę');
-    const targetController = controller(input.controller);
-    const groupName = clean(input.group_name);
-    if (!groupName) throw appError('Nazwa nowej grupy funkcyjnej jest wymagana');
-    if (one('SELECT 1 FROM function_groups WHERE controller_id=? AND name=? COLLATE NOCASE', targetController.id, groupName)) throw appError('Taka grupa funkcyjna już istnieje dla wybranego sterownika');
-    let groupId;
-    let createdStatuses = 0;
-    db.exec('BEGIN IMMEDIATE');
-    try {
-      const nextGroupOrder = one('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM function_groups WHERE controller_id=?', targetController.id).value;
-      groupId = insertRecord('function_groups', { project_id: activeProjectId(), controller_id: targetController.id, name: groupName, sort_order: nextGroupOrder, active: 1 });
-      const elementIds = new Map();
-      (template.elements || []).forEach((item, index) => {
-        const itemName = clean(item.name); if (!itemName) return;
-        const elementId = insertRecord('function_group_elements', { function_group_id: groupId, name: itemName, description: clean(item.description), sort_order: index, active: 1 });
-        elementIds.set(itemName.toLocaleLowerCase('pl'), elementId);
-      });
-      const groupSubcategoryIds = new Map();
-      (template.group_subcategories || []).forEach((item, index) => {
-        const itemName = clean(item.name); if (!itemName) return;
-        const subcategoryId = insertRecord('function_group_subcategories', { function_group_id: groupId, name: itemName, description: clean(item.description), sort_order: index, active: 1 });
-        groupSubcategoryIds.set(itemName.toLocaleLowerCase('pl'), subcategoryId);
-      });
-      for (const [index, source] of template.checks.entries()) {
-        const title = clean(source.title); const categoryName = clean(source.category);
-        const category = one('SELECT * FROM categories WHERE project_id=? AND name=? COLLATE NOCASE AND active=1', activeProjectId(), categoryName);
-        if (!title || !category) throw appError(`Punkt ${index + 1} szablonu ma nieprawidłową nazwę lub kategorię`);
-        const elementId = elementIds.get(clean(source.element_name).toLocaleLowerCase('pl')) || null;
-        const groupSubcategoryId = groupSubcategoryIds.get(clean(source.group_subcategory_name).toLocaleLowerCase('pl')) || null;
-        const requestedNames = [...new Set((Array.isArray(source.subcategory_names) ? source.subcategory_names : []).map(clean).filter(Boolean))];
-        const selectedSubcategories = requestedNames.map(subcategoryName => {
-          const subcategory = one('SELECT * FROM subcategories WHERE category_id=? AND name=? COLLATE NOCASE AND active=1', category.id, subcategoryName);
-          if (!subcategory) throw appError(`W projekcie brakuje podkategorii „${subcategoryName}” dla kategorii „${categoryName}”`);
-          return subcategory;
-        });
-        const checkId = insertRecord('function_group_checks', {
-          function_group_id: groupId, element_id: elementId, group_subcategory_id: groupSubcategoryId,
-          title, category: categoryName, criticality: clean(source.criticality) || 'Medium', sort_order: index, active: 1
-        });
-        const link = db.prepare('INSERT INTO function_group_check_subcategories(check_id,subcategory_id) VALUES(?,?)');
-        selectedSubcategories.forEach(subcategory => link.run(checkId, subcategory.id));
-        const statusSubcategories = selectedSubcategories.length ? selectedSubcategories : [{ id: null, name: '', default_function: '' }];
-        for (const subcategory of statusSubcategories) {
-          const statusId = insertRecord('status_items', {
-            project_id: activeProjectId(), controller_id: targetController.id,
-            test_id: nextProjectIdentifier('status', 'ST', 'status_items', 'test_id'), station: groupName,
-            function_detail: clean(subcategory.default_function) || title, category: categoryName, subcategory: subcategory.name || '',
-            milestone: '', criticality: clean(source.criticality) || 'Medium', responsible: '', responsible_user_id: null,
-            status: 'Ready to test', checked_by: '', checked_on: null, environment: 'Factory', current_note: '', evidence_link: '',
-            function_group_id: groupId, function_group_element_id: elementId, function_group_subcategory_id: groupSubcategoryId,
-            function_group_check_id: checkId, created_by: currentUser.id
-          });
-          writeAudit('status', statusId, 'create', currentUser, null, baseSnapshot('status', statusId));
-          createdStatuses += 1;
-        }
-      }
-      db.exec('COMMIT');
-    } catch (error) { db.exec('ROLLBACK'); throw error; }
-    return { function_group_id: groupId, function_group_name: groupName, controller: targetController.code, checks_created: template.checks.length, statuses_created: createdStatuses };
-  }
-
   function employeeReviewPeriod(value) {
     const period = clean(value);
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) throw appError('Okres oceny musi mieć format RRRR-MM');
@@ -3976,9 +3721,6 @@ function createRepository(db, defaultProjectId) {
       WHERE s.project_id=? AND sa.user_id=? AND s.status IN ('Done','N/A') AND date(s.updated_at) BETWEEN ? AND ? ORDER BY s.updated_at,s.id`, activeProjectId(), userId, period.from, period.to)) add('status', row, row.function_detail, 'Odpowiedzialny za status', row.updated_at, row.controller_id);
     for (const row of all(`SELECT * FROM open_points WHERE project_id=? AND owner_user_id=? AND status='Closed' AND date(updated_at) BETWEEN ? AND ? ORDER BY updated_at,id`, activeProjectId(), userId, period.from, period.to)) add('point', row, row.title, 'Właściciel otwartego punktu', row.updated_at, row.controller_id);
     for (const row of all(`SELECT * FROM daily_notes WHERE project_id=? AND created_by=? AND note_date BETWEEN ? AND ? ORDER BY note_date,id`, activeProjectId(), userId, period.from, period.to)) add('note', row, row.title || row.content.slice(0, 100), 'Autor przekazania statusu', row.note_date, row.controller_id, { difficulty: 2, effort: 2, impact: 3, quality: 3 });
-    for (const row of all(`SELECT tci.id,tci.tested_at,si.function_detail,si.controller_id FROM test_campaign_items tci
-      JOIN test_campaigns tc ON tc.id=tci.campaign_id JOIN status_items si ON si.id=tci.status_item_id
-      WHERE tc.project_id=? AND tci.tested_by=? AND tci.result IN ('pass','fail') AND date(tci.tested_at) BETWEEN ? AND ? ORDER BY tci.tested_at,tci.id`, activeProjectId(), userId, period.from, period.to)) add('campaign', row, `Test: ${row.function_detail}`, 'Wykonujący test', row.tested_at, row.controller_id, { difficulty: 3, effort: 3, impact: 4, quality: 3 });
     return [...new Map(result.map(item => [`${item.entity_type}:${item.entity_id}`, item])).values()];
   }
 
@@ -4192,11 +3934,6 @@ function createRepository(db, defaultProjectId) {
         syncProjectMemberships(db);
         db.prepare('INSERT OR IGNORE INTO settings(project_id,key,value) VALUES(?,?,?)').run(projectId, 'employee_review_item_weight', '60');
         db.prepare('INSERT OR IGNORE INTO settings(project_id,key,value) VALUES(?,?,?)').run(projectId, 'employee_review_dimension_weight', '40');
-        const insertGate = db.prepare(`INSERT INTO readiness_gates(project_id,name,stage_order,scope_type,scope_id,criteria_json,status)
-          VALUES(?,?,?,?,?,?,'open')`);
-        insertGate.run(projectId, 'Hardware Ready', 10, 'project', 0, JSON.stringify({ status_progress: 80, tasks_progress: 60, max_blockers: 0 }));
-        insertGate.run(projectId, 'Automatic Mode Ready', 20, 'project', 0, JSON.stringify({ status_progress: 90, tasks_progress: 80, points_progress: 70, max_blockers: 0 }));
-        insertGate.run(projectId, 'Production Ready', 30, 'project', 0, JSON.stringify({ status_progress: 100, tasks_progress: 100, points_progress: 100, goals_progress: 100, max_blockers: 0 }));
         db.exec('COMMIT');
         return one('SELECT * FROM projects WHERE id=?', projectId);
       } catch (error) {
@@ -4798,13 +4535,6 @@ function createRepository(db, defaultProjectId) {
     operations(currentUser) { return operationsData(currentUser); },
     triageBatch(input, currentUser) { return triageBatch(input, currentUser); },
     deleteOrphanLink(id) { return deleteOrphanLink(id); },
-    commissioning(currentUser) { return { campaigns: testCampaignRows(currentUser), gates: readinessGateRows(currentUser), can_coordinate: ['system_admin', 'project_admin', 'moderator'].includes(currentUser.role) }; },
-    saveTestCampaign(id, input, currentUser) { return saveTestCampaign(id, input, currentUser); },
-    updateTestCampaignItem(campaignId, itemId, input, currentUser) { return updateTestCampaignItem(campaignId, itemId, input, currentUser); },
-    deleteTestCampaign(id) { return deleteTestCampaign(id); },
-    saveReadinessGate(id, input, currentUser) { return saveReadinessGate(id, input, currentUser); },
-    actionReadinessGate(id, input, currentUser) { return actionReadinessGate(id, input, currentUser); },
-    deleteReadinessGate(id) { return deleteReadinessGate(id); },
     saveProjectMeeting(id, input, currentUser) { return saveProjectMeeting(id, input, currentUser); },
     deleteProjectMeeting(id) { return deleteProjectMeeting(id); },
     saveExternalDependency(id, input, currentUser) { return saveExternalDependency(id, input, currentUser); },
@@ -4820,11 +4550,6 @@ function createRepository(db, defaultProjectId) {
     saveAutomationRule(id, input, currentUser) { return saveAutomationRule(id, input, currentUser); },
     deleteAutomationRule(id) { return deleteAutomationRule(id); },
     runAutomations(currentUser) { return runAutomationRules(currentUser); },
-    commissioningTemplates() { return commissioningTemplateRows(); },
-    saveCommissioningTemplate(id, input, currentUser) { return saveCommissioningTemplate(id, input, currentUser); },
-    applyCommissioningTemplate(id, input, currentUser) { return applyCommissioningTemplate(id, input, currentUser); },
-    deleteCommissioningTemplate(id) { return deleteCommissioningTemplate(id); },
-
     dashboard(code) {
       return dashboardForControllers(controllersForScope(code).map(item => item.id)).status;
     },

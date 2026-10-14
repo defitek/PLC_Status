@@ -309,25 +309,6 @@ async function handleProjectApi(request, response, url, user) {
   if (method === 'PATCH' && path === '/api/triage/batch') { requireRole(user, 'moderator'); return json(response, 200, repository.triageBatch(await readJson(request), user)); }
   const orphanLinkId = path.match(/^\/api\/data-quality\/orphan-links\/(\d+)$/);
   if (orphanLinkId && method === 'DELETE') { requireRole(user, 'moderator'); return json(response, 200, repository.deleteOrphanLink(Number(orphanLinkId[1]))); }
-  if (method === 'GET' && path === '/api/commissioning') return json(response, 200, repository.commissioning(user));
-  if (method === 'POST' && path === '/api/test-campaigns') { requireRole(user, 'moderator'); return json(response, 201, repository.saveTestCampaign(null, await readJson(request), user)); }
-  const campaignItem = path.match(/^\/api\/test-campaigns\/(\d+)\/items\/(\d+)$/);
-  if (campaignItem && method === 'PATCH') return json(response, 200, repository.updateTestCampaignItem(Number(campaignItem[1]), Number(campaignItem[2]), await readJson(request), user));
-  const campaignId = numericId(path, '/api/test-campaigns');
-  if (campaignId !== null) {
-    requireRole(user, 'moderator');
-    if (method === 'PATCH') return json(response, 200, repository.saveTestCampaign(campaignId, await readJson(request), user));
-    if (method === 'DELETE') { repository.deleteTestCampaign(campaignId); response.writeHead(204); return response.end(); }
-  }
-  if (method === 'POST' && path === '/api/readiness-gates') { requireRole(user, 'moderator'); return json(response, 201, repository.saveReadinessGate(null, await readJson(request), user)); }
-  const gateAction = path.match(/^\/api\/readiness-gates\/(\d+)\/action$/);
-  if (gateAction && method === 'POST') { requireRole(user, 'moderator'); return json(response, 200, repository.actionReadinessGate(Number(gateAction[1]), await readJson(request), user)); }
-  const gateId = numericId(path, '/api/readiness-gates');
-  if (gateId !== null) {
-    requireRole(user, 'moderator');
-    if (method === 'PATCH') return json(response, 200, repository.saveReadinessGate(gateId, await readJson(request), user));
-    if (method === 'DELETE') { repository.deleteReadinessGate(gateId); response.writeHead(204); return response.end(); }
-  }
   if (method === 'POST' && path === '/api/project-meetings') { requireRole(user, 'moderator'); return json(response, 201, repository.saveProjectMeeting(null, await readJson(request), user)); }
   const meetingId = numericId(path, '/api/project-meetings');
   if (meetingId !== null) {
@@ -367,16 +348,6 @@ async function handleProjectApi(request, response, url, user) {
     requireRole(user, 'moderator');
     if (method === 'PATCH') return json(response, 200, repository.saveAutomationRule(automationRuleId, await readJson(request), user));
     if (method === 'DELETE') { repository.deleteAutomationRule(automationRuleId); response.writeHead(204); return response.end(); }
-  }
-  if (method === 'GET' && path === '/api/commissioning-templates') { requireRole(user, 'moderator'); return json(response, 200, repository.commissioningTemplates()); }
-  if (method === 'POST' && path === '/api/commissioning-templates') { requireRole(user, 'moderator'); return json(response, 201, repository.saveCommissioningTemplate(null, await readJson(request), user)); }
-  const templateApply = path.match(/^\/api\/commissioning-templates\/(\d+)\/apply$/);
-  if (templateApply && method === 'POST') { requireRole(user, 'moderator'); return json(response, 201, repository.applyCommissioningTemplate(Number(templateApply[1]), await readJson(request), user)); }
-  const commissioningTemplateId = numericId(path, '/api/commissioning-templates');
-  if (commissioningTemplateId !== null) {
-    requireRole(user, 'moderator');
-    if (method === 'PATCH') return json(response, 200, repository.saveCommissioningTemplate(commissioningTemplateId, await readJson(request), user));
-    if (method === 'DELETE') { repository.deleteCommissioningTemplate(commissioningTemplateId); response.writeHead(204); return response.end(); }
   }
   if (method === 'GET' && path === '/api/monthly-reviews') {
     requireRole(user, 'moderator');

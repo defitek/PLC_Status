@@ -743,19 +743,6 @@ CREATE TABLE IF NOT EXISTS automation_rule_hits (
   PRIMARY KEY(rule_id,entity_type,entity_id,hit_key)
 ) STRICT, WITHOUT ROWID;
 
-CREATE TABLE IF NOT EXISTS commissioning_templates (
-  id INTEGER PRIMARY KEY,
-  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  name TEXT NOT NULL COLLATE NOCASE,
-  description TEXT NOT NULL DEFAULT '',
-  template_json TEXT NOT NULL,
-  active INTEGER NOT NULL DEFAULT 1,
-  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE(project_id,name)
-) STRICT;
-
 CREATE TABLE IF NOT EXISTS daily_note_sections (
   id INTEGER PRIMARY KEY,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -798,7 +785,7 @@ CREATE TABLE IF NOT EXISTS monthly_employee_review_items (
   id INTEGER PRIMARY KEY,
   review_id INTEGER NOT NULL REFERENCES monthly_employee_reviews(id) ON DELETE CASCADE,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  entity_type TEXT NOT NULL CHECK(entity_type IN ('task','status','point','note','campaign')),
+  entity_type TEXT NOT NULL CHECK(entity_type IN ('task','status','point','note')),
   entity_id INTEGER NOT NULL,
   title_snapshot TEXT NOT NULL,
   scope_snapshot TEXT NOT NULL DEFAULT '',
@@ -840,58 +827,6 @@ CREATE TABLE IF NOT EXISTS daily_note_section_links (
   sort_order INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY(section_id,entity_type,entity_id)
 ) STRICT, WITHOUT ROWID;
-
-CREATE TABLE IF NOT EXISTS test_campaigns (
-  id INTEGER PRIMARY KEY,
-  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  campaign_type TEXT NOT NULL DEFAULT 'Functional test',
-  model TEXT NOT NULL DEFAULT '',
-  shift TEXT NOT NULL DEFAULT 'Dzień',
-  scope_type TEXT NOT NULL DEFAULT 'project' CHECK(scope_type IN ('project','group','controller')),
-  scope_id INTEGER NOT NULL DEFAULT 0,
-  planned_start TEXT,
-  planned_end TEXT,
-  status TEXT NOT NULL DEFAULT 'planned' CHECK(status IN ('planned','active','completed','cancelled')),
-  description TEXT NOT NULL DEFAULT '',
-  owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS test_campaign_items (
-  id INTEGER PRIMARY KEY,
-  campaign_id INTEGER NOT NULL REFERENCES test_campaigns(id) ON DELETE CASCADE,
-  status_item_id INTEGER NOT NULL REFERENCES status_items(id) ON DELETE CASCADE,
-  result TEXT NOT NULL DEFAULT 'pending' CHECK(result IN ('pending','pass','fail','skipped')),
-  note TEXT NOT NULL DEFAULT '',
-  evidence_link TEXT NOT NULL DEFAULT '',
-  retest_number INTEGER NOT NULL DEFAULT 0,
-  tested_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  tested_at TEXT,
-  created_point_id INTEGER REFERENCES open_points(id) ON DELETE SET NULL,
-  sort_order INTEGER NOT NULL DEFAULT 0,
-  UNIQUE(campaign_id,status_item_id)
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS readiness_gates (
-  id INTEGER PRIMARY KEY,
-  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  stage_order INTEGER NOT NULL DEFAULT 0,
-  scope_type TEXT NOT NULL DEFAULT 'project' CHECK(scope_type IN ('project','group','controller')),
-  scope_id INTEGER NOT NULL DEFAULT 0,
-  criteria_json TEXT NOT NULL DEFAULT '{}',
-  status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','ready','approved','overridden')),
-  owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  approved_at TEXT,
-  override_reason TEXT NOT NULL DEFAULT '',
-  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-) STRICT;
 
 CREATE TABLE IF NOT EXISTS project_meetings (
   id INTEGER PRIMARY KEY,
@@ -1017,14 +952,10 @@ CREATE INDEX IF NOT EXISTS idx_entity_dependencies_dependent ON entity_dependenc
 CREATE INDEX IF NOT EXISTS idx_entity_dependencies_prerequisite ON entity_dependencies(project_id,prerequisite_type,prerequisite_id);
 CREATE INDEX IF NOT EXISTS idx_handovers_date ON shift_handovers(project_id,handover_date,status);
 CREATE INDEX IF NOT EXISTS idx_automation_rules_project ON automation_rules(project_id,active,trigger_type);
-CREATE INDEX IF NOT EXISTS idx_templates_project ON commissioning_templates(project_id,active,name);
 CREATE INDEX IF NOT EXISTS idx_note_sections_note ON daily_note_sections(note_id,sort_order);
 CREATE INDEX IF NOT EXISTS idx_monthly_reviews_project_period ON monthly_employee_reviews(project_id,period,user_id);
 CREATE INDEX IF NOT EXISTS idx_monthly_review_items_review ON monthly_employee_review_items(review_id,sort_order,id);
 CREATE INDEX IF NOT EXISTS idx_monthly_review_audit_review ON monthly_employee_review_audit(review_id,changed_at DESC,id DESC);
-CREATE INDEX IF NOT EXISTS idx_campaigns_project ON test_campaigns(project_id,status,planned_start);
-CREATE INDEX IF NOT EXISTS idx_campaign_items_campaign ON test_campaign_items(campaign_id,result,sort_order);
-CREATE INDEX IF NOT EXISTS idx_readiness_gates_project ON readiness_gates(project_id,stage_order,scope_type,scope_id);
 CREATE INDEX IF NOT EXISTS idx_meetings_project ON project_meetings(project_id,meeting_date DESC);
 CREATE INDEX IF NOT EXISTS idx_requirement_status_entity ON entity_requirement_status(project_id,entity_type,entity_id);
 CREATE INDEX IF NOT EXISTS idx_external_dependencies_entity ON external_dependencies(project_id,entity_type,entity_id,dependency_status);
