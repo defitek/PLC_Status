@@ -196,6 +196,43 @@ CREATE TABLE IF NOT EXISTS function_group_check_subcategories (
   PRIMARY KEY(check_id,subcategory_id)
 ) STRICT, WITHOUT ROWID;
 
+CREATE TABLE IF NOT EXISTS status_groups (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL COLLATE NOCASE,
+  description TEXT NOT NULL DEFAULT '',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(project_id,name)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS status_subgroups (
+  id INTEGER PRIMARY KEY,
+  status_group_id INTEGER NOT NULL REFERENCES status_groups(id) ON DELETE CASCADE,
+  name TEXT NOT NULL COLLATE NOCASE,
+  description TEXT NOT NULL DEFAULT '',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(status_group_id,name)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS status_columns (
+  id INTEGER PRIMARY KEY,
+  status_group_id INTEGER NOT NULL REFERENCES status_groups(id) ON DELETE CASCADE,
+  status_subgroup_id INTEGER REFERENCES status_subgroups(id) ON DELETE CASCADE,
+  name TEXT NOT NULL COLLATE NOCASE,
+  field_type TEXT NOT NULL DEFAULT 'status' CHECK(field_type IN ('status','text')),
+  include_in_progress INTEGER NOT NULL DEFAULT 1,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS status_items (
   id INTEGER PRIMARY KEY,
   project_id INTEGER NOT NULL DEFAULT 1 REFERENCES projects(id) ON DELETE CASCADE,
@@ -220,10 +257,21 @@ CREATE TABLE IF NOT EXISTS status_items (
   function_group_element_id INTEGER REFERENCES function_group_elements(id) ON DELETE SET NULL,
   function_group_subcategory_id INTEGER REFERENCES function_group_subcategories(id) ON DELETE SET NULL,
   function_group_check_id INTEGER REFERENCES function_group_checks(id) ON DELETE SET NULL,
+  status_group_id INTEGER REFERENCES status_groups(id) ON DELETE SET NULL,
+  status_subgroup_id INTEGER REFERENCES status_subgroups(id) ON DELETE SET NULL,
   created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS status_cell_values (
+  status_item_id INTEGER NOT NULL REFERENCES status_items(id) ON DELETE CASCADE,
+  column_id INTEGER NOT NULL REFERENCES status_columns(id) ON DELETE CASCADE,
+  value TEXT NOT NULL DEFAULT '',
+  updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(status_item_id,column_id)
+) STRICT, WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS tasks (
   id INTEGER PRIMARY KEY,
@@ -919,6 +967,9 @@ CREATE INDEX IF NOT EXISTS idx_controller_groups_project ON controller_groups(pr
 CREATE INDEX IF NOT EXISTS idx_function_groups_controller ON function_groups(controller_id,sort_order);
 CREATE INDEX IF NOT EXISTS idx_function_group_subcategories ON function_group_subcategories(function_group_id,sort_order);
 CREATE INDEX IF NOT EXISTS idx_function_checks_group ON function_group_checks(function_group_id,sort_order);
+CREATE INDEX IF NOT EXISTS idx_status_groups_project ON status_groups(project_id,sort_order);
+CREATE INDEX IF NOT EXISTS idx_status_subgroups_group ON status_subgroups(status_group_id,sort_order);
+CREATE INDEX IF NOT EXISTS idx_status_columns_scope ON status_columns(status_group_id,status_subgroup_id,sort_order);
 CREATE INDEX IF NOT EXISTS idx_tasks_controller_status ON tasks(controller_id,status);
 CREATE INDEX IF NOT EXISTS idx_points_controller_status ON open_points(controller_id,status);
 CREATE INDEX IF NOT EXISTS idx_notes_controller_date ON daily_notes(controller_id,note_date DESC);

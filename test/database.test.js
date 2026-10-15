@@ -238,6 +238,46 @@ test('V3.2 manages controller function groups, check templates and batch status 
   }
 });
 
+test('configurable status matrices keep independent subgroup columns and symbol workflow values', () => {
+  const temporary = temporaryDatabase();
+  let repository = openDatabase(temporary.path);
+  try {
+    const admin = repository.me(repository.authenticate('admin').id);
+    assert.ok(repository.config().status_groups.length > 0, 'existing status categories should be migrated to table groups');
+
+    const group = repository.saveStatusGroup(null, { name: 'Hardware test', description: 'Configurable hardware matrix' });
+    const directColumn = repository.saveStatusColumn(group.id, null, null, { name: '+24V', field_type: 'status', include_in_progress: 1 });
+    const subgroup = repository.saveStatusSubgroup(group.id, null, { name: 'Napędy', copy_parent_columns: 1 });
+    const textColumn = repository.saveStatusColumn(group.id, subgroup.id, null, { name: 'Device Name', field_type: 'text' });
+    const copiedColumn = repository.config().status_groups.find(item => item.id === group.id).subgroups.find(item => item.id === subgroup.id).columns.find(item => item.name === directColumn.name);
+    assert.ok(copiedColumn);
+
+    const status = repository.saveStatus(null, {
+      controller: 'HB522', status_group_id: group.id, status_subgroup_id: subgroup.id,
+      function_detail: 'Napęd 01', category: 'Hardware', status: 'Ready to test'
+    }, admin);
+    assert.equal(status.status_group_name, 'Hardware test');
+    assert.equal(status.status_subgroup_name, 'Napędy');
+    assert.equal(status.matrix_values[copiedColumn.id], 'Ready to test');
+
+    const textSaved = repository.saveStatusCell(status.id, textColumn.id, { value: 'SINAMICS', updated_at: status.updated_at }, admin);
+    assert.equal(textSaved.matrix_values[textColumn.id], 'SINAMICS');
+    assert.equal(textSaved.status, 'Ready to test');
+    const done = repository.saveStatusCell(status.id, copiedColumn.id, { value: 'Done', updated_at: textSaved.updated_at }, admin);
+    assert.equal(done.matrix_values[copiedColumn.id], 'Done');
+    assert.equal(done.status, 'Done');
+
+    repository.close();
+    repository = openDatabase(temporary.path);
+    const reopened = repository.status('all', repository.me(admin.id)).find(item => item.id === status.id);
+    assert.equal(reopened.matrix_values[textColumn.id], 'SINAMICS');
+    assert.equal(repository.config().status_groups.find(item => item.id === group.id).subgroups[0].columns.length, 2);
+  } finally {
+    repository?.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
 test('V4 isolates projects, supports hierarchy, immutable IDs, elements, links and backup restore', () => {
   const temporary = temporaryDatabase();
   const repository = openDatabase(temporary.path);

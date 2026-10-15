@@ -64,6 +64,7 @@ export function openDatabase(databasePath) {
   migrateSecurityFoundation(db);
   migrateStatusWorkflow(db);
   migrateEntityDependencies(db);
+  ensureStatusMatrixColumns(db);
   const defaultProjectId = primaryProjectId(db);
   db.exec('CREATE INDEX IF NOT EXISTS idx_status_function_group ON status_items(function_group_id,function_group_check_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_status_project ON status_items(project_id,controller_id,status)');
@@ -99,6 +100,7 @@ export function openDatabase(databasePath) {
   backfillV6(db);
   backfillV7(db);
   if (seedDemo) { seedV5Demo(db); seedV8Demo(db); }
+  migrateStatusMatrix(db);
   seedMigrationAudit(db, defaultProjectId);
   db.prepare("INSERT INTO app_meta(key,value) VALUES('schema_version','current') ON CONFLICT(key) DO UPDATE SET value='current'").run();
   return createRepository(db, defaultProjectId);
@@ -110,6 +112,60 @@ function columnNames(db, table) {
 
 function ensureColumn(db, table, name, definition) {
   if (!columnNames(db, table).has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+}
+
+function ensureStatusMatrixColumns(db) {
+  ensureColumn(db, 'status_items', 'status_group_id', 'INTEGER');
+  ensureColumn(db, 'status_items', 'status_subgroup_id', 'INTEGER');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_status_items_matrix ON status_items(project_id,status_group_id,status_subgroup_id)');
+}
+
+function migrateStatusMatrix(db, onlyProjectId = null) {
+  ensureStatusMatrixColumns(db);
+  if (!onlyProjectId && db.prepare("SELECT value FROM app_meta WHERE key='status_matrix_backfill_v1'").get()?.value === '1') return;
+  const allowedStatuses = new Set(['Ready to test', 'In progress', 'Blocked', 'NOK / Retest required', 'Done', 'N/A']);
+  const rows = db.prepare(`SELECT id,project_id,trim(COALESCE(category,'')) category,trim(COALESCE(subcategory,'')) subcategory,status
+    FROM status_items ${onlyProjectId ? 'WHERE project_id=?' : ''} ORDER BY project_id,id`).all(...(onlyProjectId ? [onlyProjectId] : []));
+  const findGroup = db.prepare('SELECT id FROM status_groups WHERE project_id=? AND name=? COLLATE NOCASE');
+  const insertGroup = db.prepare('INSERT INTO status_groups(project_id,name,sort_order) VALUES(?,?,?)');
+  const nextGroupOrder = db.prepare('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM status_groups WHERE project_id=?');
+  const findSubgroup = db.prepare('SELECT id FROM status_subgroups WHERE status_group_id=? AND name=? COLLATE NOCASE');
+  const insertSubgroup = db.prepare('INSERT INTO status_subgroups(status_group_id,name,sort_order) VALUES(?,?,?)');
+  const nextSubgroupOrder = db.prepare('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM status_subgroups WHERE status_group_id=?');
+  const findColumn = db.prepare(`SELECT id FROM status_columns WHERE status_group_id=? AND
+    ((status_subgroup_id IS NULL AND ? IS NULL) OR status_subgroup_id=?) AND name='Status' COLLATE NOCASE`);
+  const insertColumn = db.prepare(`INSERT INTO status_columns(status_group_id,status_subgroup_id,name,field_type,include_in_progress,sort_order)
+    VALUES(?,?,'Status','status',1,0)`);
+  const updateItem = db.prepare('UPDATE status_items SET status_group_id=?,status_subgroup_id=? WHERE id=?');
+  const insertValue = db.prepare(`INSERT OR IGNORE INTO status_cell_values(status_item_id,column_id,value)
+    VALUES(?,?,?)`);
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const row of rows) {
+      const groupName = row.category || 'Ogólne';
+      let groupId = Number(findGroup.get(row.project_id, groupName)?.id || 0);
+      if (!groupId) groupId = Number(insertGroup.run(row.project_id, groupName, nextGroupOrder.get(row.project_id).value).lastInsertRowid);
+      let subgroupId = null;
+      if (row.subcategory) {
+        subgroupId = Number(findSubgroup.get(groupId, row.subcategory)?.id || 0);
+        if (!subgroupId) subgroupId = Number(insertSubgroup.run(groupId, row.subcategory, nextSubgroupOrder.get(groupId).value).lastInsertRowid);
+      }
+      let columnId = Number(findColumn.get(groupId, subgroupId, subgroupId)?.id || 0);
+      if (!columnId) columnId = Number(insertColumn.run(groupId, subgroupId).lastInsertRowid);
+      updateItem.run(groupId, subgroupId, row.id);
+      insertValue.run(row.id, columnId, allowedStatuses.has(row.status) ? row.status : 'Ready to test');
+    }
+    for (const project of db.prepare(`SELECT id FROM projects ${onlyProjectId ? 'WHERE id=?' : ''}`).all(...(onlyProjectId ? [onlyProjectId] : []))) {
+      if (db.prepare('SELECT 1 FROM status_groups WHERE project_id=? LIMIT 1').get(project.id)) continue;
+      const groupId = Number(insertGroup.run(project.id, 'Ogólne', 0).lastInsertRowid);
+      insertColumn.run(groupId, null);
+    }
+    if (!onlyProjectId) db.prepare("INSERT INTO app_meta(key,value) VALUES('status_matrix_backfill_v1','1') ON CONFLICT(key) DO UPDATE SET value='1'").run();
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
 }
 
 function migrateEntityDependencies(db) {
@@ -1130,6 +1186,64 @@ function createRepository(db, defaultProjectId) {
     return value;
   }
 
+  function statusStructureRows() {
+    return all('SELECT * FROM status_groups WHERE project_id=? AND active=1 ORDER BY sort_order,name,id', activeProjectId()).map(group => ({
+      ...group,
+      columns: all('SELECT * FROM status_columns WHERE status_group_id=? AND status_subgroup_id IS NULL AND active=1 ORDER BY sort_order,name,id', group.id),
+      subgroups: all('SELECT * FROM status_subgroups WHERE status_group_id=? AND active=1 ORDER BY sort_order,name,id', group.id).map(subgroup => ({
+        ...subgroup,
+        columns: all('SELECT * FROM status_columns WHERE status_group_id=? AND status_subgroup_id=? AND active=1 ORDER BY sort_order,name,id', group.id, subgroup.id)
+      }))
+    }));
+  }
+
+  function statusMatrixScope(groupId, subgroupId = null) {
+    const group = one('SELECT * FROM status_groups WHERE id=? AND project_id=? AND active=1', asId(groupId), activeProjectId());
+    if (!group) throw appError('Nie znaleziono grupy statusu', 404);
+    let subgroup = null;
+    if (asId(subgroupId)) {
+      subgroup = one('SELECT * FROM status_subgroups WHERE id=? AND status_group_id=? AND active=1', asId(subgroupId), group.id);
+      if (!subgroup) throw appError('Podgrupa nie należy do wybranej grupy statusu');
+    }
+    return { group, subgroup };
+  }
+
+  function applicableStatusColumns(groupId, subgroupId = null) {
+    if (!asId(groupId)) return [];
+    return all(`SELECT * FROM status_columns WHERE status_group_id=? AND active=1 AND
+      ((status_subgroup_id IS NULL AND ? IS NULL) OR status_subgroup_id=?) ORDER BY sort_order,name,id`, asId(groupId), asId(subgroupId), asId(subgroupId));
+  }
+
+  function statusCellValues(statusId) {
+    return Object.fromEntries(all('SELECT column_id,value FROM status_cell_values WHERE status_item_id=? ORDER BY column_id', statusId).map(item => [item.column_id, item.value]));
+  }
+
+  function ensureStatusCells(statusId, groupId, subgroupId, defaultStatus, userId = null) {
+    const columns = applicableStatusColumns(groupId, subgroupId);
+    if (!columns.length) return;
+    const allowedIds = new Set(columns.map(column => column.id));
+    const existing = all('SELECT column_id FROM status_cell_values WHERE status_item_id=?', statusId);
+    for (const value of existing) if (!allowedIds.has(value.column_id)) db.prepare('DELETE FROM status_cell_values WHERE status_item_id=? AND column_id=?').run(statusId, value.column_id);
+    const insert = db.prepare('INSERT OR IGNORE INTO status_cell_values(status_item_id,column_id,value,updated_by) VALUES(?,?,?,?)');
+    for (const column of columns) insert.run(statusId, column.id, column.field_type === 'status' ? defaultStatus : '', userId);
+  }
+
+  function aggregateWorkflowValues(input, fallback = 'Ready to test') {
+    const values = input.map(normalizeStatusWorkflow);
+    if (!values.length) return fallback;
+    if (values.every(value => ['Done', 'N/A'].includes(value))) return values.every(value => value === 'N/A') ? 'N/A' : 'Done';
+    if (values.includes('Blocked')) return 'Blocked';
+    if (values.includes('NOK / Retest required')) return 'NOK / Retest required';
+    if (values.includes('In progress')) return 'In progress';
+    return 'Ready to test';
+  }
+
+  function aggregateMatrixStatus(statusId, fallback = 'Ready to test') {
+    const values = all(`SELECT scv.value FROM status_cell_values scv JOIN status_columns sc ON sc.id=scv.column_id
+      WHERE scv.status_item_id=? AND sc.active=1 AND sc.field_type='status' AND sc.include_in_progress=1`, statusId).map(item => item.value);
+    return aggregateWorkflowValues(values, fallback);
+  }
+
   function userName(userId) {
     return userId ? one('SELECT display_name FROM users WHERE id=?', userId)?.display_name || '' : '';
   }
@@ -1270,7 +1384,10 @@ function createRepository(db, defaultProjectId) {
       row.direct_assignee_user_ids = all('SELECT user_id FROM task_assignees WHERE project_id=? AND task_id=? AND assigned_directly=1 ORDER BY user_id', activeProjectId(), id).map(item => item.user_id);
       row.dependency_task_ids = all('SELECT prerequisite_task_id FROM task_dependencies WHERE project_id=? AND task_id=? ORDER BY prerequisite_task_id', activeProjectId(), id).map(item => item.prerequisite_task_id);
     }
-    if (type === 'status') row.responsible_user_ids = all('SELECT user_id FROM status_assignees WHERE project_id=? AND status_id=? ORDER BY user_id', activeProjectId(), id).map(item => item.user_id);
+    if (type === 'status') {
+      row.responsible_user_ids = all('SELECT user_id FROM status_assignees WHERE project_id=? AND status_id=? ORDER BY user_id', activeProjectId(), id).map(item => item.user_id);
+      row.matrix_values = statusCellValues(id);
+    }
     if (['status', 'task', 'point'].includes(type)) {
       row.requirement_ids = all('SELECT requirement_id FROM entity_requirements WHERE project_id=? AND entity_type=? AND entity_id=? ORDER BY requirement_id', activeProjectId(), type, id).map(item => item.requirement_id);
       row.dependency_refs = all(`SELECT prerequisite_type entity_type,prerequisite_id entity_id FROM entity_dependencies
@@ -1376,7 +1493,7 @@ function createRepository(db, defaultProjectId) {
     const source = baseSnapshot(type, asId(sourceId));
     if (!source) throw appError('Nie znaleziono elementu źródłowego do duplikacji', 404);
     const fields = {
-      status: ['controller_id', 'function_group_id', 'function_group_element_id', 'function_group_subcategory_id', 'station', 'function_detail', 'category', 'subcategory', 'criticality', 'status', 'checked_by', 'checked_on', 'current_note', 'evidence_link', 'responsible_user_ids', 'dependency_refs', 'requirement_ids', 'links'],
+      status: ['controller_id', 'function_group_id', 'function_group_element_id', 'function_group_subcategory_id', 'status_group_id', 'status_subgroup_id', 'station', 'function_detail', 'category', 'subcategory', 'criticality', 'status', 'checked_by', 'checked_on', 'current_note', 'evidence_link', 'responsible_user_ids', 'dependency_refs', 'requirement_ids', 'links'],
       task: ['controller_id', 'controller_group_id', 'title', 'description', 'station', 'function_group_id', 'function_group_element_id', 'other_object', 'priority', 'status', 'start_date', 'due_date', 'category', 'subcategory', 'info_link', 'direct_assignee_user_ids', 'checklist', 'scope_checklist', 'dependency_refs', 'requirement_ids', 'links'],
       point: ['controller_id', 'title', 'description', 'impact', 'priority', 'owner_user_id', 'status', 'waiting_for', 'next_action', 'start_date', 'due_date', 'reminder_date', 'category', 'subcategory', 'info_link', 'dependency_refs', 'requirement_ids', 'links'],
       goal: ['controller_id', 'title', 'description', 'status', 'priority', 'due_date', 'links']
@@ -1628,6 +1745,7 @@ function createRepository(db, defaultProjectId) {
     return {
       ...row, links, related_work_total: actionable.length, related_work_done: completed,
       related_work_progress: actionable.length ? Math.round(completed * 100 / actionable.length) : 100,
+      matrix_values: statusCellValues(row.id),
       assignees,
       responsible_user_ids: assignees.map(item => item.user_id),
       responsible_name: assignees.map(item => item.display_name).join(', ') || row.responsible_name || '',
@@ -1833,6 +1951,8 @@ function createRepository(db, defaultProjectId) {
       fg.name function_group_name,COALESCE(fg.sort_order,9999) function_group_order,
       fge.name function_group_element_name,
       fgs.name function_group_subcategory_name,
+      sg.name status_group_name,COALESCE(sg.sort_order,9999) status_group_order,
+      ssg.name status_subgroup_name,COALESCE(ssg.sort_order,9999) status_subgroup_order,
       COALESCE(fgc.sort_order,9999) function_check_order,
       COALESCE(cat.sort_order,9999) category_order,COALESCE(sub.sort_order,9999) subcategory_order
       FROM status_items s
@@ -1843,10 +1963,12 @@ function createRepository(db, defaultProjectId) {
       LEFT JOIN function_group_elements fge ON fge.id=s.function_group_element_id
       LEFT JOIN function_group_subcategories fgs ON fgs.id=s.function_group_subcategory_id
       LEFT JOIN function_group_checks fgc ON fgc.id=s.function_group_check_id
+      LEFT JOIN status_groups sg ON sg.id=s.status_group_id
+      LEFT JOIN status_subgroups ssg ON ssg.id=s.status_subgroup_id
       LEFT JOIN categories cat ON cat.project_id=s.project_id AND cat.name=s.category
       LEFT JOIN subcategories sub ON sub.category_id=cat.id AND sub.name=s.subcategory
       ${filter.sql}
-      ORDER BY c.sort_order,function_group_order,category_order,function_check_order,subcategory_order,s.id`, ...filter.params).map(row => decorateStatus(attachControllerMeta(row), currentUser));
+      ORDER BY status_group_order,status_subgroup_order,c.sort_order,function_group_order,category_order,function_check_order,subcategory_order,s.id`, ...filter.params).map(row => decorateStatus(attachControllerMeta(row), currentUser));
   }
 
   function taskRows(code, currentUser) {
@@ -2056,7 +2178,9 @@ function createRepository(db, defaultProjectId) {
     ['function_group_subcategories', 'function_group_id IN (SELECT id FROM function_groups WHERE project_id=?)'],
     ['function_group_checks', 'function_group_id IN (SELECT id FROM function_groups WHERE project_id=?)'],
     ['function_group_check_subcategories', 'check_id IN (SELECT id FROM function_group_checks WHERE function_group_id IN (SELECT id FROM function_groups WHERE project_id=?))'],
-    ['status_items', 'project_id=?'], ['status_assignees', 'project_id=?'], ['tasks', 'project_id=?'], ['task_dependencies', 'project_id=?'],
+    ['status_groups', 'project_id=?'], ['status_subgroups', 'status_group_id IN (SELECT id FROM status_groups WHERE project_id=?)'],
+    ['status_columns', 'status_group_id IN (SELECT id FROM status_groups WHERE project_id=?)'],
+    ['status_items', 'project_id=?'], ['status_cell_values', 'status_item_id IN (SELECT id FROM status_items WHERE project_id=?)'], ['status_assignees', 'project_id=?'], ['tasks', 'project_id=?'], ['task_dependencies', 'project_id=?'],
     ['task_checklist', 'task_id IN (SELECT id FROM tasks WHERE project_id=?)'],
     ['task_scope_checklist', 'task_id IN (SELECT id FROM tasks WHERE project_id=?)'],
     ['task_assignees', 'project_id=?'], ['project_user_areas', 'project_id=?'], ['planner_entries', 'project_id=?'], ['planner_requirements', 'project_id=?'], ['planner_holidays', 'project_id=?'], ['planner_absences', 'project_id=?'], ['planner_time_adjustments', 'project_id=?'],
@@ -2086,7 +2210,7 @@ function createRepository(db, defaultProjectId) {
   const projectRestoreOrder = [
     'controller_groups', 'controllers', 'categories', 'subcategories', 'task_categories', 'task_subcategories',
     'options', 'settings', 'completion_requirements', 'function_groups', 'function_group_elements', 'function_group_subcategories', 'function_group_checks',
-    'function_group_check_subcategories', 'status_items', 'status_assignees', 'tasks', 'task_dependencies', 'task_checklist', 'task_scope_checklist', 'task_assignees', 'open_points', 'entity_dependencies',
+    'function_group_check_subcategories', 'status_groups', 'status_subgroups', 'status_columns', 'status_items', 'status_cell_values', 'status_assignees', 'tasks', 'task_dependencies', 'task_checklist', 'task_scope_checklist', 'task_assignees', 'open_points', 'entity_dependencies',
     'daily_notes', 'daily_note_sections', 'daily_note_section_scopes', 'daily_note_section_links', 'goals', 'goal_links', 'entity_mentions', 'entity_links', 'entity_requirements', 'entity_requirement_status', 'entity_edit_locks', 'entity_comments', 'notifications', 'audit_log',
     'export_templates', 'project_sequences', 'project_user_areas', 'planner_entries', 'planner_requirements', 'planner_holidays', 'planner_absences', 'planner_time_adjustments',
     'announcements', 'announcement_labels', 'announcement_scopes', 'announcement_users', 'announcement_links', 'announcement_label_links', 'announcement_reads', 'calendar_annotations', 'calendar_item_dates',
@@ -2173,6 +2297,7 @@ function createRepository(db, defaultProjectId) {
       db.exec('ROLLBACK');
       throw appError('Nie udało się odtworzyć backupu. Sprawdź format i zgodność pliku.');
     }
+    if (!currentBackup || !Array.isArray(payload.tables.status_groups)) migrateStatusMatrix(db, projectId);
     return { ok: true, project: currentProject, restored_at: new Date().toISOString() };
   }
 
@@ -3931,6 +4056,8 @@ function createRepository(db, defaultProjectId) {
       try {
         const projectId = insertRecord('projects', { ...values, sort_order: nextOrder });
         seedConfiguration(db, projectId);
+        const statusGroupId = Number(db.prepare("INSERT INTO status_groups(project_id,name,sort_order) VALUES(?,'Ogólne',0)").run(projectId).lastInsertRowid);
+        db.prepare("INSERT INTO status_columns(status_group_id,name,field_type,include_in_progress,sort_order) VALUES(?,'Status','status',1,0)").run(statusGroupId);
         syncProjectMemberships(db);
         db.prepare('INSERT OR IGNORE INTO settings(project_id,key,value) VALUES(?,?,?)').run(projectId, 'employee_review_item_weight', '60');
         db.prepare('INSERT OR IGNORE INTO settings(project_id,key,value) VALUES(?,?,?)').run(projectId, 'employee_review_dimension_weight', '40');
@@ -4322,6 +4449,102 @@ function createRepository(db, defaultProjectId) {
       return { id: group.id, points: normalized.length };
     },
 
+    saveStatusGroup(id, input) {
+      const name = clean(input.name);
+      const description = clean(input.description);
+      if (!name) throw appError('Nazwa grupy statusu jest wymagana');
+      const duplicate = one('SELECT id FROM status_groups WHERE project_id=? AND name=? COLLATE NOCASE AND id!=?', activeProjectId(), name, asId(id) || 0);
+      if (duplicate) throw appError('Grupa o tej nazwie już istnieje', 409);
+      if (id) {
+        const previous = one('SELECT * FROM status_groups WHERE id=? AND project_id=?', id, activeProjectId());
+        if (!previous) throw appError('Nie znaleziono grupy statusu', 404);
+        db.prepare('UPDATE status_groups SET name=?,description=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(name, description, id);
+        db.prepare('UPDATE status_items SET category=?,updated_at=strftime(\'%Y-%m-%d %H:%M:%f\',\'now\') WHERE project_id=? AND status_group_id=?').run(name, activeProjectId(), id);
+      } else {
+        const sortOrder = one('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM status_groups WHERE project_id=?', activeProjectId()).value;
+        id = insertRecord('status_groups', { project_id: activeProjectId(), name, description, sort_order: sortOrder, active: 1 });
+      }
+      return one('SELECT * FROM status_groups WHERE id=?', id);
+    },
+    deleteStatusGroup(id) {
+      const group = one('SELECT * FROM status_groups WHERE id=? AND project_id=?', asId(id), activeProjectId());
+      if (!group) throw appError('Nie znaleziono grupy statusu', 404);
+      db.prepare('UPDATE status_items SET status_group_id=NULL,status_subgroup_id=NULL WHERE project_id=? AND status_group_id=?').run(activeProjectId(), group.id);
+      db.prepare('DELETE FROM status_groups WHERE id=?').run(group.id);
+    },
+    saveStatusSubgroup(groupId, id, input) {
+      const { group } = statusMatrixScope(groupId);
+      const name = clean(input.name);
+      const description = clean(input.description);
+      if (!name) throw appError('Nazwa podgrupy statusu jest wymagana');
+      const duplicate = one('SELECT id FROM status_subgroups WHERE status_group_id=? AND name=? COLLATE NOCASE AND id!=?', group.id, name, asId(id) || 0);
+      if (duplicate) throw appError('Podgrupa o tej nazwie już istnieje', 409);
+      if (id) {
+        const previous = one('SELECT * FROM status_subgroups WHERE id=? AND status_group_id=?', id, group.id);
+        if (!previous) throw appError('Nie znaleziono podgrupy statusu', 404);
+        db.prepare('UPDATE status_subgroups SET name=?,description=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(name, description, id);
+        db.prepare('UPDATE status_items SET subcategory=?,updated_at=strftime(\'%Y-%m-%d %H:%M:%f\',\'now\') WHERE project_id=? AND status_group_id=? AND status_subgroup_id=?').run(name, activeProjectId(), group.id, id);
+      } else {
+        const sortOrder = one('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM status_subgroups WHERE status_group_id=?', group.id).value;
+        id = insertRecord('status_subgroups', { status_group_id: group.id, name, description, sort_order: sortOrder, active: 1 });
+        if (Number(input.copy_parent_columns)) {
+          const insert = db.prepare(`INSERT INTO status_columns(status_group_id,status_subgroup_id,name,field_type,include_in_progress,sort_order)
+            SELECT status_group_id,?,name,field_type,include_in_progress,sort_order FROM status_columns
+            WHERE status_group_id=? AND status_subgroup_id IS NULL AND active=1 ORDER BY sort_order,id`);
+          insert.run(id, group.id);
+        }
+      }
+      return one('SELECT * FROM status_subgroups WHERE id=?', id);
+    },
+    deleteStatusSubgroup(groupId, id) {
+      const { group } = statusMatrixScope(groupId);
+      const subgroup = one('SELECT * FROM status_subgroups WHERE id=? AND status_group_id=?', asId(id), group.id);
+      if (!subgroup) throw appError('Nie znaleziono podgrupy statusu', 404);
+      const affected = all('SELECT id,status FROM status_items WHERE project_id=? AND status_group_id=? AND status_subgroup_id=?', activeProjectId(), group.id, subgroup.id);
+      db.prepare('UPDATE status_items SET status_subgroup_id=NULL WHERE project_id=? AND status_group_id=? AND status_subgroup_id=?').run(activeProjectId(), group.id, subgroup.id);
+      for (const item of affected) ensureStatusCells(item.id, group.id, null, item.status);
+      db.prepare('DELETE FROM status_subgroups WHERE id=?').run(subgroup.id);
+    },
+    saveStatusColumn(groupId, subgroupId, id, input) {
+      const { group, subgroup } = statusMatrixScope(groupId, subgroupId);
+      const name = clean(input.name);
+      const fieldType = clean(input.field_type) === 'text' ? 'text' : 'status';
+      const includeInProgress = fieldType === 'status' && Number(input.include_in_progress) ? 1 : 0;
+      if (!name) throw appError('Nazwa kolumny jest wymagana');
+      const duplicate = one(`SELECT id FROM status_columns WHERE status_group_id=? AND
+        ((status_subgroup_id IS NULL AND ? IS NULL) OR status_subgroup_id=?) AND name=? COLLATE NOCASE AND id!=?`, group.id, subgroup?.id || null, subgroup?.id || null, name, asId(id) || 0);
+      if (duplicate) throw appError('Kolumna o tej nazwie już istnieje w tej tabeli', 409);
+      let previous = null;
+      if (id) {
+        previous = one(`SELECT * FROM status_columns WHERE id=? AND status_group_id=? AND
+          ((status_subgroup_id IS NULL AND ? IS NULL) OR status_subgroup_id=?)`, asId(id), group.id, subgroup?.id || null, subgroup?.id || null);
+        if (!previous) throw appError('Nie znaleziono kolumny statusu', 404);
+        db.prepare('UPDATE status_columns SET name=?,field_type=?,include_in_progress=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(name, fieldType, includeInProgress, id);
+      } else {
+        const sortOrder = one(`SELECT COALESCE(MAX(sort_order),-1)+1 value FROM status_columns WHERE status_group_id=? AND
+          ((status_subgroup_id IS NULL AND ? IS NULL) OR status_subgroup_id=?)`, group.id, subgroup?.id || null, subgroup?.id || null).value;
+        id = insertRecord('status_columns', { status_group_id: group.id, status_subgroup_id: subgroup?.id || null, name, field_type: fieldType, include_in_progress: includeInProgress, sort_order: sortOrder, active: 1 });
+      }
+      const scopedItems = all(`SELECT id,status FROM status_items WHERE project_id=? AND status_group_id=? AND
+        ((status_subgroup_id IS NULL AND ? IS NULL) OR status_subgroup_id=?)`, activeProjectId(), group.id, subgroup?.id || null, subgroup?.id || null);
+      if (!previous || previous.field_type !== fieldType) {
+        const upsert = db.prepare(`INSERT INTO status_cell_values(status_item_id,column_id,value,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP)
+          ON CONFLICT(status_item_id,column_id) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP`);
+        for (const item of scopedItems) upsert.run(item.id, id, fieldType === 'status' ? (new Set(['Ready to test', 'In progress', 'Blocked', 'NOK / Retest required', 'Done', 'N/A']).has(item.status) ? item.status : 'Ready to test') : '');
+      }
+      if (fieldType === 'status' || previous?.field_type === 'status') for (const item of scopedItems) db.prepare('UPDATE status_items SET status=?,updated_at=strftime(\'%Y-%m-%d %H:%M:%f\',\'now\') WHERE id=?').run(aggregateMatrixStatus(item.id, item.status), item.id);
+      return one('SELECT * FROM status_columns WHERE id=?', id);
+    },
+    deleteStatusColumn(groupId, subgroupId, id) {
+      const { group, subgroup } = statusMatrixScope(groupId, subgroupId);
+      const column = one(`SELECT * FROM status_columns WHERE id=? AND status_group_id=? AND
+        ((status_subgroup_id IS NULL AND ? IS NULL) OR status_subgroup_id=?)`, asId(id), group.id, subgroup?.id || null, subgroup?.id || null);
+      if (!column) throw appError('Nie znaleziono kolumny statusu', 404);
+      const items = all(`SELECT id,status FROM status_items WHERE project_id=? AND status_group_id=? AND
+        ((status_subgroup_id IS NULL AND ? IS NULL) OR status_subgroup_id=?)`, activeProjectId(), group.id, subgroup?.id || null, subgroup?.id || null);
+      db.prepare('DELETE FROM status_columns WHERE id=?').run(column.id);
+      for (const item of items) db.prepare('UPDATE status_items SET status=?,updated_at=strftime(\'%Y-%m-%d %H:%M:%f\',\'now\') WHERE id=?').run(aggregateMatrixStatus(item.id, item.status), item.id);
+    },
     config() {
       return {
         categories: all('SELECT * FROM categories WHERE project_id=? AND active=1 ORDER BY sort_order,name', activeProjectId()).map(category => ({ ...category, subcategories: all('SELECT * FROM subcategories WHERE category_id=? AND active=1 ORDER BY sort_order,name', category.id) })),
@@ -4339,6 +4562,7 @@ function createRepository(db, defaultProjectId) {
               subcategory_ids: all('SELECT subcategory_id FROM function_group_check_subcategories WHERE check_id=? ORDER BY subcategory_id', check.id).map(row => row.subcategory_id)
             }))
           })),
+        status_groups: statusStructureRows(),
         options: all('SELECT * FROM options WHERE project_id=? AND active=1 ORDER BY kind,sort_order,value', activeProjectId()),
         announcement_labels: all('SELECT * FROM announcement_labels WHERE project_id=? AND active=1 ORDER BY sort_order,name', activeProjectId()),
         planner_holidays: all('SELECT * FROM system_holidays ORDER BY holiday_date'),
@@ -4458,13 +4682,15 @@ function createRepository(db, defaultProjectId) {
       else db.prepare('INSERT INTO settings(project_id,key,value) VALUES(?,?,?) ON CONFLICT(project_id,key) DO UPDATE SET value=excluded.value').run(activeProjectId(), key, normalizedValue);
     },
     reorder(kind, ids) {
-      const map = { controllers: 'controllers', controller_groups: 'controller_groups', users: 'users', categories: 'categories', subcategories: 'subcategories', task_categories: 'task_categories', task_subcategories: 'task_subcategories', options: 'options', announcement_labels: 'announcement_labels', completion_requirements: 'completion_requirements', function_groups: 'function_groups', function_group_elements: 'function_group_elements', function_group_subcategories: 'function_group_subcategories', export_templates: 'export_templates' };
+      const map = { controllers: 'controllers', controller_groups: 'controller_groups', users: 'users', categories: 'categories', subcategories: 'subcategories', task_categories: 'task_categories', task_subcategories: 'task_subcategories', options: 'options', announcement_labels: 'announcement_labels', completion_requirements: 'completion_requirements', function_groups: 'function_groups', function_group_elements: 'function_group_elements', function_group_subcategories: 'function_group_subcategories', status_groups: 'status_groups', status_subgroups: 'status_subgroups', status_columns: 'status_columns', export_templates: 'export_templates' };
       const table = map[kind];
       if (!table || !Array.isArray(ids)) throw appError('Nieprawidłowa lista kolejności');
       const scopeSql = kind === 'users' ? ''
         : kind === 'subcategories' ? ' AND category_id IN (SELECT id FROM categories WHERE project_id=?)'
           : kind === 'task_subcategories' ? ' AND category_id IN (SELECT id FROM task_categories WHERE project_id=?)'
             : ['function_group_elements', 'function_group_subcategories'].includes(kind) ? ' AND function_group_id IN (SELECT id FROM function_groups WHERE project_id=?)'
+              : kind === 'status_subgroups' ? ' AND status_group_id IN (SELECT id FROM status_groups WHERE project_id=?)'
+                : kind === 'status_columns' ? ' AND status_group_id IN (SELECT id FROM status_groups WHERE project_id=?)'
               : ' AND project_id=?';
       const update = db.prepare(`UPDATE ${table} SET sort_order=? WHERE id=?${scopeSql}`);
       db.exec('BEGIN IMMEDIATE');
@@ -4582,6 +4808,66 @@ function createRepository(db, defaultProjectId) {
     },
 
     status(code, currentUser) { return statusRows(code, currentUser); },
+    saveStatusCell(statusId, columnId, input, currentUser) {
+      const before = baseSnapshot('status', asId(statusId));
+      if (!before) throw appError('Nie znaleziono punktu statusu', 404);
+      assertEntityEditable('status', statusId, currentUser);
+      assertFresh('status', statusId, input.updated_at);
+      const column = one(`SELECT sc.* FROM status_columns sc JOIN status_groups sg ON sg.id=sc.status_group_id
+        WHERE sc.id=? AND sg.project_id=? AND sc.active=1`, asId(columnId), activeProjectId());
+      if (!column || Number(column.status_group_id) !== Number(before.status_group_id)
+        || Number(column.status_subgroup_id || 0) !== Number(before.status_subgroup_id || 0)) throw appError('Ta kolumna nie należy do tabeli punktu statusu', 404);
+      let value = clean(input.value);
+      const requestedDependencies = Array.isArray(input.dependency_refs) ? input.dependency_refs : before.dependency_refs || [];
+      if (Array.isArray(input.dependency_refs)) validateEntityDependencies('status', statusId, requestedDependencies);
+      const previousValue = before.matrix_values?.[column.id] || (column.field_type === 'status' ? before.status : '');
+      const statusChanged = column.field_type === 'status' && value !== previousValue;
+      let overrideFlag = Number(before.dependency_override || 0);
+      let blockers = [];
+      let dependencyOverride = false;
+      let statusComment = '';
+      if (column.field_type === 'status') {
+        value = normalizeStatusWorkflow(value) || 'Ready to test';
+        if (!new Set(['Ready to test', 'In progress', 'Blocked', 'NOK / Retest required', 'Done', 'N/A']).has(value)) throw appError('Nieprawidłowy status punktu');
+        blockers = unresolvedDependencies(requestedDependencies);
+        statusComment = clean(input.status_change_comment);
+        if (statusComment.length > 3000) throw appError('Komentarz zmiany statusu może mieć maksymalnie 3000 znaków');
+        const commentAlreadyAdded = Boolean(input.status_comment_already_added);
+        dependencyOverride = Boolean(statusChanged && blockers.length && value !== 'Blocked');
+        const manualBlock = Boolean(statusChanged && value === 'Blocked' && !blockers.length);
+        if (statusChanged && value === 'NOK / Retest required' && !statusComment && !commentAlreadyAdded) throw appError('Ta zmiana statusu wymaga komentarza');
+        if (dependencyOverride && !statusComment && !commentAlreadyAdded) throw appError('Pominięcie blokady zależności wymaga komentarza');
+        if (manualBlock && !statusComment && !commentAlreadyAdded) throw appError('Status „Zablokowany” wymaga niespełnionej zależności albo komentarza z przyczyną blokady');
+        if (dependencyOverride) overrideFlag = 1;
+        else if (value === 'Blocked') overrideFlag = 0;
+        else if (!blockers.length) overrideFlag = 0;
+      } else if (value.length > 4000) throw appError('Wartość tekstowa może mieć maksymalnie 4000 znaków');
+      let aggregate = before.status;
+      if (column.field_type === 'status') {
+        const statusValues = applicableStatusColumns(before.status_group_id, before.status_subgroup_id)
+          .filter(item => item.field_type === 'status' && Number(item.include_in_progress))
+          .map(item => item.id === column.id ? value : before.matrix_values?.[item.id] || before.status);
+        aggregate = aggregateWorkflowValues(statusValues, before.status);
+        if (blockers.length && !overrideFlag) aggregate = 'Blocked';
+        if (!['Done', 'N/A'].includes(before.status) && ['Done', 'N/A'].includes(aggregate)) assertDefinitionOfDone('status', statusId, aggregate);
+      }
+      db.prepare(`INSERT INTO status_cell_values(status_item_id,column_id,value,updated_by,updated_at) VALUES(?,?,?,?,CURRENT_TIMESTAMP)
+        ON CONFLICT(status_item_id,column_id) DO UPDATE SET value=excluded.value,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP`).run(statusId, column.id, value, currentUser.id);
+      db.prepare(`UPDATE status_items SET status=?,dependency_override=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?`)
+        .run(aggregate, overrideFlag, statusId, activeProjectId());
+      if (Array.isArray(input.dependency_refs)) setEntityDependencies('status', statusId, requestedDependencies, currentUser);
+      const after = baseSnapshot('status', statusId);
+      writeAudit('status', statusId, 'update', currentUser, before, after);
+      if (statusChanged && statusComment) {
+        const statusNames = { 'Ready to test': 'Gotowe do sprawdzenia', 'In progress': 'W trakcie', Blocked: 'Zablokowany', 'NOK / Retest required': 'NOK / wymagany retest', Done: 'Gotowe', 'N/A': 'N/A' };
+        const dependencyTypes = { status: 'Status', task: 'Zadanie', point: 'Otwarty punkt' };
+        const dependencyContext = dependencyOverride ? `\nWymagane niespełnione zależności:\n${blockers.map(item => `• ${dependencyTypes[item.entity_type] || item.entity_type}: ${item.title}; obszar: ${item.controller_path || item.controller_label || item.controller || 'cały projekt'}; status: ${item.status}`).join('\n')}` : '';
+        const context = dependencyOverride ? `Ręczne pominięcie blokady zależności w polu „${column.name}” przy zmianie statusu na „${statusNames[value] || value}”` : `Komentarz dodany ze względu na zmianę pola „${column.name}” na „${statusNames[value] || value}”`;
+        addComment({ entity_type: 'status', entity_id: statusId, content: `${context}:${dependencyContext}\n${statusComment}` }, currentUser);
+      }
+      if (column.field_type === 'status') refreshDependentStatusItems('status', statusId, currentUser);
+      return statusRows('all', currentUser).find(item => item.id === Number(statusId));
+    },
     saveStatus(id, input, currentUser) {
       const before = id ? baseSnapshot('status', id) : null;
       if (id && !before) throw appError('Nie znaleziono punktu statusu', 404);
@@ -4602,12 +4888,18 @@ function createRepository(db, defaultProjectId) {
       if (groupSubcategoryId && (!selectedGroup || !one('SELECT 1 FROM function_group_subcategories WHERE id=? AND function_group_id=?', groupSubcategoryId, selectedGroup.id))) throw appError('Wybrana podkategoria nie należy do grupy funkcyjnej');
       const defaultFunction = clean(input.subcategory) ? one(`SELECT s.default_function FROM subcategories s JOIN categories c ON c.id=s.category_id
         WHERE c.project_id=? AND c.name=? COLLATE NOCASE AND s.name=? COLLATE NOCASE`, activeProjectId(), clean(input.category), clean(input.subcategory))?.default_function : '';
+      let matrixGroupId = Object.hasOwn(input, 'status_group_id') ? asId(input.status_group_id) : asId(before?.status_group_id);
+      let matrixSubgroupId = Object.hasOwn(input, 'status_subgroup_id') ? asId(input.status_subgroup_id) : asId(before?.status_subgroup_id);
+      if (!matrixGroupId && !id) matrixGroupId = asId(one('SELECT id FROM status_groups WHERE project_id=? AND name=? COLLATE NOCASE AND active=1', activeProjectId(), clean(input.category) || 'General')?.id);
+      const matrixScope = matrixGroupId ? statusMatrixScope(matrixGroupId, matrixSubgroupId) : null;
+      if (!matrixGroupId) matrixSubgroupId = null;
       const requestedStatus = normalizeStatusWorkflow(input.status) || 'Ready to test';
       const allowedStatuses = new Set(['Ready to test', 'In progress', 'Blocked', 'NOK / Retest required', 'Done', 'N/A']);
       if (!allowedStatuses.has(requestedStatus)) throw appError('Nieprawidłowy status punktu');
       const statusChanged = Boolean(before && requestedStatus !== before.status);
       const blockers = unresolvedDependencies(requestedDependencies);
       const statusComment = clean(input.status_change_comment);
+      if (statusComment.length > 3000) throw appError('Komentarz zmiany statusu może mieć maksymalnie 3000 znaków');
       const commentAlreadyAdded = Boolean(input.status_comment_already_added);
       const dependencyOverride = Boolean(statusChanged && blockers.length && requestedStatus !== 'Blocked');
       const manualBlock = Boolean(statusChanged && requestedStatus === 'Blocked' && !blockers.length);
@@ -4630,8 +4922,10 @@ function createRepository(db, defaultProjectId) {
         function_group_id: selectedGroup?.id || null,
         function_group_element_id: elementId,
         function_group_subcategory_id: groupSubcategoryId,
+        status_group_id: matrixGroupId,
+        status_subgroup_id: matrixSubgroupId,
         station: selectedGroup?.name || clean(input.station), function_detail: defaultFunction || clean(input.function_detail) || `Sprawdź ${clean(input.subcategory) || clean(input.category) || 'punkt'}`,
-        category: clean(input.category) || 'General', subcategory: clean(input.subcategory), milestone: '',
+        category: matrixScope?.group.name || clean(input.category) || before?.category || 'General', subcategory: matrixScope?.subgroup?.name || (Object.hasOwn(input, 'subcategory') ? clean(input.subcategory) : before?.subcategory || ''), milestone: '',
         criticality: clean(input.criticality) || 'Medium', responsible_user_id: ownerId, responsible: userName(ownerId),
         status: effectiveStatus, dependency_override: overrideFlag, checked_by: clean(input.checked_by), checked_on: nullableDate(input.checked_on),
         current_note: clean(input.current_note), evidence_link: clean(input.evidence_link)
@@ -4649,6 +4943,22 @@ function createRepository(db, defaultProjectId) {
         values.test_id = nextProjectIdentifier('status', 'ST', 'status_items', 'test_id');
         recordId = insertRecord('status_items', { ...values, created_by: currentUser.id });
       }
+      ensureStatusCells(recordId, matrixGroupId, matrixSubgroupId, effectiveStatus, currentUser.id);
+      if (!id && input.matrix_values && typeof input.matrix_values === 'object' && matrixGroupId) {
+        const columns = applicableStatusColumns(matrixGroupId, matrixSubgroupId);
+        const upsertCell = db.prepare(`INSERT INTO status_cell_values(status_item_id,column_id,value,updated_by,updated_at) VALUES(?,?,?,?,CURRENT_TIMESTAMP)
+          ON CONFLICT(status_item_id,column_id) DO UPDATE SET value=excluded.value,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP`);
+        for (const column of columns) {
+          if (!Object.hasOwn(input.matrix_values, column.id)) continue;
+          let cellValue = clean(input.matrix_values[column.id]);
+          if (column.field_type === 'status') cellValue = new Set(['Ready to test', 'In progress', 'Blocked', 'NOK / Retest required', 'Done', 'N/A']).has(cellValue) ? cellValue : effectiveStatus;
+          else cellValue = cellValue.slice(0, 4000);
+          upsertCell.run(recordId, column.id, cellValue, currentUser.id);
+        }
+      }
+      if (statusChanged && matrixGroupId) db.prepare(`UPDATE status_cell_values SET value=?,updated_by=?,updated_at=CURRENT_TIMESTAMP
+        WHERE status_item_id=? AND column_id IN (SELECT id FROM status_columns WHERE status_group_id=? AND active=1 AND field_type='status'
+          AND ((status_subgroup_id IS NULL AND ? IS NULL) OR status_subgroup_id=?))`).run(effectiveStatus, currentUser.id, recordId, matrixGroupId, matrixSubgroupId, matrixSubgroupId);
       const savedOwners = !id || ownerInputProvided ? saveStatusAssignees(recordId, ownerIds) : ownerIds;
       const primaryOwner = savedOwners[0] || null;
       db.prepare('UPDATE status_items SET responsible_user_id=?,responsible=? WHERE id=? AND project_id=?').run(primaryOwner, userName(primaryOwner), recordId, activeProjectId());
@@ -4666,8 +4976,7 @@ function createRepository(db, defaultProjectId) {
         addComment({ entity_type: 'status', entity_id: recordId, content: `${context}:${dependencyContext}\n${statusComment}` }, currentUser);
       }
       refreshDependentStatusItems('status', recordId, currentUser);
-      const finalSnapshot = baseSnapshot('status', recordId);
-      return decorateStatus(attachControllerMeta({ ...finalSnapshot, controller: one('SELECT code FROM controllers WHERE id=?', finalSnapshot.controller_id).code, created_by_name: userName(finalSnapshot.created_by), responsible_name: userName(finalSnapshot.responsible_user_id) }), currentUser);
+      return statusRows('all', currentUser).find(item => item.id === recordId);
     },
     batchUpdateStatus(input, currentUser) {
       const items = Array.isArray(input.items) ? input.items : [];

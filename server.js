@@ -455,6 +455,8 @@ async function handleProjectApi(request, response, url, user) {
   }
   if (method === 'PATCH' && path === '/api/status/batch') return json(response, 200, repository.batchUpdateStatus(await readJson(request), user));
   if (method === 'POST' && path === '/api/status/bulk-create') return json(response, 201, repository.bulkCreateStatus(await readJson(request), user));
+  const statusCellMatch = path.match(/^\/api\/status\/(\d+)\/cells\/(\d+)$/);
+  if (statusCellMatch && method === 'PATCH') return json(response, 200, repository.saveStatusCell(Number(statusCellMatch[1]), Number(statusCellMatch[2]), await readJson(request), user));
 
   const resources = [
     { path: '/api/status', list: () => repository.status(scope, user), save: (id, body) => repository.saveStatus(id, body, user), remove: id => repository.deleteStatus(id, user), deleteRole: 'project_admin' },
@@ -540,6 +542,35 @@ async function handleProjectApi(request, response, url, user) {
   }
   id = numericId(path, '/api/function-groups');
   if (id !== null) { requireRole(user, 'project_admin'); if (method === 'PATCH') return json(response, 200, repository.saveFunctionGroup(id, await readJson(request), user)); if (method === 'DELETE') { repository.deleteFunctionGroup(id, user); response.writeHead(204); return response.end(); } }
+
+  if (path === '/api/status-groups' && method === 'POST') { requireRole(user, 'moderator'); return json(response, 201, repository.saveStatusGroup(null, await readJson(request))); }
+  match = path.match(/^\/api\/status-groups\/(\d+)\/subgroups\/(\d+)\/columns(?:\/(\d+))?$/);
+  if (match) {
+    requireRole(user, 'moderator'); const groupId = Number(match[1]); const subgroupId = Number(match[2]); const columnId = match[3] ? Number(match[3]) : null;
+    if (method === 'POST' && !columnId) return json(response, 201, repository.saveStatusColumn(groupId, subgroupId, null, await readJson(request)));
+    if (method === 'PATCH' && columnId) return json(response, 200, repository.saveStatusColumn(groupId, subgroupId, columnId, await readJson(request)));
+    if (method === 'DELETE' && columnId) { repository.deleteStatusColumn(groupId, subgroupId, columnId); response.writeHead(204); return response.end(); }
+  }
+  match = path.match(/^\/api\/status-groups\/(\d+)\/columns(?:\/(\d+))?$/);
+  if (match) {
+    requireRole(user, 'moderator'); const groupId = Number(match[1]); const columnId = match[2] ? Number(match[2]) : null;
+    if (method === 'POST' && !columnId) return json(response, 201, repository.saveStatusColumn(groupId, null, null, await readJson(request)));
+    if (method === 'PATCH' && columnId) return json(response, 200, repository.saveStatusColumn(groupId, null, columnId, await readJson(request)));
+    if (method === 'DELETE' && columnId) { repository.deleteStatusColumn(groupId, null, columnId); response.writeHead(204); return response.end(); }
+  }
+  match = path.match(/^\/api\/status-groups\/(\d+)\/subgroups(?:\/(\d+))?$/);
+  if (match) {
+    requireRole(user, 'moderator'); const groupId = Number(match[1]); const subgroupId = match[2] ? Number(match[2]) : null;
+    if (method === 'POST' && !subgroupId) return json(response, 201, repository.saveStatusSubgroup(groupId, null, await readJson(request)));
+    if (method === 'PATCH' && subgroupId) return json(response, 200, repository.saveStatusSubgroup(groupId, subgroupId, await readJson(request)));
+    if (method === 'DELETE' && subgroupId) { repository.deleteStatusSubgroup(groupId, subgroupId); response.writeHead(204); return response.end(); }
+  }
+  id = numericId(path, '/api/status-groups');
+  if (id !== null) {
+    requireRole(user, 'moderator');
+    if (method === 'PATCH') return json(response, 200, repository.saveStatusGroup(id, await readJson(request)));
+    if (method === 'DELETE') { repository.deleteStatusGroup(id); response.writeHead(204); return response.end(); }
+  }
 
   const configResources = [
     { path: '/api/categories', type: 'category', save: (recordId, body) => repository.saveCategory('status', recordId, body) },

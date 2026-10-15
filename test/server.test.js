@@ -149,6 +149,15 @@ test('API protects manager data, project directory and account sessions', async 
   assert.equal(managerWorkingNorm.status, 200);
   const managerReminderSetting = await request(baseUrl, '/api/settings/default_reminder_days', { cookie: managerLogin.cookie, method: 'PATCH', body: { value: 21 } });
   assert.equal(managerReminderSetting.status, 403);
+  const workerStatusGroup = await request(baseUrl, '/api/status-groups', { cookie: workerLogin.cookie, method: 'POST', body: { name: 'Worker cannot configure' } });
+  assert.equal(workerStatusGroup.status, 403);
+  const managerStatusGroupResponse = await request(baseUrl, '/api/status-groups', { cookie: managerLogin.cookie, method: 'POST', body: { name: 'Manager matrix' } });
+  assert.equal(managerStatusGroupResponse.status, 201);
+  const managerStatusGroup = await managerStatusGroupResponse.json();
+  const managerStatusColumn = await request(baseUrl, `/api/status-groups/${managerStatusGroup.id}/columns`, { cookie: managerLogin.cookie, method: 'POST', body: { name: 'Test result', field_type: 'status', include_in_progress: 1 } });
+  assert.equal(managerStatusColumn.status, 201);
+  const publicConfig = await (await request(baseUrl, '/api/config', { cookie: workerLogin.cookie })).json();
+  assert.ok(publicConfig.status_groups.some(group => group.id === managerStatusGroup.id && group.columns.some(column => column.name === 'Test result')));
   const managerPlanner = await (await request(baseUrl, `/api/planner?from=${planDate}&to=${planDate}`, { cookie: managerLogin.cookie })).json();
   assert.ok(managerPlanner.cross_project_entries.some(entry => entry.user_id === worker.id));
   assert.ok(managerPlanner.cross_project_entries.some(entry => entry.user_id === manager.id));

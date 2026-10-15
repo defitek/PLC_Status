@@ -1,6 +1,6 @@
 const state = {
   view: 'mine', controller: 'all', me: null, projects: [], controllerGroups: [], controllers: [], users: [],
-  config: { categories: [], task_categories: [], function_groups: [], options: [], announcement_labels: [], settings: {} },
+  config: { categories: [], task_categories: [], function_groups: [], status_groups: [], options: [], announcement_labels: [], settings: {} },
   overview: null, announcements: [], notifications: [], navigationCounts: {}, mine: null, dashboard: {}, status: [], tasks: [], points: [], notes: [], goals: [], planner: null, calendar: null, history: [], savedViews: [], operations: null, employeeReviews: [], securityEvents: [], reviewPeriod: new Date().toISOString().slice(0, 7), loadSequence: 0,
   dialog: null, dialogInitial: '', dirtyCloseAttempt: new WeakSet(), goalDraftLinks: [], goalPickerCollections: null, linkDraft: [], statusMode: 'list', taskMode: 'board', taskShowCompleted: false, pointMode: 'list', trendPeriod: 'week',
   functionGroupController: '', functionPointGroup: null, functionPointDraft: [], quickStatusDraft: [],
@@ -13,7 +13,7 @@ const state = {
   categorySelection: { status: null, task: null },
   functionListManager: null, bulkChoice: null,
   operationsTab: 'triage', triageSelection: new Set(), savedViewApplying: false, activeSavedView: {}, taskDependencyOptions: [], dependencyOptions: null, dependencyOptionsAll: false,
-  collapsedStatusGroups: new Set(), collapsedTaskGroups: new Set(), statusTransfer: null, overviewHierarchyLevel: 'areas',
+  collapsedStatusGroups: new Set(), collapsedTaskGroups: new Set(), statusTransfer: null, overviewHierarchyLevel: 'areas', statusMatrixQuery: '',
   hiddenColumns: { status: new Set(), tasks: new Set(), points: new Set() },
   grouping: { status: 'category', tasks: '', notes: 'scope', history: 'hierarchy' },
   sort: { status: { key: '', direction: 1 }, tasks: { key: '', direction: 1 }, points: { key: '', direction: 1 } }
@@ -39,7 +39,7 @@ const pageCopy = {
   planner: ['Planner', 'Planowanie manpoweru, obszarów, zmian i transportu', ''],
   reviews: ['Oceny miesięczne', 'Obiektywna ocena pracy na podstawie aktywności, rezultatów i wkładu w projekt', ''],
   calendar: ['Kalendarz', 'Zintegrowany harmonogram projektu do 31 dni', '+ Adnotacja'],
-  status: ['Status', 'Testy uruchomieniowe według kolejności projektu', '+ Dodaj test'],
+  status: ['Status', 'Konfigurowalne grupy, podgrupy i pola weryfikacji', '+ Dodaj punkt'],
   tasks: ['Zadania', 'Plan pracy zespołu, checklisty i odpowiedzialności', '+ Nowe zadanie'],
   goals: ['Cele', 'Cele projektu łączące status, zadania i otwarte punkty', '+ Nowy cel'],
   points: ['Otwarte punkty', 'Problemy, oczekiwania i przypomnienia', '+ Nowy punkt'],
@@ -69,6 +69,21 @@ const statusWorkflowLegend = [
   ['N/A', 'punkt nie jest już istotny'],
   ['Gotowe', 'punkt ukończony']
 ];
+const statusSymbolMap = {
+  'Ready to test': ['○', 'Gotowe do sprawdzenia', 'ready'],
+  'In progress': ['◐', 'W trakcie', 'progress'],
+  Blocked: ['⊘', 'Zablokowany', 'blocked'],
+  'NOK / Retest required': ['↻', 'NOK / wymagany retest', 'retest'],
+  Done: ['✓', 'Gotowe', 'done'],
+  'N/A': ['—', 'N/A', 'na']
+};
+function statusSymbol(value, interactive = false) {
+  const [symbol, label, tone] = statusSymbolMap[value] || ['?', value || 'Brak statusu', 'unknown'];
+  return `<span class="status-symbol ${tone} ${interactive ? 'interactive' : ''}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${symbol}</span>`;
+}
+function statusSymbolLegend() {
+  return `<div class="status-symbol-legend" aria-label="Legenda statusów"><b>Legenda</b>${statusWorkflowOptions.map(item => `<span>${statusSymbol(item.value)}<small>${escapeHtml(item.label)}</small></span>`).join('')}</div>`;
+}
 const badge = value => { const item = badgeMap[value] || [value || '—', 'gray']; return `<span class="badge ${item[1]}">${escapeHtml(item[0])}</span>`; };
 const editLockNote = item => item?.edit_locked ? `<span class="edit-lock-note" title="${escapeHtml(`Zablokowany przed edycją przez: ${item.edit_lock?.locked_by_name || 'managera'}; Powód: ${item.edit_lock?.reason || 'nie podano'}`)}">🔒 Zablokowany przed edycją</span>` : '';
 function appendEditLockNote(root, item, selector) {
@@ -88,6 +103,8 @@ function options(kind) { return state.config.options.filter(item => item.kind ==
 function statusCategories() { return state.config.categories.map(item => item.name); }
 function taskCategories() { return state.config.task_categories.map(item => item.name); }
 function functionGroups(controllerCode) { return (state.config.function_groups || []).filter(item => !controllerCode || item.controller === controllerCode); }
+function statusGroups() { return state.config.status_groups || []; }
+function statusSubgroups(groupId) { return statusGroups().find(item => item.id === Number(groupId))?.subgroups || []; }
 function assignableUsers(selectedIds = []) {
   const selected = new Set([].concat(selectedIds || []).map(Number).filter(Boolean));
   return state.users.filter(item => item.active && item.project_active && (Number(item.assignable) !== 0 || selected.has(Number(item.id))));
@@ -335,6 +352,8 @@ function columnVisibilityControl(module, columns) {
 }
 
 function bindColumnVisibility(root, module, columns, redraw) {
+  const allowedKeys = new Set(columns.map(column => column.key));
+  state.hiddenColumns[module] = new Set([...(state.hiddenColumns[module] || [])].filter(key => allowedKeys.has(key)));
   const syncPicker = picker => {
     const hidden = state.hiddenColumns[module] || new Set();
     const inputs = [...picker.querySelectorAll('[data-column-toggle]')];
@@ -370,7 +389,7 @@ function captureSavedView(module, root) {
     task_mode: module === 'tasks' ? state.taskMode : undefined,
     show_completed: module === 'tasks' ? state.taskShowCompleted : undefined,
     operations_tab: module === 'operations' ? state.operationsTab : undefined,
-    search: module === 'tasks' ? ($('#task-search')?.value || '') : '',
+    search: module === 'tasks' ? ($('#task-search')?.value || '') : module === 'status' ? ($('#status-matrix-search')?.value || '') : '',
     hidden_columns: state.hiddenColumns[module] ? [...state.hiddenColumns[module]] : [],
     text: {}, filters: {}
   };
@@ -392,10 +411,14 @@ function restoreSavedViewControls(config, module, root, redraw) {
     state.grouping[module] = groupSelect.value;
   }
   if (config.sort && state.sort[module]) state.sort[module] = { key: config.sort.key || '', direction: Number(config.sort.direction) === -1 ? -1 : 1 };
-  if (state.hiddenColumns[module]) state.hiddenColumns[module] = new Set(config.hidden_columns || []);
+  if (state.hiddenColumns[module]) {
+    const available = new Set($$(`${root} [data-column-toggle]`).map(input => input.dataset.columnToggle));
+    state.hiddenColumns[module] = new Set((config.hidden_columns || []).filter(key => !available.size || available.has(key)));
+  }
   $$(`${root} [data-column-toggle]`).forEach(input => { input.checked = !state.hiddenColumns[module]?.has(input.dataset.columnToggle); });
   $$(`${root} .column-picker`).forEach(picker => { const inputs = [...picker.querySelectorAll('[data-column-toggle]')]; picker.querySelector('summary').textContent = `Kolumny · ${inputs.filter(input => input.checked).length}/${inputs.length}`; });
   if (module === 'tasks' && $('#task-search')) $('#task-search').value = config.search || '';
+  if (module === 'status' && $('#status-matrix-search')) { $('#status-matrix-search').value = config.search || ''; state.statusMatrixQuery = config.search || ''; }
   $$(selector('[data-filter-text]')).forEach(input => { input.value = config.text?.[input.dataset.filterText] || ''; });
   $$(selector('[data-filter-kind][data-filter-key]')).forEach(widget => {
     const saved = config.filters?.[widget.dataset.filterKey];
@@ -3245,27 +3268,16 @@ function renderStatus() {
     return;
   }
   if (state.statusMode !== 'list') state.statusMode = 'list';
-  const columns = [
-    { key: 'function_group_name', label: 'Grupa funkcyjna', values: uniqueValues(state.status, 'function_group_name') }, { key: 'function_detail', label: 'Punkt / funkcja' },
-    { key: 'function_group_subcategory_name', label: 'Podkategoria grupy', values: uniqueValues(state.status, 'function_group_subcategory_name') }, { key: 'function_group_element_name', label: 'Element', values: uniqueValues(state.status, 'function_group_element_name') }, { key: 'controller', label: 'PLC', filter: 'hierarchy' },
-    { key: 'category', label: 'Kategoria', values: statusCategories() }, { key: 'subcategory', label: 'Podkategoria', values: uniqueValues(state.status, 'subcategory') },
-    { key: 'status', label: 'Status', values: statusWorkflowOptions },
-    { key: 'related_work_progress', label: 'Prace dodatkowe', filter: 'number' }, { key: 'criticality', label: 'Krytyczność', values: ['Low', 'Medium', 'High', 'Critical'] },
-    { key: 'responsible_name', label: 'Odpowiedzialni', values: uniqueValues(state.status, 'responsible_name', true) }, { key: 'requirement_names', label: 'Zapotrzebowanie', values: uniqueValues(state.status, 'requirement_names', true) }, { key: 'updated_at', label: 'Aktualizacja', filter: 'date' }
-  ];
-  state.statusColumns = columns;
-  $('#content').innerHTML = `<div class="panel compact-data-panel" id="status-panel"><div class="toolbar module-toolbar"><strong>Lista statusowa</strong><button id="status-list-mode" class="secondary active-toggle">Lista</button><button id="status-queue-mode" class="secondary">Kolejka</button><button id="quick-status-edit" class="secondary">Szybka edycja</button><button type="button" class="mini" data-clear-filters>Wyczyść filtry</button><select id="status-group" aria-label="Grupowanie"><option value="function_group_name">Grupa funkcyjna</option><option value="function_group_subcategory_name">Podkategoria grupy</option><option value="category">Kategoria</option><option value="subcategory">Podkategoria statusu</option><option value="status">Status</option><option value="">Bez grupowania</option></select><button type="button" class="mini" id="status-collapse-all">Zwiń wszystkie</button><button type="button" class="mini" id="status-expand-all">Rozwiń wszystkie</button>${savedViewsToolbar('status')}<div class="status-inline-metrics"><span><b>${d.progress || 0}%</b> postęp</span><span><b>${d.in_progress || 0}</b> w trakcie</span><span class="${d.blocked ? 'danger-text' : ''}"><b>${d.blocked || 0}</b> blokady/NOK</span></div></div>
-  <div class="table-view-tools">${columnVisibilityControl('status', columns)}</div><div class="tablewrap"><table><thead><tr>${columns.map(column => `<th class="sortable" data-column="${column.key}" data-sort="${column.key}" data-label="${column.label}">${column.label}${sortMarker('status', column.key)}</th>`).join('')}</tr>${tableFilterRow(columns)}</thead><tbody id="status-body"></tbody></table></div></div>`;
-  $('#status-group').value = state.grouping.status;
+  const visibilityColumns = [{ key: 'matrix_identity', label: 'Punkt / element' }, ...statusGroups().flatMap(group => [...(group.columns || []).map(column => ({ key: `matrix_${column.id}`, label: `${group.name} · ${column.name}` })), ...(group.subgroups || []).flatMap(subgroup => (subgroup.columns || []).map(column => ({ key: `matrix_${column.id}`, label: `${group.name} / ${subgroup.name} · ${column.name}` })))])];
+  state.statusColumns = visibilityColumns;
+  $('#content').innerHTML = `<div class="panel status-matrix-panel" id="status-panel"><div class="toolbar module-toolbar"><strong>Tabele statusowe</strong><button id="status-list-mode" class="secondary active-toggle">Lista</button><button id="status-queue-mode" class="secondary">Kolejka</button><button id="quick-status-edit" class="secondary">Szybka edycja</button><input id="status-matrix-search" class="compact-search" type="search" placeholder="Szukaj punktu lub wartości…" value="${escapeHtml(state.statusMatrixQuery)}"><button type="button" class="mini" id="status-collapse-all">Zwiń wszystkie</button><button type="button" class="mini" id="status-expand-all">Rozwiń wszystkie</button>${savedViewsToolbar('status')}<div class="status-inline-metrics"><span><b>${d.progress || 0}%</b> postęp</span><span><b>${d.in_progress || 0}</b> w trakcie</span><span class="${d.blocked ? 'danger-text' : ''}"><b>${d.blocked || 0}</b> blokady/NOK</span></div></div><div class="table-view-tools">${columnVisibilityControl('status', visibilityColumns)}</div>${statusSymbolLegend()}<div id="status-matrix-content" class="status-matrix-content"></div></div>`;
   bindStatusModeButtons();
   $('#quick-status-edit').addEventListener('click', openQuickStatusEditor);
-  $('#status-group').addEventListener('change', event => { state.grouping.status = event.target.value; state.collapsedStatusGroups.clear(); drawStatusRows(); });
-  $('#status-collapse-all').addEventListener('click', () => { orderedGroups('status', state.grouping.status, filterRows(state.status, '#status-panel')).forEach(group => state.collapsedStatusGroups.add(String(group))); drawStatusRows(); });
+  $('#status-matrix-search').addEventListener('input', event => { state.statusMatrixQuery = event.target.value; drawStatusRows(); });
+  $('#status-collapse-all').addEventListener('click', () => { (state.config.status_groups || []).forEach(group => { state.collapsedStatusGroups.add(`group:${group.id}`); (group.subgroups || []).forEach(subgroup => state.collapsedStatusGroups.add(`subgroup:${subgroup.id}`)); }); drawStatusRows(); });
   $('#status-expand-all').addEventListener('click', () => { state.collapsedStatusGroups.clear(); drawStatusRows(); });
-  bindTableFilters('#status-panel', drawStatusRows);
-  bindColumnVisibility('#status-panel', 'status', columns, drawStatusRows);
+  bindColumnVisibility('#status-panel', 'status', visibilityColumns, drawStatusRows);
   bindSavedViews('status', '#status-panel', drawStatusRows);
-  $$('#status-panel th[data-sort]').forEach(th => th.addEventListener('click', () => updateSort('status', th.dataset.sort)));
   drawStatusRows();
 }
 
@@ -3275,31 +3287,88 @@ function bindStatusModeButtons() {
 }
 
 function drawStatusRows() {
-  const sourceRows = state.status.map(item => ({ ...item, function_group_name: item.function_group_name || item.station || '' }));
-  let rows = sortRows(filterRows(sourceRows, '#status-panel'), state.sort.status);
-  const grouping = state.grouping.status;
-  const columns = state.statusColumns || [];
-  const hidden = state.hiddenColumns.status || new Set();
-  const visibleCount = Math.max(1, columns.filter(column => !hidden.has(column.key) && (!grouping || column.key !== grouping)).length);
-  let html = '';
-  for (const group of orderedGroups('status', grouping, rows)) {
-    const items = grouping ? rows.filter(row => (row[grouping] || 'Bez wartości') === group) : rows;
-    const collapsed = grouping && state.collapsedStatusGroups.has(String(group));
-    const completed = items.filter(item => ['Done', 'N/A'].includes(item.status)).length;
-    const progress = items.length ? Math.round(completed * 100 / items.length) : 0;
-    if (grouping) html += `<tr class="group-row ${collapsed ? 'collapsed' : ''}" data-status-group="${escapeHtml(group)}"><td colspan="${visibleCount}"><button type="button" class="group-toggle" aria-expanded="${collapsed ? 'false' : 'true'}"><span>${collapsed ? '▸' : '▾'}</span><b>${escapeHtml(group)}</b><span class="group-progress"><i><u style="width:${progress}%"></u></i><b>${progress}%</b></span><small>${items.length} pozycji</small></button></td></tr>`;
-    if (!collapsed) html += items.map(item => `<tr data-id="${item.id}"><td data-column="function_group_name">${escapeHtml(item.function_group_name || '—')}</td><td data-column="function_detail" class="maincell">${escapeHtml(item.function_detail || '—')}<span class="sub">${escapeHtml(item.current_note || '')}</span></td><td data-column="function_group_subcategory_name">${escapeHtml(item.function_group_subcategory_name || '—')}</td><td data-column="function_group_element_name">${escapeHtml(item.function_group_element_name || '—')}</td><td data-column="controller">${escapeHtml(controllerLabel(item))}</td><td data-column="category">${escapeHtml(item.category)}</td><td data-column="subcategory">${escapeHtml(item.subcategory || '—')}</td><td data-column="status">${inlineStatusBadge('status', item)}</td><td data-column="related_work_progress"><span class="status-related"><b>${item.related_work_progress}%</b><small class="sub">${item.related_work_done}/${item.related_work_total}</small><span class="progress"><i style="width:${item.related_work_progress}%"></i></span></span></td><td data-column="criticality">${inlineEntityField('status', 'criticality', item, badge(item.criticality), 'priority')}</td><td data-column="responsible_name">${inlineEntityField('status', 'responsible_user_ids', item, escapeHtml(item.responsible_name || '—'), 'textual')}</td><td data-column="requirement_names">${inlineEntityField('status', 'requirement_ids', item, escapeHtml(item.requirement_names || '—'), 'textual')}</td><td data-column="updated_at">${displayDate((item.updated_at || '').slice(0, 10))}</td></tr>`).join('');
-  }
-  $('#status-body').innerHTML = html || `<tr><td colspan="${visibleCount}" class="empty">Brak wyników</td></tr>`;
-  applyGroupedColumnVisibility('#status-panel', grouping, columns);
-  $$('#status-body [data-status-group]').forEach(row => row.addEventListener('click', () => { const key = row.dataset.statusGroup; if (state.collapsedStatusGroups.has(key)) state.collapsedStatusGroups.delete(key); else state.collapsedStatusGroups.add(key); drawStatusRows(); }));
-  $$('#status-body tr[data-id]').forEach(row => {
+  const root = $('#status-matrix-content'); if (!root) return;
+  const query = String(state.statusMatrixQuery || '').trim().toLocaleLowerCase('pl');
+  const matches = item => !query || `${item.function_detail} ${controllerLabel(item)} ${item.current_note || ''} ${Object.values(item.matrix_values || {}).join(' ')}`.toLocaleLowerCase('pl').includes(query);
+  const groups = state.config.status_groups || [];
+  const sections = groups.map(group => { const rows = state.status.filter(item => Number(item.status_group_id) === Number(group.id) && matches(item)); return query && !rows.length ? '' : statusMatrixGroupHtml(group, rows); }).join('');
+  const unassigned = state.status.filter(item => !item.status_group_id && matches(item));
+  root.innerHTML = sections + (unassigned.length ? statusMatrixFallbackHtml(unassigned) : '') || '<div class="empty">Brak punktów statusu w wybranym zakresie.</div>';
+  $$('[data-status-matrix-toggle]').forEach(button => button.addEventListener('click', () => { const key = button.dataset.statusMatrixToggle; if (state.collapsedStatusGroups.has(key)) state.collapsedStatusGroups.delete(key); else state.collapsedStatusGroups.add(key); drawStatusRows(); }));
+  $$('[data-status-cell]').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); const item = state.status.find(row => row.id === Number(button.dataset.id)); const column = (state.config.status_groups || []).flatMap(group => [...(group.columns || []), ...(group.subgroups || []).flatMap(subgroup => subgroup.columns || [])]).find(value => value.id === Number(button.dataset.column)); editStatusMatrixCell(item, column); }));
+  $$('#status-matrix-content tr[data-id]').forEach(row => {
     const item = state.status.find(entry => entry.id === Number(row.dataset.id));
     appendEditLockNote(row, item, '.maincell');
-    row.addEventListener('click', event => { if (!event.target.closest('[data-inline-entity-field]')) openRecord('status', item); });
+    row.addEventListener('click', event => { if (!event.target.closest('[data-status-cell]')) openRecord('status', item); });
     row.addEventListener('contextmenu', event => showStatusContext(event, item));
   });
-  bindInlineEntityEditors();
+}
+
+function statusMatrixProgress(rows, columns) {
+  const tracked = (columns || []).filter(column => column.field_type === 'status' && Number(column.include_in_progress));
+  if (!tracked.length) return { done: rows.filter(item => ['Done', 'N/A'].includes(item.status)).length, total: rows.length, progress: rows.length ? Math.round(rows.filter(item => ['Done', 'N/A'].includes(item.status)).length * 100 / rows.length) : 0 };
+  const values = rows.flatMap(item => tracked.map(column => item.matrix_values?.[column.id] || item.status || 'Ready to test'));
+  const done = values.filter(value => ['Done', 'N/A'].includes(value)).length;
+  return { done, total: values.length, progress: values.length ? Math.round(done * 100 / values.length) : 0 };
+}
+
+function statusMatrixGroupMetrics(group, rows) {
+  const direct = rows.filter(item => !item.status_subgroup_id);
+  const metrics = [statusMatrixProgress(direct, group.columns || [])];
+  for (const subgroup of group.subgroups || []) metrics.push(statusMatrixProgress(rows.filter(item => Number(item.status_subgroup_id) === Number(subgroup.id)), subgroup.columns || []));
+  const done = metrics.reduce((sum, item) => sum + item.done, 0); const total = metrics.reduce((sum, item) => sum + item.total, 0);
+  return { done, total, progress: total ? Math.round(done * 100 / total) : 0 };
+}
+
+function statusMatrixProgressHtml(metrics) {
+  return `<span class="matrix-progress"><b>${metrics.done}/${metrics.total}</b><i><u style="width:${metrics.progress}%"></u></i><strong>${metrics.progress}%</strong></span>`;
+}
+
+function statusMatrixTableHtml(rows, columns, emptyLabel) {
+  if (!rows.length) return `<div class="empty compact-empty">${escapeHtml(emptyLabel)}</div>`;
+  const hidden = state.hiddenColumns.status || new Set();
+  const visibleColumns = columns.filter(column => !hidden.has(`matrix_${column.id}`));
+  const identityHidden = hidden.has('matrix_identity');
+  return `<div class="tablewrap status-matrix-table"><table><thead><tr><th ${identityHidden ? 'hidden' : ''}>Punkt / element</th>${visibleColumns.map(column => `<th><span>${escapeHtml(column.name)}</span><small>${column.field_type === 'status' ? 'symbol statusu' : 'tekst'}</small></th>`).join('')}</tr></thead><tbody>${rows.map(item => `<tr data-id="${item.id}"><td class="maincell" ${identityHidden ? 'hidden' : ''}><b>${escapeHtml(item.function_detail || '—')}</b><span class="sub">${escapeHtml(controllerLabel(item))}${item.responsible_name ? ` · ${escapeHtml(item.responsible_name)}` : ''}</span></td>${visibleColumns.map(column => {
+    const value = item.matrix_values?.[column.id] ?? (column.field_type === 'status' ? item.status : '');
+    return `<td class="matrix-cell ${column.field_type}"><button type="button" data-status-cell data-id="${item.id}" data-column="${column.id}" title="${escapeHtml(column.field_type === 'status' ? `${column.name}: ${badgeMap[value]?.[0] || value}` : `Edytuj: ${column.name}`)}">${column.field_type === 'status' ? statusSymbol(value, true) : `<span class="matrix-text-value">${escapeHtml(value || '—')}</span>`}</button></td>`;
+  }).join('')}</tr>`).join('')}</tbody></table></div>`;
+}
+
+function statusMatrixGroupHtml(group, rows) {
+  const key = `group:${group.id}`; const collapsed = state.collapsedStatusGroups.has(key); const metrics = statusMatrixGroupMetrics(group, rows);
+  const directRows = rows.filter(item => !item.status_subgroup_id);
+  const directVisible = directRows.length || (group.columns || []).length;
+  return `<section class="status-matrix-group"><header><button type="button" data-status-matrix-toggle="${key}" aria-expanded="${!collapsed}"><span>${collapsed ? '▸' : '▾'}</span><span><b class="matrix-group-title">${escapeHtml(group.name)}</b>${group.description ? `<small>${escapeHtml(group.description)}</small>` : ''}</span>${statusMatrixProgressHtml(metrics)}</button></header>${collapsed ? '' : `<div class="status-matrix-group-body">${directVisible ? `<section class="status-matrix-scope direct"><header><div><b>Punkty grupy</b><small>${directRows.length} pozycji</small></div>${statusMatrixProgressHtml(statusMatrixProgress(directRows, group.columns || []))}</header>${statusMatrixTableHtml(directRows, group.columns || [], 'Brak punktów bezpośrednio w tej grupie.')}</section>` : ''}${(group.subgroups || []).map(subgroup => {
+    const subgroupRows = rows.filter(item => Number(item.status_subgroup_id) === Number(subgroup.id)); const subKey = `subgroup:${subgroup.id}`; const subCollapsed = state.collapsedStatusGroups.has(subKey); const subMetrics = statusMatrixProgress(subgroupRows, subgroup.columns || []);
+    return `<section class="status-matrix-scope subgroup"><header><button type="button" data-status-matrix-toggle="${subKey}" aria-expanded="${!subCollapsed}"><span>${subCollapsed ? '▸' : '▾'}</span><span><b>${escapeHtml(subgroup.name)}</b>${subgroup.description ? `<small>${escapeHtml(subgroup.description)}</small>` : ''}</span>${statusMatrixProgressHtml(subMetrics)}</button></header>${subCollapsed ? '' : statusMatrixTableHtml(subgroupRows, subgroup.columns || [], 'Brak punktów w tej podgrupie.')}</section>`;
+  }).join('')}</div>`}</section>`;
+}
+
+function statusMatrixFallbackHtml(rows) {
+  return `<section class="status-matrix-group unassigned"><header><div class="status-matrix-unassigned-head"><span><b class="matrix-group-title">Nieprzypisane</b><small>Przypisz te punkty do grupy w podglądzie elementu.</small></span>${statusMatrixProgressHtml(statusMatrixProgress(rows, []))}</div></header>${statusMatrixTableHtml(rows, [{ id: 'legacy', name: 'Status', field_type: 'status', include_in_progress: 1 }], 'Brak punktów.').replaceAll('data-column="legacy"', 'data-column=""').replaceAll('data-status-cell ', '')}</section>`;
+}
+
+async function editStatusMatrixCell(item, column) {
+  if (!item || !column) return;
+  if (item.edit_locked && !item.can_override_edit_lock) return toast(`Edycja jest zablokowana przez ${item.edit_lock?.locked_by_name || 'managera'}.`, true);
+  const current = item.matrix_values?.[column.id] ?? (column.field_type === 'status' ? item.status : '');
+  const fields = column.field_type === 'status'
+    ? [{ name: 'value', label: column.name, type: 'select', value: current, options: statusWorkflowOptions.map(option => ({ value: option.value, label: `${statusSymbolMap[option.value]?.[0] || ''} ${option.label}` })) }]
+    : [{ name: 'value', label: column.name, type: 'textarea', value: current, rows: 5, full: true }];
+  const result = await uiForm({ title: `Edytuj · ${column.name}`, description: item.function_detail, submitLabel: 'Zapisz wartość', fields });
+  if (!result) return;
+  const payload = { value: result.value, updated_at: item.updated_at };
+  if (column.field_type === 'status') {
+    const statusPayload = await statusChangePayload({ ...item, status: current }, result.value);
+    if (!statusPayload) return;
+    Object.assign(payload, statusPayload);
+  }
+  try {
+    const saved = await api(`/api/status/${item.id}/cells/${column.id}`, { method: 'PATCH', body: JSON.stringify(payload) });
+    const index = state.status.findIndex(row => row.id === item.id); if (index >= 0) state.status[index] = saved;
+    drawStatusRows(); toast('Wartość została zapisana');
+  } catch (error) { toast(error.message, true); }
 }
 
 function showStatusContext(event, item) {
@@ -3340,51 +3409,32 @@ function captureQuickStatusRows() {
       const field = input.dataset.field;
       item[field] = field === 'responsible_user_ids'
         ? [...input.selectedOptions].map(option => Number(option.value)).filter(Boolean)
-        : ['function_group_id', 'function_group_subcategory_id', 'function_group_element_id'].includes(field) ? (Number(input.value) || null) : input.value;
+        : ['status_group_id', 'status_subgroup_id'].includes(field) ? (Number(input.value) || null) : input.value;
     });
   });
 }
 
 function renderQuickStatusRows() {
   const query = ($('#quick-status-search').value || '').toLowerCase();
-  const rows = state.quickStatusDraft.filter(item => !query || [controllerLabel(item), item.station, item.function_detail, item.category, item.subcategory, item.current_note]
+  const rows = state.quickStatusDraft.filter(item => !query || [controllerLabel(item), item.status_group_name, item.status_subgroup_name, item.function_detail, Object.values(item.matrix_values || {}).join(' '), item.current_note]
     .join(' ').toLowerCase().includes(query));
   $('#quick-status-count').textContent = `${rows.length} z ${state.quickStatusDraft.length} punktów`;
   $('#quick-status-body').innerHTML = rows.map(item => `<tr data-id="${item.id}">
     <td><select data-field="controller" class="quick-controller">${selectOptions(state.controllers.map(controller => ({ value: controller.code, label: controller.display_name || controller.code })), item.controller)}</select></td>
-    <td><select data-field="function_group_id">${selectOptions(functionGroups(item.controller).map(group => ({ value: group.id, label: group.name })), item.function_group_id, 'Bez grupy funkcyjnej')}</select></td>
-    <td><select data-field="function_group_subcategory_id">${selectOptions(((state.config.function_groups || []).find(group => group.id === Number(item.function_group_id))?.subcategories || []).map(subcategory => ({ value: subcategory.id, label: subcategory.name })), item.function_group_subcategory_id, 'Bez podkategorii grupy')}</select></td>
-    <td><select data-field="function_group_element_id">${selectOptions(((state.config.function_groups || []).find(group => group.id === Number(item.function_group_id))?.elements || []).map(element => ({ value: element.id, label: element.name })), item.function_group_element_id, 'Cała grupa')}</select></td>
+    <td><select data-field="status_group_id" class="quick-status-group">${selectOptions(statusGroups().map(group => ({ value: group.id, label: group.name })), item.status_group_id, 'Wybierz grupę')}</select></td>
+    <td><select data-field="status_subgroup_id" class="quick-status-subgroup">${selectOptions(statusSubgroups(item.status_group_id).map(subgroup => ({ value: subgroup.id, label: subgroup.name })), item.status_subgroup_id, 'Bezpośrednio w grupie')}</select></td>
     <td><input data-field="function_detail" value="${escapeHtml(item.function_detail)}"></td>
-    <td><select data-field="category" class="quick-category">${selectOptions(statusCategories(), item.category)}</select></td>
-    <td><select data-field="subcategory" class="quick-subcategory">${selectOptions(subcategories('status', item.category), item.subcategory, 'Bez podkategorii')}</select></td>
     <td><select data-field="criticality">${selectOptions(['Low', 'Medium', 'High', 'Critical'], item.criticality)}</select></td>
     <td><select data-field="status">${selectOptions(statusWorkflowOptions, item.status)}</select></td>
     <td><select data-field="responsible_user_ids" multiple size="2">${assignableUsers(item.responsible_user_ids || []).map(user => `<option value="${user.id}" ${(item.responsible_user_ids || []).includes(user.id) ? 'selected' : ''}>${escapeHtml(user.display_name)}</option>`).join('')}</select></td>
     <td><textarea data-field="current_note" rows="2">${escapeHtml(item.current_note)}</textarea></td>
-  </tr>`).join('') || '<tr><td colspan="11" class="empty">Brak wyników</td></tr>';
-  $$('#quick-status-body .quick-controller').forEach(select => select.addEventListener('change', () => {
+  </tr>`).join('') || '<tr><td colspan="8" class="empty">Brak wyników</td></tr>';
+  $$('#quick-status-body .quick-status-group').forEach(select => select.addEventListener('change', () => {
     captureQuickStatusRows();
     const row = select.closest('tr');
     const item = state.quickStatusDraft.find(entry => entry.id === Number(row.dataset.id));
-    item.function_group_id = null;
-    item.function_group_subcategory_id = null;
-    item.function_group_element_id = null;
-    row.querySelector('[data-field="function_group_id"]').innerHTML = selectOptions(functionGroups(select.value).map(group => ({ value: group.id, label: group.name })), '', 'Bez grupy funkcyjnej');
-    row.querySelector('[data-field="function_group_subcategory_id"]').innerHTML = selectOptions([], '', 'Bez podkategorii grupy');
-    row.querySelector('[data-field="function_group_element_id"]').innerHTML = selectOptions([], '', 'Cała grupa');
-  }));
-  $$('#quick-status-body [data-field="function_group_id"]').forEach(select => select.addEventListener('change', () => {
-    const row = select.closest('tr'); const group = (state.config.function_groups || []).find(item => item.id === Number(select.value));
-    row.querySelector('[data-field="function_group_subcategory_id"]').innerHTML = selectOptions((group?.subcategories || []).map(item => ({ value: item.id, label: item.name })), '', 'Bez podkategorii grupy');
-    row.querySelector('[data-field="function_group_element_id"]').innerHTML = selectOptions((group?.elements || []).map(element => ({ value: element.id, label: element.name })), '', 'Cała grupa');
-  }));
-  $$('#quick-status-body .quick-category').forEach(select => select.addEventListener('change', () => {
-    captureQuickStatusRows();
-    const row = select.closest('tr');
-    const item = state.quickStatusDraft.find(entry => entry.id === Number(row.dataset.id));
-    item.subcategory = '';
-    row.querySelector('.quick-subcategory').innerHTML = selectOptions(subcategories('status', select.value), '', 'Bez podkategorii');
+    item.status_subgroup_id = null;
+    row.querySelector('.quick-status-subgroup').innerHTML = selectOptions(statusSubgroups(select.value).map(subgroup => ({ value: subgroup.id, label: subgroup.name })), '', 'Bezpośrednio w grupie');
   }));
 }
 
@@ -3393,7 +3443,7 @@ async function saveQuickStatus() {
   const button = $('#quick-status-save');
   button.disabled = true;
   try {
-    const fields = ['controller', 'function_group_id', 'function_group_subcategory_id', 'function_group_element_id', 'function_detail', 'category', 'subcategory', 'criticality', 'status', 'responsible_user_ids', 'current_note'];
+    const fields = ['controller', 'status_group_id', 'status_subgroup_id', 'function_detail', 'criticality', 'status', 'responsible_user_ids', 'current_note'];
     const changed = state.quickStatusDraft.filter(item => {
       const previous = state.status.find(row => row.id === item.id);
       return fields.some(field => JSON.stringify(item[field] ?? null) !== JSON.stringify(previous?.[field] ?? null));
@@ -3415,15 +3465,14 @@ async function saveQuickStatus() {
 
 function openBulkStatus() {
   const controller = defaultValue('controller');
+  const statusGroup = statusGroups()[0];
   $('#bulk-status-fields').innerHTML = `<label class="field required-field"><span>Sterownik *</span><select name="controller" id="bulk-status-controller" required>${selectOptions(state.controllers.map(item => ({ value: item.code, label: item.display_name })), controller)}</select></label>
-    <label class="field"><span>Grupa funkcyjna</span><select name="function_group_id" id="bulk-status-group">${selectOptions(functionGroups(controller).map(item => ({ value: item.id, label: item.name })), '', 'Bez grupy funkcyjnej')}</select></label>
-    <label class="field required-field"><span>Kategoria *</span><select name="category" id="bulk-status-category" required>${selectOptions(statusCategories(), statusCategories()[0] || '')}</select></label>
-    <label class="field"><span>Podkategoria</span><select name="subcategory" id="bulk-status-subcategory">${selectOptions(subcategories('status', statusCategories()[0] || ''), '', 'Bez podkategorii')}</select></label>
+    <label class="field required-field"><span>Grupa statusu *</span><select name="status_group_id" id="bulk-status-matrix-group" required>${selectOptions(statusGroups().map(item => ({ value: item.id, label: item.name })), statusGroup?.id || '', 'Wybierz grupę')}</select></label>
+    <label class="field"><span>Podgrupa</span><select name="status_subgroup_id" id="bulk-status-matrix-subgroup">${selectOptions((statusGroup?.subgroups || []).map(item => ({ value: item.id, label: item.name })), '', 'Bezpośrednio w grupie')}</select></label>
     <label class="field"><span>Krytyczność</span><select name="criticality">${selectOptions(['Low', 'Medium', 'High', 'Critical'], 'Medium', '')}</select></label>
     <label class="field"><span>Status początkowy</span><select name="status">${selectOptions(statusWorkflowOptions, 'Ready to test', '')}</select></label>
     <label class="field full required-field big"><span>Punkty do dodania *</span><textarea name="names" rows="14" required placeholder="Każdy wiersz to osobny punkt, np.&#10;Sprawdź sygnał QM1&#10;Sprawdź sygnał QM2&#10;Potwierdź blokadę osłony"></textarea><small class="sub">Maksymalnie 500 punktów w jednej operacji. Nazwy mogą się powtarzać.</small></label>${requirementsField({}, 'requirement_ids', 'Dodatkowe zapotrzebowanie')}`;
-  $('#bulk-status-controller').addEventListener('change', event => { $('#bulk-status-group').innerHTML = selectOptions(functionGroups(event.target.value).map(item => ({ value: item.id, label: item.name })), '', 'Bez grupy funkcyjnej'); });
-  $('#bulk-status-category').addEventListener('change', event => { $('#bulk-status-subcategory').innerHTML = selectOptions(subcategories('status', event.target.value), '', 'Bez podkategorii'); });
+  $('#bulk-status-matrix-group').addEventListener('change', event => { $('#bulk-status-matrix-subgroup').innerHTML = selectOptions(statusSubgroups(event.target.value).map(item => ({ value: item.id, label: item.name })), '', 'Bezpośrednio w grupie'); });
   $('#bulk-status-dialog').dataset.dirty = '';
   $('#bulk-status-dialog').showModal();
 }
@@ -3434,7 +3483,8 @@ async function saveBulkStatus(event) {
   const input = Object.fromEntries(form);
   input.requirement_ids = form.getAll('requirement_ids').map(Number);
   input.responsible_user_ids = [];
-  input.function_group_id = Number(input.function_group_id) || null;
+  input.status_group_id = Number(input.status_group_id) || null;
+  input.status_subgroup_id = Number(input.status_subgroup_id) || null;
   const count = String(input.names || '').split(/\r?\n/).map(value => value.trim()).filter(Boolean).length;
   if (!count) return toast('Wklej co najmniej jeden punkt', true);
   const button = event.currentTarget.querySelector('.primary'); button.disabled = true;
@@ -3842,6 +3892,12 @@ function functionGroupConfig(admin) {
   </section>`;
 }
 
+function statusMatrixConfig(canEdit) {
+  const groups = statusGroups();
+  const columnRows = (group, subgroup, columns) => `<div class="status-config-columns">${columns.map((column, index) => `<div class="settings-row status-config-column">${canEdit ? orderControls('status_columns', columns, index) : ''}<span><b>${escapeHtml(column.name)}</b><small class="sub">${column.field_type === 'status' ? `Status · ${column.include_in_progress ? 'liczony do realizacji' : 'informacyjny'}` : 'Wolny tekst · poza realizacją'}</small></span>${canEdit ? `<button class="mini edit-status-column" data-group="${group.id}" data-subgroup="${subgroup?.id || ''}" data-id="${column.id}">Edytuj</button><button class="mini danger-outline delete-status-column" data-group="${group.id}" data-subgroup="${subgroup?.id || ''}" data-id="${column.id}">Usuń</button>` : ''}</div>`).join('') || '<div class="empty compact-empty">Brak kolumn. Dodaj pole statusowe lub tekstowe.</div>'}</div>`;
+  return `<section class="config-panel-body status-matrix-config"><header class="status-config-intro"><div><h3>Układ tabel statusowych</h3><p class="sub">Każda grupa i podgrupa ma własne kolumny. Pola „Status” używają obecnego workflow i są prezentowane symbolami; pola tekstowe przyjmują dowolny opis.</p></div>${canEdit ? '<button class="secondary" id="new-status-group">+ Dodaj grupę</button>' : ''}</header>${groups.map((group, groupIndex) => `<article class="status-config-group"><header>${canEdit ? orderControls('status_groups', groups, groupIndex) : ''}<span><b class="status-config-group-title">${escapeHtml(group.name)}</b>${group.description ? `<small>${escapeHtml(group.description)}</small>` : ''}</span>${canEdit ? `<button class="mini edit-status-group" data-id="${group.id}">Edytuj</button><button class="mini add-status-subgroup" data-group="${group.id}">+ Podgrupa</button><button class="mini add-status-column" data-group="${group.id}" data-subgroup="">+ Kolumna grupy</button><button class="mini danger-outline delete-status-group" data-id="${group.id}">Usuń</button>` : ''}</header><section class="status-config-direct"><h4>Punkty bezpośrednio w grupie</h4>${columnRows(group, null, group.columns || [])}</section><div class="status-config-subgroups">${(group.subgroups || []).map((subgroup, subgroupIndex, subgroups) => `<section class="status-config-subgroup"><header>${canEdit ? orderControls('status_subgroups', subgroups, subgroupIndex) : ''}<span><b>${escapeHtml(subgroup.name)}</b>${subgroup.description ? `<small>${escapeHtml(subgroup.description)}</small>` : ''}</span>${canEdit ? `<button class="mini edit-status-subgroup" data-group="${group.id}" data-id="${subgroup.id}">Edytuj</button><button class="mini add-status-column" data-group="${group.id}" data-subgroup="${subgroup.id}">+ Kolumna</button><button class="mini danger-outline delete-status-subgroup" data-group="${group.id}" data-id="${subgroup.id}">Usuń</button>` : ''}</header>${columnRows(group, subgroup, subgroup.columns || [])}</section>`).join('') || '<div class="empty compact-empty">Ta grupa nie ma podgrup. Punkty mogą znajdować się bezpośrednio w grupie.</div>'}</div></article>`).join('') || '<div class="empty">Nie skonfigurowano jeszcze tabel statusowych.</div>'}</section>`;
+}
+
 function controllerHierarchyConfig(admin) {
   const children = parentId => state.controllerGroups.filter(group => Number(group.parent_id || 0) === Number(parentId || 0));
   if (!state.hierarchySelection || ![...state.controllerGroups.map(item => `group:${item.id}`), ...state.controllers.map(item => `controller:${item.id}`)].includes(state.hierarchySelection)) state.hierarchySelection = state.controllerGroups[0] ? `group:${state.controllerGroups[0].id}` : state.controllers[0] ? `controller:${state.controllers[0].id}` : null;
@@ -3875,9 +3931,10 @@ function renderSettings() {
     ...(systemAdmin ? [['projects', 'Projekty systemu', 'Globalne projekty, dostęp i bezpieczne usuwanie', state.projects.length, '▦']] : []),
     ...(systemAdmin ? [['security', 'Dziennik bezpieczeństwa', 'Logowania, MFA, hasła i zmiany dostępu', '', '⌾']] : []),
     ['hierarchy', 'Hierarchia obszarów / sterowników', 'Projekt → obszar → podobszar → sterownik', state.controllerGroups.length + state.controllers.length, '⌘'],
-    ['function_groups', 'Grupy funkcyjne i punkty statusu', 'Stacje, roboty, elementy oraz szablony kontroli', state.config.function_groups.length, '⚙'],
+    ['status_matrix', 'Tabele i pola statusu', 'Grupy, podgrupy oraz niezależne kolumny statusowe i tekstowe', statusGroups().length, '▦'],
+    ['function_groups', 'Obiekty funkcyjne', 'Stacje, roboty i elementy używane również w zadaniach', state.config.function_groups.length, '⚙'],
     ['ops_automations', 'Reguły automatyzacji', 'Powiadomienia i eskalacje według terminów oraz blokad', state.operations?.automation_rules?.length || 0, '⌁'],
-    ['status_categories', 'Kategorie statusu', 'Kategorie i podkategorie w ustalonej kolejności', state.config.categories.length, '▤'],
+    ['status_categories', 'Kategorie otwartych punktów', 'Kategorie i podkategorie używane w module Otwartych punktów', state.config.categories.length, '▤'],
     ['task_categories', 'Kategorie zadań', 'Niezależny słownik dla modułu Zadania', state.config.task_categories.length, '✓'],
     ['users', 'Użytkownicy projektu', 'Role, dostęp, Planner i przypisane obszary', state.users.length, '♙'],
     ['announcements', 'Informator', 'Etykiety oraz poziomy ważności wiadomości', (state.config.announcement_labels || []).length, '◆'],
@@ -3918,8 +3975,9 @@ function configPanelDefinition(key) {
     projects: ['Projekty systemu', `<section class="config-panel-body"><p class="sub">Konta są globalne, a role i dostęp są niezależne dla każdego projektu.</p>${state.projects.map(item => `<div class="settings-row"><span><b>${escapeHtml(item.code)}</b><small class="sub">${escapeHtml(item.description || '')}</small></span><button class="mini edit-project" data-id="${item.id}">Edytuj</button><button class="mini danger-outline delete-project" data-id="${item.id}" ${state.projects.length <= 1 ? 'disabled title="Nie można usunąć ostatniego projektu"' : ''}>Usuń</button></div>`).join('')}<button class="secondary" id="new-project">+ Dodaj projekt</button></section>`],
     security: ['Dziennik bezpieczeństwa', `<section class="config-panel-body"><p class="sub">Ostatnie zdarzenia uwierzytelniania i zmian dostępu. Rejestr jest przechowywany przez 180 dni.</p>${(state.securityEvents || []).map(item => `<div class="settings-row security-event ${escapeHtml(item.outcome)}"><span><b>${escapeHtml(item.event_type)}</b><small class="sub">${escapeHtml(item.username || 'nieznane konto')} · ${escapeHtml(item.ip_address || 'brak adresu')} · ${displayDateTime(item.created_at)}</small></span><em>${escapeHtml(item.outcome)}</em></div>`).join('') || '<div class="empty compact-empty">Brak zarejestrowanych zdarzeń.</div>'}</section>`],
     hierarchy: ['Hierarchia obszarów / sterowników', `<section class="config-panel-body"><p class="sub">Projekt → obszar → podobszar → sterownik. Wybierz element po lewej, a jego działania pojawią się po prawej.</p>${controllerHierarchyConfig(admin)}</section>`],
+    status_matrix: ['Tabele i pola statusu', statusMatrixConfig(canEdit)],
     function_groups: ['Grupy funkcyjne i punkty statusu', functionGroupConfig(admin)],
-    status_categories: ['Kategorie statusu i otwartych punktów', `<section class="config-panel-body">${categoryConfig('status', state.config.categories, admin, canEdit)}</section>`],
+    status_categories: ['Kategorie otwartych punktów', `<section class="config-panel-body">${categoryConfig('status', state.config.categories, admin, canEdit)}</section>`],
     task_categories: ['Kategorie zadań', `<section class="config-panel-body">${categoryConfig('task', state.config.task_categories, admin, canEdit)}</section>`],
     users: ['Użytkownicy projektu', `<section class="config-panel-body">${users}${systemAdmin ? '<button class="secondary" id="new-user">+ Dodaj globalne konto</button>' : ''}</section>`],
     announcements: ['Informator · etykiety i ważność', announcementConfig],
@@ -3951,6 +4009,15 @@ function refreshConfigPanel() {
 
 function bindSettings() {
   $$('.move-item').forEach(button => button.addEventListener('click', () => moveConfigItem(button.dataset.kind, Number(button.dataset.id), Number(button.dataset.direction))));
+  $('#new-status-group')?.addEventListener('click', () => editStatusGroup());
+  $$('.edit-status-group').forEach(button => button.addEventListener('click', () => editStatusGroup(Number(button.dataset.id))));
+  $$('.add-status-subgroup').forEach(button => button.addEventListener('click', () => editStatusSubgroup(Number(button.dataset.group))));
+  $$('.edit-status-subgroup').forEach(button => button.addEventListener('click', () => editStatusSubgroup(Number(button.dataset.group), Number(button.dataset.id))));
+  $$('.add-status-column').forEach(button => button.addEventListener('click', () => editStatusColumn(Number(button.dataset.group), Number(button.dataset.subgroup) || null)));
+  $$('.edit-status-column').forEach(button => button.addEventListener('click', () => editStatusColumn(Number(button.dataset.group), Number(button.dataset.subgroup) || null, Number(button.dataset.id))));
+  $$('.delete-status-column').forEach(button => button.addEventListener('click', async () => { if (!await uiConfirm('Usuń kolumnę', 'Wartości zapisane w tej kolumnie zostaną usunięte.', 'Usuń kolumnę', true)) return; const base = `/api/status-groups/${button.dataset.group}${button.dataset.subgroup ? `/subgroups/${button.dataset.subgroup}` : ''}/columns/${button.dataset.id}`; try { await api(base, { method: 'DELETE' }); await loadData(true); toast('Kolumna została usunięta'); } catch (error) { toast(error.message, true); } }));
+  $$('.delete-status-subgroup').forEach(button => button.addEventListener('click', async () => { if (!await uiConfirm('Usuń podgrupę', 'Punkty zostaną przeniesione bezpośrednio do grupy, a wartości kolumn podgrupy usunięte.', 'Usuń podgrupę', true)) return; try { await api(`/api/status-groups/${button.dataset.group}/subgroups/${button.dataset.id}`, { method: 'DELETE' }); await loadData(true); toast('Podgrupa została usunięta'); } catch (error) { toast(error.message, true); } }));
+  $$('.delete-status-group').forEach(button => button.addEventListener('click', async () => { if (!await uiConfirm('Usuń grupę statusu', 'Punkty pozostaną w systemie jako nieprzypisane. Układ kolumn i jego wartości zostaną usunięte.', 'Usuń grupę', true)) return; try { await api(`/api/status-groups/${button.dataset.id}`, { method: 'DELETE' }); await loadData(true); toast('Grupa została usunięta'); } catch (error) { toast(error.message, true); } }));
   $$('.select-hierarchy-node').forEach(button => button.addEventListener('click', () => { state.hierarchySelection = button.dataset.node; state.configScroll = $('#config-full-content')?.scrollTop || 0; refreshConfigPanel(); }));
   $$('.select-category-node').forEach(button => button.addEventListener('click', () => { state.categorySelection[button.dataset.scope] = Number(button.dataset.id); state.configScroll = $('#config-full-content')?.scrollTop || 0; refreshConfigPanel(); }));
   $('#new-root-group')?.addEventListener('click', () => saveControllerGroup(null, null));
@@ -4401,6 +4468,15 @@ async function moveConfigItem(kind, id, direction) {
     const group = state.config.function_groups.find(entry => entry.subcategories?.some(item => item.id === id));
     items = group?.subcategories || [];
   }
+  else if (kind === 'status_groups') items = statusGroups();
+  else if (kind === 'status_subgroups') {
+    const group = statusGroups().find(entry => entry.subgroups?.some(item => item.id === id));
+    items = group?.subgroups || [];
+  }
+  else if (kind === 'status_columns') {
+    const scopes = statusGroups().flatMap(group => [group.columns || [], ...(group.subgroups || []).map(subgroup => subgroup.columns || [])]);
+    items = scopes.find(columns => columns.some(item => item.id === id)) || [];
+  }
   else if (kind === 'export_templates') items = state.config.export_templates || [];
   else if (kind === 'completion_requirements') items = state.config.requirements || [];
   else if (kind === 'categories') items = state.config.categories;
@@ -4423,6 +4499,46 @@ async function moveConfigItem(kind, id, direction) {
   await loadData();
 }
 
+async function editStatusGroup(id = null) {
+  const item = statusGroups().find(group => group.id === Number(id));
+  const result = await uiForm({ title: item ? 'Edytuj grupę statusu' : 'Dodaj grupę statusu', description: 'Grupa zawiera własne punkty i opcjonalne podgrupy z niezależnymi kolumnami.', submitLabel: item ? 'Zapisz grupę' : 'Dodaj grupę', fields: [
+    { name: 'name', label: 'Nazwa grupy', value: item?.name || '', required: true },
+    { name: 'description', label: 'Opis (opcjonalnie)', type: 'textarea', value: item?.description || '', rows: 3, full: true }
+  ] });
+  if (!result) return;
+  try { await api('/api/status-groups' + (item ? `/${item.id}` : ''), { method: item ? 'PATCH' : 'POST', body: JSON.stringify(result) }); toast('Grupa statusu została zapisana'); await loadData(true); }
+  catch (error) { toast(error.message, true); }
+}
+
+async function editStatusSubgroup(groupId, id = null) {
+  const group = statusGroups().find(item => item.id === Number(groupId)); const item = group?.subgroups?.find(subgroup => subgroup.id === Number(id));
+  if (!group) return;
+  const fields = [
+    { name: 'name', label: 'Nazwa podgrupy', value: item?.name || '', required: true },
+    { name: 'description', label: 'Opis (opcjonalnie)', type: 'textarea', value: item?.description || '', rows: 3, full: true }
+  ];
+  if (!item) fields.push({ name: 'copy_parent_columns', label: 'Skopiuj kolumny grupy jako punkt wyjścia', type: 'checkbox', value: 1, full: true });
+  const result = await uiForm({ title: item ? `Edytuj podgrupę · ${group.name}` : `Dodaj podgrupę · ${group.name}`, submitLabel: item ? 'Zapisz podgrupę' : 'Dodaj podgrupę', fields });
+  if (!result) return;
+  try { await api(`/api/status-groups/${group.id}/subgroups` + (item ? `/${item.id}` : ''), { method: item ? 'PATCH' : 'POST', body: JSON.stringify(result) }); toast('Podgrupa została zapisana'); await loadData(true); }
+  catch (error) { toast(error.message, true); }
+}
+
+async function editStatusColumn(groupId, subgroupId = null, id = null) {
+  const group = statusGroups().find(item => item.id === Number(groupId)); const subgroup = group?.subgroups?.find(item => item.id === Number(subgroupId));
+  const columns = subgroup ? subgroup.columns || [] : group?.columns || []; const item = columns.find(column => column.id === Number(id));
+  if (!group) return;
+  const result = await uiForm({ title: item ? 'Edytuj kolumnę' : 'Dodaj kolumnę', description: `${group.name}${subgroup ? ` → ${subgroup.name}` : ' → punkty grupy'}`, submitLabel: item ? 'Zapisz kolumnę' : 'Dodaj kolumnę', fields: [
+    { name: 'name', label: 'Nazwa kolumny', value: item?.name || '', required: true },
+    { name: 'field_type', label: 'Rodzaj pola', type: 'select', value: item?.field_type || 'status', options: [{ value: 'status', label: 'Status — workflow i symbole' }, { value: 'text', label: 'Wolny tekst' }] },
+    { name: 'include_in_progress', label: 'Uwzględniaj w procencie realizacji (tylko Status)', type: 'checkbox', value: item ? Number(item.include_in_progress) : 1, full: true }
+  ] });
+  if (!result) return;
+  const base = `/api/status-groups/${group.id}${subgroup ? `/subgroups/${subgroup.id}` : ''}/columns`;
+  try { await api(base + (item ? `/${item.id}` : ''), { method: item ? 'PATCH' : 'POST', body: JSON.stringify(result) }); toast('Kolumna została zapisana'); await loadData(true); }
+  catch (error) { toast(error.message, true); }
+}
+
 async function saveSetting(key, value) {
   await api(`/api/settings/${key}`, { method: 'PATCH', body: JSON.stringify({ value }) });
   toast('Ustawienie zapisane');
@@ -4430,9 +4546,8 @@ async function saveSetting(key, value) {
 }
 
 const formDefinitions = {
-  status: { endpoint: '/api/status', title: 'test', fields: [
-    ['controller', 'Sterownik', 'controller'], ['function_group_id', 'Grupa funkcyjna', 'function-group'], ['function_group_subcategory_id', 'Podkategoria grupy funkcyjnej', 'function-subcategory'], ['function_group_element_id', 'Obiekt / element grupy', 'function-element'], ['function_detail', 'Test / funkcja (instrukcja)', 'textarea'],
-    ['category', 'Kategoria', 'category', 'status'], ['subcategory', 'Podkategoria', 'subcategory', 'status'],
+  status: { endpoint: '/api/status', title: 'punkt statusu', fields: [
+    ['controller', 'Sterownik', 'controller'], ['status_group_id', 'Grupa tabeli statusowej', 'status-group'], ['status_subgroup_id', 'Podgrupa tabeli statusowej', 'status-subgroup'], ['function_group_id', 'Grupa funkcyjna', 'function-group'], ['function_group_subcategory_id', 'Podkategoria grupy funkcyjnej', 'function-subcategory'], ['function_group_element_id', 'Obiekt / element grupy', 'function-element'], ['function_detail', 'Punkt / element', 'textarea'],
     ['status', 'Status', 'select', statusWorkflowOptions],
     ['criticality', 'Krytyczność', 'select', ['Low', 'Medium', 'High', 'Critical']], ['responsible_user_ids', 'Osoby odpowiedzialne', 'users'], ['dependency_refs', 'Zależności — elementy wymagane wcześniej', 'dependencies'],
     ['requirement_ids', 'Dodatkowe zapotrzebowanie', 'requirements'], ['current_note', 'Aktualna notatka', 'textarea'], ['evidence_link', 'Dodatkowe informacje / link'], ['links', 'Powiązane elementy', 'multi-links', ['task', 'point', 'note', 'goal']]
@@ -4701,7 +4816,7 @@ function defaultValue(name) {
 
 function requiredRecordField(formType, name, record) {
   const fields = {
-    status: ['controller', 'function_detail', 'category', 'status'], tasks: ['hierarchy_target', 'title', 'status'],
+    status: ['controller', 'status_group_id', 'function_detail', 'status'], tasks: ['hierarchy_target', 'title', 'status'],
     points: ['controller', 'title', 'status'], goals: ['controller', 'title', 'status'], announcements: ['title', 'content'],
     users: ['username', 'display_name'], controllers: ['leaf_code']
   };
@@ -4742,6 +4857,11 @@ function fieldHtml([name, label, type = 'text', extra], record, formType = '') {
     input = `<select name="${name}" id="form-note-hierarchy-target">${selectOptions([{ value: 'all', label: 'Cały projekt' }, ...taskHierarchyOptions()], selected, null)}</select>`;
   }
   else if (type === 'controller-group') input = `<select name="${name}">${selectOptions(hierarchyGroupOptions(), value, 'Bez grupy')}</select>`;
+  else if (type === 'status-group') input = `<select name="${name}" id="form-status-group" ${required ? 'required' : ''}>${selectOptions(statusGroups().map(item => ({ value: item.id, label: item.name })), value, 'Wybierz grupę')}</select>`;
+  else if (type === 'status-subgroup') {
+    const groupId = record?.status_group_id || $('#form-status-group')?.value || '';
+    input = `<select name="${name}" id="form-status-subgroup">${selectOptions(statusSubgroups(groupId).map(item => ({ value: item.id, label: item.name })), value, 'Punkty bezpośrednio w grupie')}</select>`;
+  }
   else if (type === 'function-group') {
     const controllerCode = record?.controller || defaultValue('controller');
     input = `<select name="${name}" id="form-function-group">${selectOptions(functionGroups(controllerCode).map(item => ({ value: item.id, label: item.name })), value, 'Bez grupy funkcyjnej')}</select>`;
@@ -4858,6 +4978,7 @@ function bindDynamicFields(type) {
   }));
   $('#form-category')?.addEventListener('change', event => { const scope = event.target.dataset.scope; $('#form-subcategory').innerHTML = selectOptions(subcategories(scope, event.target.value)); if (type === 'status') applyDefaultFunction(); });
   $('#form-subcategory')?.addEventListener('change', () => { if (type === 'status') applyDefaultFunction(); });
+  $('#form-status-group')?.addEventListener('change', event => { $('#form-status-subgroup').innerHTML = selectOptions(statusSubgroups(event.target.value).map(item => ({ value: item.id, label: item.name })), '', 'Punkty bezpośrednio w grupie'); });
   $('#entity-type')?.addEventListener('change', fillEntitySelect);
   if (['status', 'tasks'].includes(type)) {
     $('#form-controller')?.addEventListener('change', event => {
@@ -5134,7 +5255,7 @@ function auditAction(action) { return ({ create: 'utworzenie', update: 'edycja',
 function fieldLabel(field) { return ({
   created: 'Utworzenie elementu', migrated: 'Migracja danych', controller_id: 'Sterownik', controller_group_id: 'Zakres hierarchii',
   title: 'Tytuł', description: 'Opis', status: 'Status', priority: 'Priorytet', category: 'Kategoria', subcategory: 'Podkategoria',
-  station: 'Stacja / obiekt', function_detail: 'Test / funkcja', function_group_id: 'Grupa funkcyjna', function_group_element_id: 'Element grupy', function_group_subcategory_id: 'Podkategoria grupy funkcyjnej',
+  station: 'Stacja / obiekt', function_detail: 'Punkt / element', function_group_id: 'Grupa funkcyjna', function_group_element_id: 'Element grupy', function_group_subcategory_id: 'Podkategoria grupy funkcyjnej', status_group_id: 'Grupa tabeli statusowej', status_subgroup_id: 'Podgrupa tabeli statusowej', matrix_values: 'Wartości tabeli statusowej',
   other_object: 'Inny obiekt', owner: 'Odpowiedzialny (opis)', owner_user_id: 'Odpowiedzialny', responsible: 'Odpowiedzialny (opis)', responsible_user_id: 'Odpowiedzialny', responsible_user_ids: 'Osoby odpowiedzialne', direct_assignee_user_ids: 'Odpowiedzialni', mentioned_user_ids: 'Wspomniane osoby',
   due_date: 'Deadline', reminder_date: 'Przypomnienie', start_date: 'Planowany start', note_date: 'Data wpisu', checked_on: 'Data sprawdzenia', checked_by: 'Sprawdził',
   current_note: 'Aktualna notatka', environment: 'Środowisko', criticality: 'Krytyczność', evidence_link: 'Dowód / link', info_link: 'Dodatkowe informacje / link',
@@ -5154,6 +5275,12 @@ function formatAuditValue(field, value) {
   if (field === 'function_group_id') return state.config.function_groups.find(item => item.id === Number(value))?.name || 'Bez grupy';
   if (field === 'function_group_element_id') return state.config.function_groups.flatMap(item => item.elements || []).find(item => item.id === Number(value))?.name || 'Bez elementu';
   if (field === 'function_group_subcategory_id') return state.config.function_groups.flatMap(item => item.subcategories || []).find(item => item.id === Number(value))?.name || 'Bez podkategorii';
+  if (field === 'status_group_id') return statusGroups().find(item => item.id === Number(value))?.name || 'Bez grupy';
+  if (field === 'status_subgroup_id') return statusGroups().flatMap(item => item.subgroups || []).find(item => item.id === Number(value))?.name || 'Bez podgrupy';
+  if (field === 'matrix_values') {
+    const columns = statusGroups().flatMap(group => [...(group.columns || []), ...(group.subgroups || []).flatMap(subgroup => subgroup.columns || [])]);
+    return Object.entries(value || {}).map(([id, cell]) => `${columns.find(column => column.id === Number(id))?.name || `Kolumna ${id}`}: ${badgeMap[cell]?.[0] || cell || '—'}`).join('; ') || '—';
+  }
   if (field === 'links') return (value || []).map(auditLinkName).join(', ') || '—';
   if (field === 'requirement_ids') return (value || []).map(id => (state.config.requirements || []).find(item => item.id === Number(id))?.name || `Usunięte wymaganie`).join(', ') || '—';
   if (field === 'dependency_task_ids') return (value || []).map(id => (state.taskDependencyOptions.length ? state.taskDependencyOptions : state.tasks).find(item => item.id === Number(id))?.title || 'Usunięte zadanie').join(', ') || '—';
@@ -5240,6 +5367,7 @@ async function saveRecord(event) {
   input.label_ids = formData.getAll('label_ids').map(Number);
   if (record?.updated_at) input.updated_at = record.updated_at;
   if (duplicateSource?.id) input.duplicate_source_id = duplicateSource.id;
+  if (type === 'status' && duplicateSource?.matrix_values) input.matrix_values = duplicateSource.matrix_values;
   if (formDefinitions[type].fields.some(field => field[2] === 'multi-links')) { captureMultiLinks(); input.links = state.linkDraft; }
   if (type === 'tasks') {
     input.checklist = $$('#checklist .check-row').map(row => ({ text: row.querySelector('[data-check-text]').value, done: row.querySelector('[data-check-done]').checked, weight: Number(row.querySelector('[data-check-weight]').value) || 1, owner_user_id: Number(row.querySelector('[data-check-owner]').value) || null })).filter(item => item.text.trim());
