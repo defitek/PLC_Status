@@ -225,6 +225,7 @@ CREATE TABLE IF NOT EXISTS status_columns (
   status_group_id INTEGER NOT NULL REFERENCES status_groups(id) ON DELETE CASCADE,
   status_subgroup_id INTEGER REFERENCES status_subgroups(id) ON DELETE CASCADE,
   name TEXT NOT NULL COLLATE NOCASE,
+  column_role TEXT NOT NULL DEFAULT 'subpoint' CHECK(column_role IN ('basic','subpoint')),
   field_type TEXT NOT NULL DEFAULT 'status' CHECK(field_type IN ('status','text')),
   include_in_progress INTEGER NOT NULL DEFAULT 1,
   sort_order INTEGER NOT NULL DEFAULT 0,

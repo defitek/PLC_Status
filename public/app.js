@@ -84,6 +84,7 @@ function statusSymbol(value, interactive = false) {
 function statusSymbolLegend() {
   return `<div class="status-symbol-legend" aria-label="Legenda statusów"><b>Legenda</b>${statusWorkflowOptions.map(item => `<span>${statusSymbol(item.value)}<small>${escapeHtml(item.label)}</small></span>`).join('')}</div>`;
 }
+const statusColumnRole = column => column?.column_role || (column?.field_type === 'text' ? 'basic' : 'subpoint');
 const badge = value => { const item = badgeMap[value] || [value || '—', 'gray']; return `<span class="badge ${item[1]}">${escapeHtml(item[0])}</span>`; };
 const editLockNote = item => item?.edit_locked ? `<span class="edit-lock-note" title="${escapeHtml(`Zablokowany przed edycją przez: ${item.edit_lock?.locked_by_name || 'managera'}; Powód: ${item.edit_lock?.reason || 'nie podano'}`)}">🔒 Zablokowany przed edycją</span>` : '';
 function appendEditLockNote(root, item, selector) {
@@ -3949,13 +3950,13 @@ function functionGroupConfig(admin) {
 function statusMatrixConfig(canEdit) {
   const groups = statusGroups();
   const columnRows = (group, subgroup, columns) => {
-    const rows = items => `<div class="status-config-columns">${items.map(column => { const index = columns.indexOf(column); return `<div class="settings-row status-config-column">${canEdit ? orderControls('status_columns', columns, index) : ''}<span><b>${escapeHtml(column.name)}</b><small class="sub">${column.field_type === 'status' ? `Podpunkt statusowy · ${column.include_in_progress ? 'liczony do realizacji' : 'informacyjny'}` : 'Kolumna podstawowa · dane identyfikujące element'}</small></span>${canEdit ? `<button class="mini edit-status-column" data-group="${group.id}" data-subgroup="${subgroup?.id || ''}" data-id="${column.id}">Edytuj</button><button class="mini danger-outline delete-status-column" data-group="${group.id}" data-subgroup="${subgroup?.id || ''}" data-id="${column.id}">Usuń</button>` : ''}</div>`; }).join('')}</div>`;
-    const basic = columns.filter(column => column.field_type === 'text');
-    const checks = columns.filter(column => column.field_type === 'status');
-    return `<div class="status-column-kinds"><section><h5>Kolumny podstawowe</h5>${basic.length ? rows(basic) : '<div class="empty compact-empty">Brak kolumn opisowych.</div>'}</section><section><h5>Podpunkty statusowe</h5>${checks.length ? rows(checks) : '<div class="empty compact-empty">Brak podpunktów do weryfikacji.</div>'}</section></div>`;
+    const rows = items => `<div class="status-config-columns">${items.map(column => { const index = columns.indexOf(column); const detail = statusColumnRole(column) === 'subpoint' ? (column.field_type === 'status' ? `Status · ${column.include_in_progress ? 'liczony do realizacji' : 'informacyjny'}` : 'Pole tekstowe') : ''; return `<div class="settings-row status-config-column">${canEdit ? orderControls('status_columns', columns, index) : ''}<span><b>${escapeHtml(column.name)}</b>${detail ? `<small class="sub">${detail}</small>` : ''}</span>${canEdit ? `<button class="mini edit-status-column" data-group="${group.id}" data-subgroup="${subgroup?.id || ''}" data-id="${column.id}">Edytuj</button><button class="mini danger-outline delete-status-column" data-group="${group.id}" data-subgroup="${subgroup?.id || ''}" data-id="${column.id}">Usuń</button>` : ''}</div>`; }).join('')}</div>`;
+    const basic = columns.filter(column => statusColumnRole(column) === 'basic');
+    const subpoints = columns.filter(column => statusColumnRole(column) === 'subpoint');
+    return `<div class="status-column-kinds"><section><h5>Kolumny podstawowe</h5>${basic.length ? rows(basic) : '<div class="empty compact-empty">Brak kolumn opisowych.</div>'}</section><section><h5>Podpunkty statusowe</h5>${subpoints.length ? rows(subpoints) : '<div class="empty compact-empty">Brak podpunktów do weryfikacji.</div>'}</section></div>`;
   };
-  const addColumnButtons = (groupId, subgroupId = '') => `<button class="mini add-status-column" data-column-type="text" data-group="${groupId}" data-subgroup="${subgroupId}">+ Kolumna podstawowa</button><button class="mini add-status-column" data-column-type="status" data-group="${groupId}" data-subgroup="${subgroupId}">+ Podpunkt statusowy</button>`;
-  return `<section class="config-panel-body status-matrix-config"><header class="status-config-intro"><div><h3>Układ tabel statusowych</h3><p class="sub">Kolumny podstawowe opisują element, np. typ i nazwę urządzenia. Podpunkty statusowe, np. +24V lub PN, mają osobny workflow i symbol statusu.</p></div>${canEdit ? '<button class="secondary" id="new-status-group">+ Dodaj grupę</button>' : ''}</header>${groups.map((group, groupIndex) => `<article class="status-config-group"><header>${canEdit ? orderControls('status_groups', groups, groupIndex) : ''}<span><b class="status-config-group-title">${escapeHtml(group.name)}</b>${group.description ? `<small>${escapeHtml(group.description)}</small>` : ''}</span>${canEdit ? `<button class="mini edit-status-group" data-id="${group.id}">Edytuj</button><button class="mini add-status-subgroup" data-group="${group.id}">+ Podgrupa</button>${addColumnButtons(group.id)}<button class="mini danger-outline delete-status-group" data-id="${group.id}">Usuń</button>` : ''}</header><section class="status-config-direct"><h4>Punkty bezpośrednio w grupie</h4>${columnRows(group, null, group.columns || [])}</section><div class="status-config-subgroups">${(group.subgroups || []).map((subgroup, subgroupIndex, subgroups) => `<section class="status-config-subgroup"><header>${canEdit ? orderControls('status_subgroups', subgroups, subgroupIndex) : ''}<span><b>${escapeHtml(subgroup.name)}</b>${subgroup.description ? `<small>${escapeHtml(subgroup.description)}</small>` : ''}</span>${canEdit ? `<button class="mini edit-status-subgroup" data-group="${group.id}" data-id="${subgroup.id}">Edytuj</button>${addColumnButtons(group.id, subgroup.id)}<button class="mini danger-outline delete-status-subgroup" data-group="${group.id}" data-id="${subgroup.id}">Usuń</button>` : ''}</header>${columnRows(group, subgroup, subgroup.columns || [])}</section>`).join('') || '<div class="empty compact-empty">Ta grupa nie ma podgrup. Punkty mogą znajdować się bezpośrednio w grupie.</div>'}</div></article>`).join('') || '<div class="empty">Nie skonfigurowano jeszcze tabel statusowych.</div>'}</section>`;
+  const addColumnButtons = (groupId, subgroupId = '') => `<button class="mini add-status-column" data-column-role="basic" data-group="${groupId}" data-subgroup="${subgroupId}">+ Kolumna podstawowa</button><button class="mini add-status-column" data-column-role="subpoint" data-group="${groupId}" data-subgroup="${subgroupId}">+ Podpunkt statusowy</button>`;
+  return `<section class="config-panel-body status-matrix-config"><header class="status-config-intro"><div><h3>Układ tabel statusowych</h3><p class="sub">Kolumny podstawowe opisują element, np. typ i nazwę urządzenia. Każdy podpunkt statusowy może być statusem z symbolem workflow albo polem tekstowym.</p></div>${canEdit ? '<button class="secondary" id="new-status-group">+ Dodaj grupę</button>' : ''}</header>${groups.map((group, groupIndex) => `<article class="status-config-group"><header>${canEdit ? orderControls('status_groups', groups, groupIndex) : ''}<span><b class="status-config-group-title">${escapeHtml(group.name)}</b>${group.description ? `<small>${escapeHtml(group.description)}</small>` : ''}</span>${canEdit ? `<button class="mini edit-status-group" data-id="${group.id}">Edytuj</button><button class="mini add-status-subgroup" data-group="${group.id}">+ Podgrupa</button>${addColumnButtons(group.id)}<button class="mini danger-outline delete-status-group" data-id="${group.id}">Usuń</button>` : ''}</header><section class="status-config-direct"><h4>Punkty bezpośrednio w grupie</h4>${columnRows(group, null, group.columns || [])}</section><div class="status-config-subgroups">${(group.subgroups || []).map((subgroup, subgroupIndex, subgroups) => `<section class="status-config-subgroup"><header>${canEdit ? orderControls('status_subgroups', subgroups, subgroupIndex) : ''}<span><b>${escapeHtml(subgroup.name)}</b>${subgroup.description ? `<small>${escapeHtml(subgroup.description)}</small>` : ''}</span>${canEdit ? `<button class="mini edit-status-subgroup" data-group="${group.id}" data-id="${subgroup.id}">Edytuj</button>${addColumnButtons(group.id, subgroup.id)}<button class="mini danger-outline delete-status-subgroup" data-group="${group.id}" data-id="${subgroup.id}">Usuń</button>` : ''}</header>${columnRows(group, subgroup, subgroup.columns || [])}</section>`).join('') || '<div class="empty compact-empty">Ta grupa nie ma podgrup. Punkty mogą znajdować się bezpośrednio w grupie.</div>'}</div></article>`).join('') || '<div class="empty">Nie skonfigurowano jeszcze tabel statusowych.</div>'}</section>`;
 }
 
 function controllerHierarchyConfig(admin) {
@@ -4073,7 +4074,7 @@ function bindSettings() {
   $$('.edit-status-group').forEach(button => button.addEventListener('click', () => editStatusGroup(Number(button.dataset.id))));
   $$('.add-status-subgroup').forEach(button => button.addEventListener('click', () => editStatusSubgroup(Number(button.dataset.group))));
   $$('.edit-status-subgroup').forEach(button => button.addEventListener('click', () => editStatusSubgroup(Number(button.dataset.group), Number(button.dataset.id))));
-  $$('.add-status-column').forEach(button => button.addEventListener('click', () => editStatusColumn(Number(button.dataset.group), Number(button.dataset.subgroup) || null, null, button.dataset.columnType)));
+  $$('.add-status-column').forEach(button => button.addEventListener('click', () => editStatusColumn(Number(button.dataset.group), Number(button.dataset.subgroup) || null, null, button.dataset.columnRole)));
   $$('.edit-status-column').forEach(button => button.addEventListener('click', () => editStatusColumn(Number(button.dataset.group), Number(button.dataset.subgroup) || null, Number(button.dataset.id))));
   $$('.delete-status-column').forEach(button => button.addEventListener('click', async () => { if (!await uiConfirm('Usuń kolumnę', 'Wartości zapisane w tej kolumnie zostaną usunięte.', 'Usuń kolumnę', true)) return; const base = `/api/status-groups/${button.dataset.group}${button.dataset.subgroup ? `/subgroups/${button.dataset.subgroup}` : ''}/columns/${button.dataset.id}`; try { await api(base, { method: 'DELETE' }); await loadData(true); toast('Kolumna została usunięta'); } catch (error) { toast(error.message, true); } }));
   $$('.delete-status-subgroup').forEach(button => button.addEventListener('click', async () => { if (!await uiConfirm('Usuń podgrupę', 'Punkty zostaną przeniesione bezpośrednio do grupy, a wartości kolumn podgrupy usunięte.', 'Usuń podgrupę', true)) return; try { await api(`/api/status-groups/${button.dataset.group}/subgroups/${button.dataset.id}`, { method: 'DELETE' }); await loadData(true); toast('Podgrupa została usunięta'); } catch (error) { toast(error.message, true); } }));
@@ -4582,18 +4583,30 @@ async function editStatusSubgroup(groupId, id = null) {
   catch (error) { toast(error.message, true); }
 }
 
-async function editStatusColumn(groupId, subgroupId = null, id = null, requestedType = null) {
+async function editStatusColumn(groupId, subgroupId = null, id = null, requestedRole = null) {
   const group = statusGroups().find(item => item.id === Number(groupId)); const subgroup = group?.subgroups?.find(item => item.id === Number(subgroupId));
   const columns = subgroup ? subgroup.columns || [] : group?.columns || []; const item = columns.find(column => column.id === Number(id));
   if (!group) return;
-  const fieldType = item?.field_type || requestedType || 'status';
-  const result = await uiForm({ title: item ? `Edytuj ${fieldType === 'status' ? 'podpunkt statusowy' : 'kolumnę podstawową'}` : `Dodaj ${fieldType === 'status' ? 'podpunkt statusowy' : 'kolumnę podstawową'}`, description: `${group.name}${subgroup ? ` → ${subgroup.name}` : ' → punkty grupy'}`, submitLabel: item ? 'Zapisz' : 'Dodaj', fields: [
+  const columnRole = item ? statusColumnRole(item) : requestedRole === 'basic' ? 'basic' : 'subpoint';
+  const fieldType = columnRole === 'basic' ? 'text' : item?.field_type || 'status';
+  const formPromise = uiForm({ title: item ? `Edytuj ${columnRole === 'subpoint' ? 'podpunkt statusowy' : 'kolumnę podstawową'}` : `Dodaj ${columnRole === 'subpoint' ? 'podpunkt statusowy' : 'kolumnę podstawową'}`, description: `${group.name}${subgroup ? ` → ${subgroup.name}` : ' → punkty grupy'}`, submitLabel: item ? 'Zapisz' : 'Dodaj', fields: [
     { name: 'name', label: 'Nazwa kolumny', value: item?.name || '', required: true },
-    ...(fieldType === 'status' ? [{ name: 'include_in_progress', label: 'Uwzględniaj podpunkt w procencie realizacji', type: 'checkbox', value: item ? Number(item.include_in_progress) : 1, full: true }] : [])
+    ...(columnRole === 'subpoint' ? [
+      { name: 'field_type', label: 'Rodzaj podpunktu', type: 'select', value: fieldType, options: [{ value: 'status', label: 'Status — wybór symbolu workflow' }, { value: 'text', label: 'Pole tekstowe — dowolna wartość' }], full: true, className: 'status-subpoint-type' },
+      { name: 'include_in_progress', label: 'Uwzględniaj podpunkt w procencie realizacji', type: 'checkbox', value: item ? Number(item.include_in_progress) : 1, full: true, className: 'status-subpoint-progress' }
+    ] : [])
   ] });
+  if (columnRole === 'subpoint') {
+    const typeSelect = $('#action-fields [name="field_type"]');
+    const progressField = $('#action-fields .status-subpoint-progress');
+    const syncProgress = () => { progressField.hidden = typeSelect.value !== 'status'; };
+    typeSelect.addEventListener('change', syncProgress); syncProgress();
+  }
+  const result = await formPromise;
   if (!result) return;
-  result.field_type = fieldType;
-  if (fieldType === 'text') result.include_in_progress = 0;
+  result.column_role = columnRole;
+  if (columnRole === 'basic') result.field_type = 'text';
+  if (result.field_type === 'text') result.include_in_progress = 0;
   const base = `/api/status-groups/${group.id}${subgroup ? `/subgroups/${subgroup.id}` : ''}/columns`;
   try { await api(base + (item ? `/${item.id}` : ''), { method: item ? 'PATCH' : 'POST', body: JSON.stringify(result) }); toast('Kolumna została zapisana'); await loadData(true); }
   catch (error) { toast(error.message, true); }
@@ -4686,7 +4699,10 @@ async function openRecord(type, record = null, prefill = null, duplicateSource =
   $('#comment-content').value = '';
   if (commentable) renderEntityComments(record.comments || []);
   resetSimilarKnowledge();
-  $('#fields').innerHTML = definition.fields.map(field => fieldHtml(field, source, type)).join('');
+  const visibleFields = type === 'status' && record
+    ? definition.fields.filter(field => !['status_group_id', 'status_subgroup_id'].includes(field[0]))
+    : definition.fields;
+  $('#fields').innerHTML = visibleFields.map(field => fieldHtml(field, source, type)).join('');
   if (type === 'users' && state.me.role !== 'system_admin') {
     ['username', 'display_name', 'password', 'system_role', 'active'].forEach(name => { const input = $(`#fields [name="${name}"]`); if (input) input.disabled = true; });
     const projectRole = $('#fields [name="project_role"]');
@@ -4877,12 +4893,17 @@ function statusEditorColumns(groupId, subgroupId) {
 
 function statusMatrixEditorField(record, groupId = record?.status_group_id, subgroupId = record?.status_subgroup_id) {
   const columns = statusEditorColumns(groupId, subgroupId);
-  const basic = columns.filter(column => column.field_type === 'text');
-  const checks = columns.filter(column => column.field_type === 'status');
+  const basic = columns.filter(column => statusColumnRole(column) === 'basic');
+  const subpoints = columns.filter(column => statusColumnRole(column) === 'subpoint');
+  const workflowSubpoints = subpoints.filter(column => column.field_type === 'status');
   const value = column => record?.matrix_values?.[column.id] ?? (column.field_type === 'status' ? record?.status || 'Ready to test' : '');
   const basicHtml = basic.map(column => `<label class="field"><span>${escapeHtml(column.name)}</span><input type="text" data-matrix-value data-column="${column.id}" data-column-type="text" value="${escapeHtml(value(column))}"></label>`).join('');
-  const checksHtml = checks.map(column => `<label class="status-subpoint-field"><span>${statusSymbol(value(column))}<b>${escapeHtml(column.name)}</b></span><select data-matrix-value data-column="${column.id}" data-column-type="status">${selectOptions(statusWorkflowOptions.map(option => ({ value: option.value, label: `${statusSymbolMap[option.value]?.[0] || ''} ${option.label}` })), value(column), null)}</select></label>`).join('');
-  return `<section class="field full status-item-matrix-editor" id="status-item-matrix-editor"><header><span><b>Dane punktu statusowego</b><small>Kolumny podstawowe opisują element, a każdy podpunkt ma własny status.</small></span></header>${columns.length ? `${basic.length ? `<div class="status-basic-fields"><h4>Kolumny podstawowe</h4><div>${basicHtml}</div></div>` : ''}${checks.length ? `<div class="status-subpoint-fields"><div class="status-subpoint-heading"><h4>Podpunkty statusowe</h4>${statusSymbolLegend()}</div><div>${checksHtml}</div></div>` : ''}` : '<div class="empty compact-empty">Ta grupa nie ma jeszcze zdefiniowanych kolumn podstawowych ani podpunktów statusowych.</div>'}</section>`;
+  const subpointsHtml = subpoints.map(column => column.field_type === 'status'
+    ? `<label class="status-subpoint-field"><span>${statusSymbol(value(column))}<b>${escapeHtml(column.name)}</b></span><select data-matrix-value data-column="${column.id}" data-column-type="status">${selectOptions(statusWorkflowOptions.map(option => ({ value: option.value, label: `${statusSymbolMap[option.value]?.[0] || ''} ${option.label}` })), value(column), null)}</select></label>`
+    : `<label class="status-subpoint-field text"><span><i class="status-text-marker">Aa</i><b>${escapeHtml(column.name)}</b></span><input type="text" data-matrix-value data-column="${column.id}" data-column-type="text" value="${escapeHtml(value(column))}"></label>`).join('');
+  const scope = statusGroups().find(item => Number(item.id) === Number(groupId));
+  const scopeName = [scope?.name, scope?.subgroups?.find(item => Number(item.id) === Number(subgroupId))?.name].filter(Boolean).join(' → ');
+  return `<section class="field full status-item-matrix-editor" id="status-item-matrix-editor"><header><span><b>Dane punktu statusowego</b><small>${scopeName ? `${escapeHtml(scopeName)} · ` : ''}Kolumny podstawowe opisują element, a każdy podpunkt przechowuje własną wartość.</small></span></header>${columns.length ? `${basic.length ? `<div class="status-basic-fields"><h4>Kolumny podstawowe</h4><div>${basicHtml}</div></div>` : ''}${subpoints.length ? `<div class="status-subpoint-fields"><div class="status-subpoint-heading"><h4>Podpunkty statusowe</h4>${workflowSubpoints.length ? statusSymbolLegend() : ''}</div><div>${subpointsHtml}</div></div>` : ''}` : '<div class="empty compact-empty">Ta grupa nie ma jeszcze zdefiniowanych kolumn podstawowych ani podpunktów statusowych.</div>'}</section>`;
 }
 
 function fieldHtml([name, label, type = 'text', extra], record, formType = '') {

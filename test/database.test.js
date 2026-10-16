@@ -246,11 +246,17 @@ test('configurable status matrices keep independent subgroup columns and symbol 
     assert.ok(repository.config().status_groups.length > 0, 'existing status categories should be migrated to table groups');
 
     const group = repository.saveStatusGroup(null, { name: 'Hardware test', description: 'Configurable hardware matrix' });
-    const directColumn = repository.saveStatusColumn(group.id, null, null, { name: '+24V', field_type: 'status', include_in_progress: 1 });
+    const directColumn = repository.saveStatusColumn(group.id, null, null, { name: '+24V', column_role: 'subpoint', field_type: 'status', include_in_progress: 1 });
     const subgroup = repository.saveStatusSubgroup(group.id, null, { name: 'Napędy', copy_parent_columns: 1 });
-    const textColumn = repository.saveStatusColumn(group.id, subgroup.id, null, { name: 'Device Name', field_type: 'text' });
+    const textColumn = repository.saveStatusColumn(group.id, subgroup.id, null, { name: 'Device Name', column_role: 'basic', field_type: 'text' });
+    const textSubpoint = repository.saveStatusColumn(group.id, subgroup.id, null, { name: 'MAC Address', column_role: 'subpoint', field_type: 'text', include_in_progress: 1 });
     const copiedColumn = repository.config().status_groups.find(item => item.id === group.id).subgroups.find(item => item.id === subgroup.id).columns.find(item => item.name === directColumn.name);
     assert.ok(copiedColumn);
+    assert.equal(copiedColumn.column_role, 'subpoint');
+    assert.equal(textColumn.column_role, 'basic');
+    assert.equal(textSubpoint.column_role, 'subpoint');
+    assert.equal(textSubpoint.field_type, 'text');
+    assert.equal(textSubpoint.include_in_progress, 0, 'a text subpoint cannot affect workflow progress');
 
     const status = repository.saveStatus(null, {
       controller: 'HB522', status_group_id: group.id, status_subgroup_id: subgroup.id,
@@ -265,7 +271,11 @@ test('configurable status matrices keep independent subgroup columns and symbol 
     assert.equal(textSaved.function_detail, 'SINAMICS', 'basic columns should identify the status item without a separate title field');
     assert.equal(textSaved.status, 'Ready to test');
     assert.equal(textSaved.progress_updated_at, null, 'a basic text column must not count as a progress update');
-    const done = repository.saveStatusCell(status.id, copiedColumn.id, { value: 'Done', updated_at: textSaved.updated_at }, admin);
+    const subpointSaved = repository.saveStatusCell(status.id, textSubpoint.id, { value: 'de:0b', updated_at: textSaved.updated_at }, admin);
+    assert.equal(subpointSaved.matrix_values[textSubpoint.id], 'de:0b');
+    assert.equal(subpointSaved.function_detail, 'SINAMICS', 'a text subpoint must not replace the identifying basic-column value');
+    assert.equal(subpointSaved.status, 'Ready to test');
+    const done = repository.saveStatusCell(status.id, copiedColumn.id, { value: 'Done', updated_at: subpointSaved.updated_at }, admin);
     assert.equal(done.matrix_values[copiedColumn.id], 'Done');
     assert.equal(done.status, 'Done');
     assert.ok(done.progress_updated_at);
@@ -275,7 +285,29 @@ test('configurable status matrices keep independent subgroup columns and symbol 
     repository = openDatabase(temporary.path);
     const reopened = repository.status('all', repository.me(admin.id)).find(item => item.id === status.id);
     assert.equal(reopened.matrix_values[textColumn.id], 'SINAMICS');
-    assert.equal(repository.config().status_groups.find(item => item.id === group.id).subgroups[0].columns.length, 2);
+    assert.equal(repository.config().status_groups.find(item => item.id === group.id).subgroups[0].columns.length, 3);
+  } finally {
+    repository?.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
+test('existing status text columns migrate to identifying basic columns', () => {
+  const temporary = temporaryDatabase();
+  let repository = openDatabase(temporary.path);
+  try {
+    const group = repository.saveStatusGroup(null, { name: 'Legacy status table' });
+    const column = repository.saveStatusColumn(group.id, null, null, { name: 'Device Name', field_type: 'text' });
+    repository.close(); repository = null;
+
+    const legacy = new DatabaseSync(temporary.path);
+    legacy.exec('ALTER TABLE status_columns DROP COLUMN column_role');
+    legacy.close();
+
+    repository = openDatabase(temporary.path);
+    const migrated = repository.config().status_groups.find(item => item.id === group.id).columns.find(item => item.id === column.id);
+    assert.equal(migrated.column_role, 'basic');
+    assert.equal(migrated.field_type, 'text');
   } finally {
     repository?.close();
     rmSync(temporary.directory, { recursive: true, force: true });

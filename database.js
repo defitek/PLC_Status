@@ -118,6 +118,9 @@ function ensureColumn(db, table, name, definition) {
 function ensureStatusMatrixColumns(db) {
   ensureColumn(db, 'status_items', 'status_group_id', 'INTEGER');
   ensureColumn(db, 'status_items', 'status_subgroup_id', 'INTEGER');
+  const hadColumnRole = columnNames(db, 'status_columns').has('column_role');
+  ensureColumn(db, 'status_columns', 'column_role', "TEXT NOT NULL DEFAULT 'subpoint' CHECK(column_role IN ('basic','subpoint'))");
+  if (!hadColumnRole) db.exec("UPDATE status_columns SET column_role=CASE WHEN field_type='text' THEN 'basic' ELSE 'subpoint' END");
   db.exec('CREATE INDEX IF NOT EXISTS idx_status_items_matrix ON status_items(project_id,status_group_id,status_subgroup_id)');
 }
 
@@ -1229,7 +1232,7 @@ function createRepository(db, defaultProjectId) {
     const row = one('SELECT id,status_group_id,status_subgroup_id,test_id,function_detail FROM status_items WHERE id=? AND project_id=?', asId(statusId), activeProjectId());
     if (!row) return;
     const basicValues = all(`SELECT scv.value FROM status_columns sc JOIN status_cell_values scv ON scv.column_id=sc.id
-      WHERE scv.status_item_id=? AND sc.active=1 AND sc.field_type='text' AND sc.status_group_id=?
+      WHERE scv.status_item_id=? AND sc.active=1 AND sc.column_role='basic' AND sc.status_group_id=?
         AND ((sc.status_subgroup_id IS NULL AND ? IS NULL) OR sc.status_subgroup_id=?)
       ORDER BY sc.sort_order,sc.name,sc.id`, row.id, row.status_group_id, row.status_subgroup_id, row.status_subgroup_id)
       .map(item => clean(item.value)).filter(Boolean);
@@ -2298,6 +2301,7 @@ function createRepository(db, defaultProjectId) {
     for (const source of orderedRows) {
       const row = { ...source };
       if (Object.hasOwn(row, 'project_id')) row.project_id = projectId;
+      if (table === 'status_columns' && !Object.hasOwn(row, 'column_role')) row.column_role = row.field_type === 'text' ? 'basic' : 'subpoint';
       if (table === 'planner_requirements' && !Object.hasOwn(row, 'manual_required_count')) {
         row.manual_required_count = row.note === 'Automatyczne minimum z sumy podobszarów' ? 0 : Number(row.required_count || 0);
       }
@@ -4500,8 +4504,8 @@ function createRepository(db, defaultProjectId) {
         const sortOrder = one('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM status_subgroups WHERE status_group_id=?', group.id).value;
         id = insertRecord('status_subgroups', { status_group_id: group.id, name, description, sort_order: sortOrder, active: 1 });
         if (Number(input.copy_parent_columns)) {
-          const insert = db.prepare(`INSERT INTO status_columns(status_group_id,status_subgroup_id,name,field_type,include_in_progress,sort_order)
-            SELECT status_group_id,?,name,field_type,include_in_progress,sort_order FROM status_columns
+          const insert = db.prepare(`INSERT INTO status_columns(status_group_id,status_subgroup_id,name,column_role,field_type,include_in_progress,sort_order)
+            SELECT status_group_id,?,name,column_role,field_type,include_in_progress,sort_order FROM status_columns
             WHERE status_group_id=? AND status_subgroup_id IS NULL AND active=1 ORDER BY sort_order,id`);
           insert.run(id, group.id);
         }
@@ -4520,8 +4524,6 @@ function createRepository(db, defaultProjectId) {
     saveStatusColumn(groupId, subgroupId, id, input) {
       const { group, subgroup } = statusMatrixScope(groupId, subgroupId);
       const name = clean(input.name);
-      const fieldType = clean(input.field_type) === 'text' ? 'text' : 'status';
-      const includeInProgress = fieldType === 'status' && Number(input.include_in_progress) ? 1 : 0;
       if (!name) throw appError('Nazwa kolumny jest wymagana');
       const duplicate = one(`SELECT id FROM status_columns WHERE status_group_id=? AND
         ((status_subgroup_id IS NULL AND ? IS NULL) OR status_subgroup_id=?) AND name=? COLLATE NOCASE AND id!=?`, group.id, subgroup?.id || null, subgroup?.id || null, name, asId(id) || 0);
@@ -4531,11 +4533,20 @@ function createRepository(db, defaultProjectId) {
         previous = one(`SELECT * FROM status_columns WHERE id=? AND status_group_id=? AND
           ((status_subgroup_id IS NULL AND ? IS NULL) OR status_subgroup_id=?)`, asId(id), group.id, subgroup?.id || null, subgroup?.id || null);
         if (!previous) throw appError('Nie znaleziono kolumny statusu', 404);
-        db.prepare('UPDATE status_columns SET name=?,field_type=?,include_in_progress=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(name, fieldType, includeInProgress, id);
+      }
+      const requestedRole = clean(input.column_role);
+      const requestedType = clean(input.field_type);
+      const columnRole = ['basic', 'subpoint'].includes(requestedRole)
+        ? requestedRole
+        : previous?.column_role || (requestedType === 'text' ? 'basic' : 'subpoint');
+      const fieldType = columnRole === 'basic' ? 'text' : requestedType === 'text' ? 'text' : 'status';
+      const includeInProgress = columnRole === 'subpoint' && fieldType === 'status' && Number(input.include_in_progress) ? 1 : 0;
+      if (id) {
+        db.prepare('UPDATE status_columns SET name=?,column_role=?,field_type=?,include_in_progress=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(name, columnRole, fieldType, includeInProgress, id);
       } else {
         const sortOrder = one(`SELECT COALESCE(MAX(sort_order),-1)+1 value FROM status_columns WHERE status_group_id=? AND
           ((status_subgroup_id IS NULL AND ? IS NULL) OR status_subgroup_id=?)`, group.id, subgroup?.id || null, subgroup?.id || null).value;
-        id = insertRecord('status_columns', { status_group_id: group.id, status_subgroup_id: subgroup?.id || null, name, field_type: fieldType, include_in_progress: includeInProgress, sort_order: sortOrder, active: 1 });
+        id = insertRecord('status_columns', { status_group_id: group.id, status_subgroup_id: subgroup?.id || null, name, column_role: columnRole, field_type: fieldType, include_in_progress: includeInProgress, sort_order: sortOrder, active: 1 });
       }
       const scopedItems = all(`SELECT id,status FROM status_items WHERE project_id=? AND status_group_id=? AND
         ((status_subgroup_id IS NULL AND ? IS NULL) OR status_subgroup_id=?)`, activeProjectId(), group.id, subgroup?.id || null, subgroup?.id || null);
@@ -4545,6 +4556,7 @@ function createRepository(db, defaultProjectId) {
         for (const item of scopedItems) upsert.run(item.id, id, fieldType === 'status' ? (new Set(['Ready to test', 'In progress', 'Blocked', 'NOK / Retest required', 'Done', 'N/A']).has(item.status) ? item.status : 'Ready to test') : '');
       }
       if (fieldType === 'status' || previous?.field_type === 'status') for (const item of scopedItems) db.prepare('UPDATE status_items SET status=?,updated_at=strftime(\'%Y-%m-%d %H:%M:%f\',\'now\') WHERE id=?').run(aggregateMatrixStatus(item.id, item.status), item.id);
+      if (columnRole === 'basic' || previous?.column_role === 'basic') for (const item of scopedItems) syncStatusIdentity(item.id);
       return one('SELECT * FROM status_columns WHERE id=?', id);
     },
     deleteStatusColumn(groupId, subgroupId, id) {
