@@ -1563,22 +1563,46 @@ function createRepository(db, defaultProjectId) {
 
   const dependencyTypes = new Set(['status', 'task', 'point']);
 
+  function auditRowsForEntity(type, id, limit = 1000) {
+    return all(`SELECT al.changed_at,al.changes_json,u.display_name user_name
+      FROM audit_log al LEFT JOIN users u ON u.id=al.user_id
+      WHERE al.project_id=? AND al.entity_type=? AND al.entity_id=?
+      ORDER BY al.changed_at DESC,al.id DESC LIMIT ?`, activeProjectId(), type, asId(id), limit);
+  }
+
+  function completionActor(type, id) {
+    const completeValues = type === 'task' ? new Set(['Done']) : type === 'status' ? new Set(['Done', 'N/A']) : new Set(['Closed']);
+    for (const audit of auditRowsForEntity(type, id)) {
+      let changes = {};
+      try { changes = JSON.parse(audit.changes_json || '{}'); } catch {}
+      if (completeValues.has(changes.status?.to)) return { completed_by_name: audit.user_name || '', completed_at: audit.changed_at };
+    }
+    return { completed_by_name: '', completed_at: null };
+  }
+
   function dependencyEntity(type, id) {
     let row;
     if (type === 'status') row = one(`SELECT s.id,s.function_detail title,s.status,s.criticality priority,NULL start_date,NULL due_date,
-      c.code controller,c.id controller_id,responsible.display_name owner_name
+      c.code controller,c.id controller_id,responsible.display_name owner_name,creator.display_name created_by_name
       FROM status_items s JOIN controllers c ON c.id=s.controller_id
       LEFT JOIN users responsible ON responsible.id=s.responsible_user_id
+      LEFT JOIN users creator ON creator.id=s.created_by
       WHERE s.id=? AND s.project_id=?`, id, activeProjectId());
     if (type === 'task') row = one(`SELECT t.id,t.title,t.status,t.priority,t.start_date,t.due_date,
-      c.code controller,c.id controller_id,owner.display_name owner_name
+      c.code controller,c.id controller_id,owner.display_name owner_name,creator.display_name created_by_name
       FROM tasks t JOIN controllers c ON c.id=t.controller_id LEFT JOIN users owner ON owner.id=t.owner_user_id
+      LEFT JOIN users creator ON creator.id=t.created_by
       WHERE t.id=? AND t.project_id=?`, id, activeProjectId());
     if (type === 'point') row = one(`SELECT p.id,p.title,p.status,p.priority,p.start_date,p.due_date,
-      c.code controller,c.id controller_id,owner.display_name owner_name
+      c.code controller,c.id controller_id,owner.display_name owner_name,creator.display_name created_by_name
       FROM open_points p JOIN controllers c ON c.id=p.controller_id LEFT JOIN users owner ON owner.id=p.owner_user_id
+      LEFT JOIN users creator ON creator.id=p.created_by
       WHERE p.id=? AND p.project_id=?`, id, activeProjectId());
-    return row ? { ...attachControllerMeta(row), entity_type: type, entity_id: Number(row.id), is_complete: dependencyComplete(type, row.status) } : null;
+    if (!row) return null;
+    const complete = dependencyComplete(type, row.status);
+    const completion = complete ? completionActor(type, row.id) : {};
+    if (complete && !completion.completed_by_name) completion.completed_by_name = row.created_by_name || '';
+    return { ...attachControllerMeta(row), entity_type: type, entity_id: Number(row.id), is_complete: complete, ...completion };
   }
 
   function dependencyComplete(type, status) {
@@ -1742,6 +1766,20 @@ function createRepository(db, defaultProjectId) {
     const assignees = all(`SELECT sa.user_id,u.display_name FROM status_assignees sa JOIN users u ON u.id=sa.user_id
       WHERE sa.project_id=? AND sa.status_id=? ORDER BY u.sort_order,u.display_name`, activeProjectId(), row.id);
     const requirements = requirementRows('status', row.id);
+    const statusColumnIds = new Set(applicableStatusColumns(row.status_group_id, row.status_subgroup_id).filter(item => item.field_type === 'status').map(item => String(item.id)));
+    let progressUpdate = null;
+    for (const audit of auditRowsForEntity('status', row.id)) {
+      let changes = {};
+      try { changes = JSON.parse(audit.changes_json || '{}'); } catch {}
+      let affectsProgress = Boolean(changes.comment || changes.status);
+      if (!affectsProgress && changes.matrix_values) {
+        const beforeValues = changes.matrix_values.from || {};
+        const afterValues = changes.matrix_values.to || {};
+        affectsProgress = [...new Set([...Object.keys(beforeValues), ...Object.keys(afterValues)])]
+          .some(key => statusColumnIds.has(String(key)) && beforeValues[key] !== afterValues[key]);
+      }
+      if (affectsProgress) { progressUpdate = { at: audit.changed_at, by_name: audit.user_name || '' }; break; }
+    }
     return {
       ...row, links, related_work_total: actionable.length, related_work_done: completed,
       related_work_progress: actionable.length ? Math.round(completed * 100 / actionable.length) : 100,
@@ -1751,6 +1789,8 @@ function createRepository(db, defaultProjectId) {
       responsible_name: assignees.map(item => item.display_name).join(', ') || row.responsible_name || '',
       mentioned_user_ids: [], comments: commentRows('status', row.id), requirements,
       requirement_ids: requirements.map(item => item.id), requirement_names: requirements.map(item => item.name).join(', '),
+      progress_updated_at: progressUpdate?.at || null,
+      progress_updated_by_name: progressUpdate?.by_name || '',
       can_delete: ['system_admin', 'project_admin'].includes(currentUser.role),
       ...editLockState('status', row.id, currentUser),
       ...dependencyState('status', row)

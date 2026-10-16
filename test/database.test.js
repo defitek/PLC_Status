@@ -263,9 +263,12 @@ test('configurable status matrices keep independent subgroup columns and symbol 
     const textSaved = repository.saveStatusCell(status.id, textColumn.id, { value: 'SINAMICS', updated_at: status.updated_at }, admin);
     assert.equal(textSaved.matrix_values[textColumn.id], 'SINAMICS');
     assert.equal(textSaved.status, 'Ready to test');
+    assert.equal(textSaved.progress_updated_at, null, 'a basic text column must not count as a progress update');
     const done = repository.saveStatusCell(status.id, copiedColumn.id, { value: 'Done', updated_at: textSaved.updated_at }, admin);
     assert.equal(done.matrix_values[copiedColumn.id], 'Done');
     assert.equal(done.status, 'Done');
+    assert.ok(done.progress_updated_at);
+    assert.equal(done.progress_updated_by_name, admin.display_name);
 
     repository.close();
     repository = openDatabase(temporary.path);
@@ -919,6 +922,8 @@ test('dependency queue spans tasks, status and open points and rejects cross-mod
       assert.equal(readyStatus.queue_state, 'ready');
       assert.equal(readyStatus.status, 'Ready to test');
       assert.equal(readyStatus.unblocks_count, 2);
+      assert.equal(readyStatus.dependencies[0].completed_by_name, admin.display_name);
+      assert.ok(readyStatus.dependencies[0].completed_at);
 
       repository.saveStatus(status.id, { ...readyStatus, controller, status: 'Done' }, admin);
       const readyPoint = repository.points('all', admin).find(item => item.id === point.id);
