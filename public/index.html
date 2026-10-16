@@ -59,7 +59,6 @@
       <div id="record-meta" class="record-meta"></div>
       <div id="fields" class="formgrid"></div>
       <section id="similar-knowledge-section" class="similar-knowledge-section hidden"><header><h3>Podobne rozwiązania</h3><span id="similar-knowledge-count"></span></header><p>Podpowiedzi z bazy wiedzy dopasowane do treści i zakresu tego elementu.</p><div id="similar-knowledge-list"></div></section>
-      <section id="dod-section" class="dod-section hidden"><header><h3>Definition of Done</h3><span id="dod-count"></span></header><div id="dod-list"></div></section>
       <section id="comments-section" class="comments-section hidden"><header><h3>Komentarze</h3><span id="comments-count"></span></header><div id="comments-list"></div><div class="comment-compose"><textarea id="comment-content" rows="2" maxlength="5000" placeholder="Dodaj komentarz…"></textarea><button type="button" id="comment-add" class="secondary">Dodaj komentarz</button></div></section>
       <button type="button" id="audit-toggle" class="secondary audit-toggle" hidden>Pokaż historię edycji</button>
       <section id="audit-section" class="audit-section hidden"><h3>Historia edycji</h3><div id="audit-list"></div></section>
@@ -83,8 +82,8 @@
 
   <dialog id="quick-status-dialog" class="wide-dialog quick-status-dialog">
     <header class="dialog-head"><div><h2>Szybka edycja statusu</h2><p>Cała bieżąca lista w jednym oknie — zmiany zostaną zapisane zbiorczo.</p></div><div class="dialog-head-actions"><button type="button" class="mini" id="quick-status-expand">Rozszerz</button><button type="button" class="x" id="quick-status-close">×</button></div></header>
-    <div class="picker-tools"><input id="quick-status-search" type="search" placeholder="Szukaj po sterowniku, grupie, punkcie, wartości lub notatce…"><button type="button" class="secondary" id="bulk-status-open">+ Dodaj wiele punktów</button></div>
-    <div class="tablewrap quick-status-wrap"><table class="quick-status-table"><thead><tr><th>Sterownik</th><th>Grupa statusu</th><th>Podgrupa</th><th>Punkt / element</th><th>Krytyczność</th><th>Status całego wiersza</th><th>Odpowiedzialny</th><th>Notatka</th></tr></thead><tbody id="quick-status-body"></tbody></table></div>
+    <div class="picker-tools"><input id="quick-status-search" type="search" placeholder="Szukaj po sterowniku, grupie, wartości lub notatce…"><button type="button" class="secondary" id="bulk-status-open">+ Dodaj wiele punktów</button></div>
+    <div class="tablewrap quick-status-wrap"><table class="quick-status-table"><thead><tr><th>Sterownik</th><th>Grupa statusu</th><th>Podgrupa</th><th>Krytyczność</th><th>Status całego wiersza</th><th>Odpowiedzialny</th><th>Notatka</th></tr></thead><tbody id="quick-status-body"></tbody></table></div>
     <footer class="dialog-actions"><span id="quick-status-count" class="dialog-count"></span><span></span><button type="button" class="secondary" id="quick-status-cancel">Anuluj</button><button type="button" class="primary" id="quick-status-save">Zapisz wszystkie zmiany</button></footer>
   </dialog>
 

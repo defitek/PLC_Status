@@ -903,20 +903,6 @@ CREATE TABLE IF NOT EXISTS project_meeting_items (
   UNIQUE(meeting_id,entity_type,entity_id)
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS entity_requirement_status (
-  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point')),
-  entity_id INTEGER NOT NULL,
-  requirement_id INTEGER NOT NULL REFERENCES completion_requirements(id) ON DELETE CASCADE,
-  evidence TEXT NOT NULL DEFAULT '',
-  completed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  completed_at TEXT,
-  approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  approved_at TEXT,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY(entity_type,entity_id,requirement_id)
-) STRICT, WITHOUT ROWID;
-
 CREATE TABLE IF NOT EXISTS external_dependencies (
   id INTEGER PRIMARY KEY,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -1008,7 +994,6 @@ CREATE INDEX IF NOT EXISTS idx_monthly_reviews_project_period ON monthly_employe
 CREATE INDEX IF NOT EXISTS idx_monthly_review_items_review ON monthly_employee_review_items(review_id,sort_order,id);
 CREATE INDEX IF NOT EXISTS idx_monthly_review_audit_review ON monthly_employee_review_audit(review_id,changed_at DESC,id DESC);
 CREATE INDEX IF NOT EXISTS idx_meetings_project ON project_meetings(project_id,meeting_date DESC);
-CREATE INDEX IF NOT EXISTS idx_requirement_status_entity ON entity_requirement_status(project_id,entity_type,entity_id);
 CREATE INDEX IF NOT EXISTS idx_external_dependencies_entity ON external_dependencies(project_id,entity_type,entity_id,dependency_status);
 CREATE INDEX IF NOT EXISTS idx_knowledge_project ON knowledge_articles(project_id,status,category);
 CREATE INDEX IF NOT EXISTS idx_entity_edit_locks_project ON entity_edit_locks(project_id,entity_type,entity_id);

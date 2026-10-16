@@ -262,6 +262,7 @@ test('configurable status matrices keep independent subgroup columns and symbol 
 
     const textSaved = repository.saveStatusCell(status.id, textColumn.id, { value: 'SINAMICS', updated_at: status.updated_at }, admin);
     assert.equal(textSaved.matrix_values[textColumn.id], 'SINAMICS');
+    assert.equal(textSaved.function_detail, 'SINAMICS', 'basic columns should identify the status item without a separate title field');
     assert.equal(textSaved.status, 'Ready to test');
     assert.equal(textSaved.progress_updated_at, null, 'a basic text column must not count as a progress update');
     const done = repository.saveStatusCell(status.id, copiedColumn.id, { value: 'Done', updated_at: textSaved.updated_at }, admin);
@@ -631,7 +632,7 @@ test('V8 supports announcements, aggregated KPI trends, unified Planner requirem
   }
 });
 
-test('V9 supports requirements, guarded duplication, comments, pushes, calendar ranges and work-time calculation', () => {
+test('V9 supports guarded duplication, comments, pushes, calendar ranges and work-time calculation', () => {
   const temporary = temporaryDatabase();
   const repository = openDatabase(temporary.path);
   try {
@@ -646,8 +647,9 @@ test('V9 supports requirements, guarded duplication, comments, pushes, calendar 
       const worker = repository.me(workerRecord.id, 1);
 
       const requirement = repository.saveCompletionRequirement(null, {
-        name: 'Pomiary odbiorowe V9', description: 'Wymagane przed zamknięciem.'
+        name: 'Pomiary odbiorowe V9', description: 'Zapotrzebowanie przypisywane do elementów.'
       });
+
       const statusBatch = repository.bulkCreateStatus({
         controller: controller.code,
         names: ['Powtarzalna nazwa V9', 'Powtarzalna nazwa V9'],
@@ -668,13 +670,11 @@ test('V9 supports requirements, guarded duplication, comments, pushes, calendar 
       assert.ok(repository.notifications(worker, 50).some(item => item.kind === 'assignment' && item.entity_id === task.id));
       assert.throws(() => repository.saveTask(null, {
         ...task, controller: controller.code, duplicate_source_id: task.id,
-        checklist: task.checklist, direct_assignee_user_ids: task.direct_assignee_user_ids,
-        requirement_ids: task.requirement_ids, links: task.links
+        checklist: task.checklist, direct_assignee_user_ids: task.direct_assignee_user_ids, requirement_ids: task.requirement_ids, links: task.links
       }, admin), /musi różnić się/);
       const duplicate = repository.saveTask(null, {
         ...task, controller: controller.code, title: 'Zadanie V9 — kopia zmieniona', duplicate_source_id: task.id,
-        checklist: task.checklist, direct_assignee_user_ids: task.direct_assignee_user_ids,
-        requirement_ids: task.requirement_ids, links: task.links
+        checklist: task.checklist, direct_assignee_user_ids: task.direct_assignee_user_ids, requirement_ids: task.requirement_ids, links: task.links
       }, admin);
       assert.notEqual(duplicate.id, task.id);
 
@@ -728,6 +728,8 @@ test('V9 supports requirements, guarded duplication, comments, pushes, calendar 
 
       assert.equal(repository.projectBackup().version, 1);
       assert.ok(Array.isArray(repository.projectBackup().tables.completion_requirements));
+      assert.ok(Array.isArray(repository.projectBackup().tables.entity_requirements));
+      assert.equal(repository.projectBackup().tables.entity_requirement_status, undefined);
       assert.ok(Array.isArray(repository.projectBackup().tables.entity_comments));
       assert.ok(Array.isArray(repository.projectBackup().tables.planner_absences));
     });
@@ -937,7 +939,7 @@ test('dependency queue spans tasks, status and open points and rejects cross-mod
   }
 });
 
-test('status handovers support DoD approval, meetings, risk and knowledge', () => {
+test('status handovers support meetings, risk and knowledge', () => {
   const temporary = temporaryDatabase();
   const repository = openDatabase(temporary.path);
   try {
@@ -950,20 +952,13 @@ test('status handovers support DoD approval, meetings, risk and knowledge', () =
       const controller = repository.controllers()[0];
       const root = repository.controllerGroups().find(item => !item.parent_id);
 
-      const requirement = repository.saveCompletionRequirement(null, {
-        name: 'V13 dowód i odbiór', description: 'Wymaga dowodu oraz zatwierdzenia przez drugą osobę.', requires_evidence: 1, requires_second_approval: 1
-      });
+      const requirement = repository.saveCompletionRequirement(null, { name: 'Wsparcie sieci V13', description: 'Informacyjne zapotrzebowanie bez workflow DoD.' });
+
       let task = repository.saveTask(null, {
         controller: controller.code, title: 'Diagnostyka Profinet V13', description: 'Problem komunikacji Profinet na stacji',
         status: 'To do', priority: 'High', direct_assignee_user_ids: [workerRecord.id], requirement_ids: [requirement.id]
       }, admin);
-      assert.throws(() => repository.saveTask(task.id, { ...task, controller: controller.code, status: 'Done' }, admin), /Definition of Done/);
-      let requirementState = repository.updateRequirementStatus('task', task.id, requirement.id, { action: 'complete', evidence: 'https://example.test/profinet-proof' }, admin);
-      assert.ok(requirementState[0].completed_at);
-      assert.equal(requirementState[0].approved_at, null);
-      assert.throws(() => repository.updateRequirementStatus('task', task.id, requirement.id, { action: 'approve' }, admin), /inna osoba/i);
-      requirementState = repository.updateRequirementStatus('task', task.id, requirement.id, { action: 'approve' }, manager);
-      assert.ok(requirementState[0].approved_at);
+      assert.deepEqual(task.requirement_ids, [requirement.id]);
       task = repository.tasks('all', admin).find(item => item.id === task.id);
       task = repository.saveTask(task.id, { ...task, controller: controller.code, status: 'Done' }, admin);
       assert.equal(task.status, 'Done');
@@ -1010,7 +1005,7 @@ test('status handovers support DoD approval, meetings, risk and knowledge', () =
 
       const backup = repository.projectBackup();
       assert.equal(backup.version, 1);
-      for (const table of ['daily_note_sections', 'project_meetings', 'external_dependencies', 'knowledge_articles', 'entity_requirement_status']) assert.ok(Array.isArray(backup.tables[table]));
+      for (const table of ['daily_note_sections', 'project_meetings', 'external_dependencies', 'knowledge_articles']) assert.ok(Array.isArray(backup.tables[table]));
       const taskCount = repository.tasks('all', admin).length;
       repository.saveTask(null, { controller: controller.code, title: 'Tymczasowy rekord V13' }, admin);
       repository.restoreProjectBackup(backup);
@@ -1185,7 +1180,7 @@ test('edit locks, hierarchical requirements and the refined status workflow are 
   }
 });
 
-test('retired commissioning module is removed from existing databases', () => {
+test('retired commissioning and Definition of Done workflow are removed from existing databases', () => {
   const temporary = temporaryDatabase();
   const initial = openDatabase(temporary.path);
   initial.close();
@@ -1195,6 +1190,7 @@ test('retired commissioning module is removed from existing databases', () => {
     CREATE TABLE test_campaigns(id INTEGER PRIMARY KEY);
     CREATE TABLE test_campaign_items(id INTEGER PRIMARY KEY);
     CREATE TABLE readiness_gates(id INTEGER PRIMARY KEY);
+    CREATE TABLE entity_requirement_status(id INTEGER PRIMARY KEY);
   `);
   legacy.close();
 
@@ -1204,15 +1200,18 @@ test('retired commissioning module is removed from existing databases', () => {
     assert.equal(repository.saveTestCampaign, undefined);
     assert.equal(repository.saveReadinessGate, undefined);
     assert.equal(repository.saveCommissioningTemplate, undefined);
+    assert.equal(typeof repository.saveCompletionRequirement, 'function');
+    assert.equal(repository.updateRequirementStatus, undefined);
     const backupTables = repository.projectBackup().tables;
-    for (const table of ['commissioning_templates', 'test_campaigns', 'test_campaign_items', 'readiness_gates']) assert.equal(Object.hasOwn(backupTables, table), false);
+    for (const table of ['commissioning_templates', 'test_campaigns', 'test_campaign_items', 'readiness_gates', 'entity_requirement_status']) assert.equal(Object.hasOwn(backupTables, table), false);
+    for (const table of ['completion_requirements', 'entity_requirements']) assert.ok(Array.isArray(backupTables[table]));
   } finally {
     repository.close();
   }
 
   const database = new DatabaseSync(temporary.path);
   try {
-    const removedTables = database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('commissioning_templates','test_campaigns','test_campaign_items','readiness_gates')").all();
+    const removedTables = database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('commissioning_templates','test_campaigns','test_campaign_items','readiness_gates','entity_requirement_status')").all();
     assert.deepEqual(removedTables, []);
   } finally {
     database.close();

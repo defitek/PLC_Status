@@ -409,12 +409,6 @@ async function handleProjectApi(request, response, url, user) {
     if (method === 'POST') return json(response, 200, repository.setEntityEditLock(entityLock[1], Number(entityLock[2]), await readJson(request), user));
     if (method === 'DELETE') return json(response, 200, repository.clearEntityEditLock(entityLock[1], Number(entityLock[2]), user));
   }
-  const requirementStatus = path.match(/^\/api\/(status|task|point)\/(\d+)\/requirements\/(\d+)$/);
-  if (requirementStatus && method === 'PATCH') {
-    const body = await readJson(request);
-    if (body.action === 'approve') requireRole(user, 'moderator');
-    return json(response, 200, repository.updateRequirementStatus(requirementStatus[1], Number(requirementStatus[2]), Number(requirementStatus[3]), body, user));
-  }
   if (method === 'GET' && path === '/api/calendar') return json(response, 200, repository.calendar({
     from: url.searchParams.get('from'), to: url.searchParams.get('to'), scope,
     types: url.searchParams.getAll('type'), priorities: url.searchParams.getAll('priority'), category: url.searchParams.get('category'), only_mine: url.searchParams.get('only_mine') === '1'

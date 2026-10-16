@@ -1,6 +1,6 @@
 const state = {
   view: 'mine', controller: 'all', me: null, projects: [], controllerGroups: [], controllers: [], users: [],
-  config: { categories: [], task_categories: [], function_groups: [], status_groups: [], options: [], announcement_labels: [], settings: {} },
+  config: { categories: [], task_categories: [], function_groups: [], status_groups: [], options: [], announcement_labels: [], requirements: [], settings: {} },
   overview: null, announcements: [], notifications: [], navigationCounts: {}, mine: null, dashboard: {}, status: [], tasks: [], points: [], notes: [], goals: [], planner: null, calendar: null, history: [], savedViews: [], operations: null, employeeReviews: [], securityEvents: [], reviewPeriod: new Date().toISOString().slice(0, 7), loadSequence: 0,
   dialog: null, dialogInitial: '', dirtyCloseAttempt: new WeakSet(), goalDraftLinks: [], goalPickerCollections: null, linkDraft: [], statusMode: 'list', taskMode: 'board', taskShowCompleted: false, pointMode: 'list', trendPeriod: 'week',
   functionGroupController: '', functionPointGroup: null, functionPointDraft: [], quickStatusDraft: [],
@@ -13,7 +13,7 @@ const state = {
   categorySelection: { status: null, task: null },
   functionListManager: null, bulkChoice: null,
   operationsTab: 'triage', triageSelection: new Set(), savedViewApplying: false, activeSavedView: {}, taskDependencyOptions: [], dependencyOptions: null, dependencyOptionsAll: false,
-  collapsedStatusGroups: new Set(), collapsedTaskGroups: new Set(), statusTransfer: null, overviewHierarchyLevel: 'areas', statusMatrixQuery: '', statusFunctionGroupFilter: '', statusGroupByFunction: false,
+  collapsedStatusGroups: new Set(), collapsedTaskGroups: new Set(), statusTransfer: null, overviewHierarchyLevel: 'areas', statusMatrixQuery: '', statusFunctionGroupFilter: '', statusGroupByFunction: false, statusShowUnassigned: false,
   hiddenColumns: { status: new Set(), tasks: new Set(), points: new Set() },
   grouping: { status: 'category', tasks: '', notes: 'scope', history: 'hierarchy' },
   sort: { status: { key: '', direction: 1 }, tasks: { key: '', direction: 1 }, points: { key: '', direction: 1 } }
@@ -873,7 +873,7 @@ function uiForm({ title, description = '', fields = [], submitLabel = 'Zastosuj'
         : field.type === 'checkbox'
           ? `<input name="${escapeHtml(field.name)}" type="checkbox" value="1" ${field.value ? 'checked' : ''}>`
           : `<input name="${escapeHtml(field.name)}" type="${field.type || 'text'}" value="${escapeHtml(field.value ?? '')}" ${field.required ? 'required' : ''}>`;
-    return `<label class="field ${field.full ? 'full' : ''}"><span>${escapeHtml(field.label || field.name)}</span>${input}${field.hint ? `<small class="sub">${escapeHtml(field.hint)}</small>` : ''}</label>`;
+    return `<label class="field ${field.full ? 'full' : ''} ${escapeHtml(field.className || '')}"><span>${escapeHtml(field.label || field.name)}</span>${input}${field.hint ? `<small class="sub">${escapeHtml(field.hint)}</small>` : ''}</label>`;
   }).join('') || `<p class="dialog-confirm-text">${escapeHtml(description || 'Czy na pewno chcesz kontynuować?')}</p>`;
   if (state.actionResolve) state.actionResolve(null);
   return new Promise(resolve => {
@@ -1609,7 +1609,7 @@ function renderDependencies() {
 function renderAutomations() {
   const rows = state.operations.automation_rules || [];
   const actionLabel = (action, item) => action === 'notify_assignees' ? 'powiadom odpowiedzialnych' : action === 'notify_managers' ? 'powiadom managerów' : `ustaw priorytet ${item.target_priority}`;
-  $('#operations-content').innerHTML = `<section class="operation-view"><header class="operation-head"><div><h2>Reguły automatyzacji</h2><p>Powiadomienia i eskalacja priorytetu bez ręcznego pilnowania list.</p></div>${state.operations.can_coordinate ? '<div class="operation-actions"><button type="button" class="secondary" id="automation-run">Uruchom teraz</button><button type="button" class="primary" id="automation-add">+ Reguła</button></div>' : ''}</header><div class="automation-list">${rows.map(item => `<article class="automation-row ${item.active ? 'active' : 'inactive'}"><span class="automation-state"></span><span><b>${escapeHtml(item.name)}</b><small>${item.entity_types.map(type => operationTypeNames[type]).join(', ')} · ostatnio: ${item.last_run_at ? displayDateTime(item.last_run_at) : 'jeszcze nie uruchomiono'}</small></span><span>${escapeHtml(triageSignalNames[item.trigger_type] || item.trigger_type)} → ${(item.actions || [item.action_type]).map(action => escapeHtml(actionLabel(action, item))).join(' + ')}</span>${state.operations.can_coordinate ? `<button type="button" class="mini" data-automation-edit="${item.id}">Edytuj</button><button type="button" class="mini danger-text" data-automation-delete="${item.id}">Usuń</button>` : ''}</article>`).join('') || '<div class="empty">Brak reguł automatyzacji.</div>'}</div></section>`;
+  $('#operations-content').innerHTML = `<section class="operation-view"><header class="operation-head"><div><h2>Reguły automatyzacji</h2><p>Powiadomienia i eskalacja priorytetu bez ręcznego pilnowania list.</p></div>${state.operations.can_coordinate ? '<div class="operation-actions"><button type="button" class="secondary" id="automation-run">Uruchom teraz</button><button type="button" class="primary" id="automation-add">+ Reguła</button></div>' : ''}</header><div class="automation-list">${rows.map(item => `<article class="automation-row ${item.active ? 'active' : 'inactive'}"><span class="automation-state"></span><span><b>${escapeHtml(item.name)}</b><small>${item.entity_types.map(type => operationTypeNames[type]).join(', ')} · ostatnio: ${item.last_run_at ? displayDateTime(item.last_run_at) : 'jeszcze nie uruchomiono'}</small></span><span>${escapeHtml(triageSignalNames[item.trigger_type] || item.trigger_type)} → ${(item.actions || [item.action_type]).map(action => escapeHtml(actionLabel(action, item))).join(' + ')}</span><span class="automation-state-label">${item.active ? 'Aktywna' : 'Nieaktywna'}</span>${state.operations.can_coordinate ? `<button type="button" class="mini" data-automation-edit="${item.id}">Edytuj</button><button type="button" class="mini danger-text" data-automation-delete="${item.id}">Usuń</button>` : ''}</article>`).join('') || '<div class="empty">Brak reguł automatyzacji.</div>'}</div></section>`;
   $('#automation-add')?.addEventListener('click', () => openAutomationEditor());
   $('#automation-run')?.addEventListener('click', async () => { try { const result = await api('/api/automation-rules/run', { method: 'POST' }); toast(`Wykonano ${result.executed} nowych działań`); await loadData(true); } catch (error) { toast(error.message, true); } });
   $$('[data-automation-edit]').forEach(button => button.addEventListener('click', () => openAutomationEditor(rows.find(item => item.id === Number(button.dataset.automationEdit)))));
@@ -1618,17 +1618,23 @@ function renderAutomations() {
 
 async function openAutomationEditor(existing = null) {
   const enabled = new Set(existing?.entity_types || ['task', 'point']);
-  const result = await uiForm({ title: existing ? 'Edytuj regułę' : 'Nowa reguła automatyzacji', submitLabel: 'Zapisz regułę', fields: [
-    { name: 'name', label: 'Nazwa', value: existing?.name || '', required: true, full: true },
+  const formPromise = uiForm({ title: existing ? 'Edytuj regułę' : 'Nowa reguła automatyzacji', description: 'Wybierz warunek, zakres elementów i wszystkie działania wykonywane przez regułę.', submitLabel: 'Zapisz regułę', fields: [
+    { name: 'name', label: 'Nazwa reguły', value: existing?.name || '', required: true, full: true, className: 'automation-editor-name' },
     { name: 'trigger_type', label: 'Warunek', type: 'select', value: existing?.trigger_type || 'overdue', options: [{ value: 'overdue', label: 'Przekroczony deadline' }, { value: 'due_soon', label: 'Deadline w ciągu N dni' }, { value: 'reminder_due', label: 'Nadszedł termin przypomnienia' }, { value: 'unassigned', label: 'Brak odpowiedzialnego' }, { value: 'blocked', label: 'Element zablokowany' }, { value: 'in_progress', label: 'Element ze statusem „W trakcie” przez co najmniej N dni' }] },
     { name: 'days_offset', label: 'Liczba dni dla warunku czasowego', type: 'number', value: existing?.days_offset ?? 3 },
-    { name: 'actions', label: 'Działanie', type: 'multiselect', value: existing?.actions || [existing?.action_type || 'notify_assignees'], options: [{ value: 'notify_assignees', label: 'Powiadom odpowiedzialnych' }, { value: 'notify_managers', label: 'Powiadom managerów' }, { value: 'escalate_priority', label: 'Podnieś priorytet' }], full: true, hint: 'Możesz wybrać kilka działań wykonywanych przez jedną regułę.' },
-    { name: 'target_priority', label: 'Priorytet po eskalacji', type: 'select', value: existing?.target_priority || 'High', options: ['Low', 'Medium', 'High', 'Critical'] },
-    ...['status', 'task', 'point', 'goal'].map(type => ({ name: `type_${type}`, label: operationTypeNames[type], type: 'checkbox', value: enabled.has(type) })),
-    { name: 'active', label: 'Reguła aktywna', type: 'checkbox', value: existing ? Boolean(existing.active) : true }
+    { name: 'entity_types', label: 'Typy elementów', type: 'multiselect', value: [...enabled], options: ['status', 'task', 'point', 'goal'].map(type => ({ value: type, label: operationTypeNames[type] })), full: true, className: 'automation-editor-types' },
+    { name: 'actions', label: 'Działania', type: 'multiselect', value: existing?.actions || [existing?.action_type || 'notify_assignees'], options: [{ value: 'notify_assignees', label: 'Powiadom odpowiedzialnych' }, { value: 'notify_managers', label: 'Powiadom managerów' }, { value: 'escalate_priority', label: 'Podnieś priorytet' }], full: true, className: 'automation-editor-actions', hint: 'Możesz uruchomić kilka działań jednocześnie.' },
+    { name: 'target_priority', label: 'Priorytet po eskalacji', type: 'select', value: existing?.target_priority || 'High', options: ['Low', 'Medium', 'High', 'Critical'], full: true, className: 'automation-editor-priority' },
+    { name: 'active', label: 'Reguła aktywna', type: 'checkbox', value: existing ? Boolean(existing.active) : true, full: true, className: 'automation-editor-active' }
   ] });
+  const priorityField = $('#action-fields .automation-editor-priority');
+  const syncPriorityVisibility = () => { priorityField.hidden = !$('#action-fields [name="actions"][value="escalate_priority"]')?.checked; };
+  $$('#action-fields [name="actions"]').forEach(input => input.addEventListener('change', syncPriorityVisibility));
+  syncPriorityVisibility();
+  const result = await formPromise;
   if (!result) return;
-  const entity_types = ['status', 'task', 'point', 'goal'].filter(type => result[`type_${type}`]);
+  const entity_types = result.entity_types || [];
+  if (!entity_types.length) return toast('Wybierz co najmniej jeden typ elementu.', true);
   if (!result.actions?.length) return toast('Wybierz co najmniej jedno działanie.', true);
   try { await api(existing ? `/api/automation-rules/${existing.id}` : '/api/automation-rules', { method: existing ? 'PATCH' : 'POST', body: JSON.stringify({ ...result, entity_types, active: result.active ? 1 : 0 }) }); toast('Reguła została zapisana'); await reloadOperations(); }
   catch (error) { toast(error.message, true); }
@@ -3044,10 +3050,10 @@ function dependencyMetaHtml(type, item) {
 
 function dependencyCardHtml(type, item, { selectable = false, selected = false } = {}) {
   const complete = Boolean(item?.is_complete || (type === 'task' ? item?.status === 'Done' : type === 'status' ? ['Done', 'N/A'].includes(item?.status) : item?.status === 'Closed'));
-  const content = `<span class="dod-state">${complete ? '✓' : '!'}</span><span><b>${escapeHtml(entityLabel(type, item))}</b>${dependencyMetaHtml(type, item)}</span><span class="dependency-card-status">${badge(item?.status)}</span>`;
+  const content = `<span class="dependency-state">${complete ? '✓' : '!'}</span><span><b>${escapeHtml(entityLabel(type, item))}</b>${dependencyMetaHtml(type, item)}</span><span class="dependency-card-status">${badge(item?.status)}</span>`;
   return selectable
-    ? `<label class="dod-row dependency-card ${complete ? 'done' : ''}"><input type="checkbox" name="dependency_refs" value="${type}:${item.id}" ${selected ? 'checked' : ''}>${content}</label>`
-    : `<article class="dod-row dependency-card ${complete ? 'done' : ''}">${content}</article>`;
+    ? `<label class="dependency-card ${complete ? 'done' : ''}"><input type="checkbox" name="dependency_refs" value="${type}:${item.id}" ${selected ? 'checked' : ''}>${content}</label>`
+    : `<article class="dependency-card ${complete ? 'done' : ''}">${content}</article>`;
 }
 
 function dependencyBlockerListHtml(blockers) {
@@ -3302,16 +3308,18 @@ function renderStatus() {
     return;
   }
   if (state.statusMode !== 'list') state.statusMode = 'list';
-  const visibilityColumns = [{ key: 'matrix_identity', label: 'Punkt / element' }, ...statusGroups().flatMap(group => [...(group.columns || []).map(column => ({ key: `matrix_${column.id}`, label: `${group.name} · ${column.name}` })), ...(group.subgroups || []).flatMap(subgroup => (subgroup.columns || []).map(column => ({ key: `matrix_${column.id}`, label: `${group.name} / ${subgroup.name} · ${column.name}` }))) ]), { key: 'progress_updated', label: 'Ostatnia aktualizacja' }];
+  const visibilityColumns = [...statusGroups().flatMap(group => [...(group.columns || []).map(column => ({ key: `matrix_${column.id}`, label: `${group.name} · ${column.name}` })), ...(group.subgroups || []).flatMap(subgroup => (subgroup.columns || []).map(column => ({ key: `matrix_${column.id}`, label: `${group.name} / ${subgroup.name} · ${column.name}` }))) ]), { key: 'progress_updated', label: 'Ostatnia aktualizacja' }];
   state.statusColumns = visibilityColumns;
   const functionGroupsInStatus = [...new Map(state.status.filter(item => item.function_group_id).map(item => [Number(item.function_group_id), { id: Number(item.function_group_id), name: item.function_group_name || `Grupa ${item.function_group_id}` }])).values()].sort((a, b) => a.name.localeCompare(b.name, 'pl', { numeric: true }));
   if (state.statusFunctionGroupFilter && !functionGroupsInStatus.some(item => Number(item.id) === Number(state.statusFunctionGroupFilter))) state.statusFunctionGroupFilter = '';
-  $('#content').innerHTML = `<div class="panel status-matrix-panel" id="status-panel"><div class="toolbar module-toolbar"><strong>Tabele statusowe</strong><button id="status-list-mode" class="secondary active-toggle">Lista</button><button id="status-queue-mode" class="secondary">Kolejka</button><button id="quick-status-edit" class="secondary">Szybka edycja</button><input id="status-matrix-search" class="compact-search" type="search" placeholder="Szukaj punktu lub wartości…" value="${escapeHtml(state.statusMatrixQuery)}"><select id="status-function-group-filter" aria-label="Filtr grupy funkcyjnej">${selectOptions(functionGroupsInStatus.map(item => ({ value: item.id, label: item.name })), state.statusFunctionGroupFilter, 'Wszystkie grupy funkcyjne')}</select><button type="button" class="mini ${state.statusGroupByFunction ? 'active-toggle' : ''}" id="status-group-functional" aria-pressed="${state.statusGroupByFunction}">Grupuj wg grupy funkcyjnej</button><button type="button" class="mini" id="status-collapse-all">Zwiń wszystkie</button><button type="button" class="mini" id="status-expand-all">Rozwiń wszystkie</button>${savedViewsToolbar('status')}<div class="status-inline-metrics"><span><b>${d.progress || 0}%</b> postęp</span><span><b>${d.in_progress || 0}</b> w trakcie</span><span class="${d.blocked ? 'danger-text' : ''}"><b>${d.blocked || 0}</b> blokady/NOK</span></div></div><div class="table-view-tools">${columnVisibilityControl('status', visibilityColumns)}</div>${statusSymbolLegend()}<div id="status-matrix-content" class="status-matrix-content"></div></div>`;
+  const unassignedCount = state.status.filter(item => !item.status_group_id).length;
+  $('#content').innerHTML = `<div class="panel status-matrix-panel" id="status-panel"><div class="toolbar module-toolbar"><strong>Tabele statusowe</strong><button id="status-list-mode" class="secondary active-toggle">Lista</button><button id="status-queue-mode" class="secondary">Kolejka</button><button id="quick-status-edit" class="secondary">Szybka edycja</button><input id="status-matrix-search" class="compact-search" type="search" placeholder="Szukaj punktu lub wartości…" value="${escapeHtml(state.statusMatrixQuery)}"><select id="status-function-group-filter" aria-label="Filtr grupy funkcyjnej">${selectOptions(functionGroupsInStatus.map(item => ({ value: item.id, label: item.name })), state.statusFunctionGroupFilter, 'Wszystkie grupy funkcyjne')}</select><button type="button" class="mini ${state.statusGroupByFunction ? 'active-toggle' : ''}" id="status-group-functional" aria-pressed="${state.statusGroupByFunction}">Grupuj wg grupy funkcyjnej</button><button type="button" class="mini ${state.statusShowUnassigned ? 'active-toggle' : ''}" id="status-show-unassigned" aria-pressed="${state.statusShowUnassigned}">Pokaż nieprzypisane${unassignedCount ? ` · ${unassignedCount}` : ''}</button><button type="button" class="mini" id="status-collapse-all">Zwiń wszystkie</button><button type="button" class="mini" id="status-expand-all">Rozwiń wszystkie</button>${savedViewsToolbar('status')}<div class="status-inline-metrics"><span><b>${d.progress || 0}%</b> postęp</span><span><b>${d.in_progress || 0}</b> w trakcie</span><span class="${d.blocked ? 'danger-text' : ''}"><b>${d.blocked || 0}</b> blokady/NOK</span></div></div><div class="table-view-tools">${columnVisibilityControl('status', visibilityColumns)}</div>${statusSymbolLegend()}<div id="status-matrix-content" class="status-matrix-content"></div></div>`;
   bindStatusModeButtons();
   $('#quick-status-edit').addEventListener('click', openQuickStatusEditor);
   $('#status-matrix-search').addEventListener('input', event => { state.statusMatrixQuery = event.target.value; drawStatusRows(); });
   $('#status-function-group-filter').addEventListener('change', event => { state.statusFunctionGroupFilter = event.target.value; drawStatusRows(); });
   $('#status-group-functional').addEventListener('click', event => { state.statusGroupByFunction = !state.statusGroupByFunction; event.currentTarget.classList.toggle('active-toggle', state.statusGroupByFunction); event.currentTarget.setAttribute('aria-pressed', String(state.statusGroupByFunction)); drawStatusRows(); });
+  $('#status-show-unassigned').addEventListener('click', event => { state.statusShowUnassigned = !state.statusShowUnassigned; event.currentTarget.classList.toggle('active-toggle', state.statusShowUnassigned); event.currentTarget.setAttribute('aria-pressed', String(state.statusShowUnassigned)); drawStatusRows(); });
   $('#status-collapse-all').addEventListener('click', () => { (state.config.status_groups || []).forEach(group => { state.collapsedStatusGroups.add(`group:${group.id}`); (group.subgroups || []).forEach(subgroup => state.collapsedStatusGroups.add(`subgroup:${subgroup.id}`)); }); drawStatusRows(); });
   $('#status-expand-all').addEventListener('click', () => { state.collapsedStatusGroups.clear(); drawStatusRows(); });
   bindColumnVisibility('#status-panel', 'status', visibilityColumns, drawStatusRows);
@@ -3331,13 +3339,14 @@ function drawStatusRows() {
   const groups = state.config.status_groups || [];
   const sections = groups.map(group => { const rows = state.status.filter(item => Number(item.status_group_id) === Number(group.id) && matches(item)); return query && !rows.length ? '' : statusMatrixGroupHtml(group, rows); }).join('');
   const unassigned = state.status.filter(item => !item.status_group_id && matches(item));
-  root.innerHTML = sections + (unassigned.length ? statusMatrixFallbackHtml(unassigned) : '') || '<div class="empty">Brak punktów statusu w wybranym zakresie.</div>';
+  root.innerHTML = sections + (state.statusShowUnassigned && unassigned.length ? statusMatrixFallbackHtml(unassigned) : '') || '<div class="empty">Brak punktów statusu w wybranym zakresie.</div>';
   $$('[data-status-matrix-toggle]').forEach(button => button.addEventListener('click', () => { const key = button.dataset.statusMatrixToggle; if (state.collapsedStatusGroups.has(key)) state.collapsedStatusGroups.delete(key); else state.collapsedStatusGroups.add(key); drawStatusRows(); }));
   $$('[data-status-cell]').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); const item = state.status.find(row => row.id === Number(button.dataset.id)); const column = (state.config.status_groups || []).flatMap(group => [...(group.columns || []), ...(group.subgroups || []).flatMap(subgroup => subgroup.columns || [])]).find(value => value.id === Number(button.dataset.column)); editStatusMatrixCell(item, column); }));
+  $$('[data-status-open]').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); openRecord('status', state.status.find(item => item.id === Number(button.dataset.statusOpen))); }));
   $$('#status-matrix-content tr[data-id]').forEach(row => {
     const item = state.status.find(entry => entry.id === Number(row.dataset.id));
-    appendEditLockNote(row, item, '.maincell');
-    row.addEventListener('click', event => { if (!event.target.closest('[data-status-cell]')) openRecord('status', item); });
+    appendEditLockNote(row, item, 'td');
+    row.addEventListener('click', event => { if (!event.target.closest('[data-status-cell],[data-status-open]')) openRecord('status', item); });
     row.addEventListener('contextmenu', event => showStatusContext(event, item));
   });
 }
@@ -3366,27 +3375,26 @@ function statusMatrixTableHtml(rows, columns, emptyLabel) {
   if (!rows.length) return `<div class="empty compact-empty">${escapeHtml(emptyLabel)}</div>`;
   const hidden = state.hiddenColumns.status || new Set();
   const visibleColumns = columns.filter(column => !hidden.has(`matrix_${column.id}`));
-  const identityHidden = hidden.has('matrix_identity');
   const updateHidden = hidden.has('progress_updated');
   const sortedRows = state.statusGroupByFunction ? [...rows].sort((a, b) => String(a.function_group_name || 'Bez grupy funkcyjnej').localeCompare(String(b.function_group_name || 'Bez grupy funkcyjnej'), 'pl', { numeric: true }) || controllerHierarchyOrder(a) - controllerHierarchyOrder(b)) : rows;
   let previousFunctionGroup = null;
   const body = sortedRows.map(item => {
     const functionGroup = item.function_group_name || 'Bez grupy funkcyjnej';
-    const groupHeader = state.statusGroupByFunction && functionGroup !== previousFunctionGroup ? `<tr class="matrix-functional-group-row"><th colspan="${visibleColumns.length + Number(!identityHidden) + Number(!updateHidden)}">${escapeHtml(functionGroup)}</th></tr>` : '';
+    const groupHeader = state.statusGroupByFunction && functionGroup !== previousFunctionGroup ? `<tr class="matrix-functional-group-row"><th colspan="${visibleColumns.length + Number(!updateHidden) + 1}">${escapeHtml(functionGroup)}</th></tr>` : '';
     previousFunctionGroup = functionGroup;
-    return `${groupHeader}<tr data-id="${item.id}"><td class="maincell" ${identityHidden ? 'hidden' : ''}><b>${escapeHtml(item.function_detail || '—')}</b><span class="sub">${escapeHtml(controllerLabel(item))}${item.responsible_name ? ` · ${escapeHtml(item.responsible_name)}` : ''}</span></td>${visibleColumns.map(column => {
+    return `${groupHeader}<tr data-id="${item.id}">${visibleColumns.map(column => {
     const value = item.matrix_values?.[column.id] ?? (column.field_type === 'status' ? item.status : '');
     return `<td class="matrix-cell ${column.field_type}"><button type="button" data-status-cell data-id="${item.id}" data-column="${column.id}" title="${escapeHtml(column.field_type === 'status' ? `${column.name}: ${badgeMap[value]?.[0] || value}` : `Edytuj: ${column.name}`)}">${column.field_type === 'status' ? statusSymbol(value, true) : `<span class="matrix-text-value">${escapeHtml(value || '—')}</span>`}</button></td>`;
-  }).join('')}<td class="matrix-last-update" ${updateHidden ? 'hidden' : ''}>${item.progress_updated_at ? `<b>${displayDateTime(item.progress_updated_at)}</b><small>${escapeHtml(item.progress_updated_by_name || 'użytkownik historyczny')}</small>` : '<span>Brak zmian postępu</span>'}</td></tr>`;
+  }).join('')}<td class="matrix-last-update" ${updateHidden ? 'hidden' : ''}>${item.progress_updated_at ? `<b>${displayDateTime(item.progress_updated_at)}</b><small>${escapeHtml(item.progress_updated_by_name || 'użytkownik historyczny')}</small>` : '<span>Brak zmian postępu</span>'}</td><td class="matrix-row-action"><button type="button" class="mini" data-status-open="${item.id}" title="Otwórz szczegóły">•••</button></td></tr>`;
   }).join('');
-  return `<div class="tablewrap status-matrix-table"><table><thead><tr><th ${identityHidden ? 'hidden' : ''}>Punkt / element</th>${visibleColumns.map(column => `<th><span>${escapeHtml(column.name)}</span><small>${column.field_type === 'status' ? 'podpunkt statusowy' : 'kolumna podstawowa'}</small></th>`).join('')}<th ${updateHidden ? 'hidden' : ''}><span>Ostatnia aktualizacja</span><small>status lub komentarz</small></th></tr></thead><tbody>${body}</tbody></table></div>`;
+  return `<div class="tablewrap status-matrix-table"><table><thead><tr>${visibleColumns.map(column => `<th><span>${escapeHtml(column.name)}</span></th>`).join('')}<th ${updateHidden ? 'hidden' : ''}><span>Ostatnia aktualizacja</span></th><th class="matrix-row-action"><span class="sr-only">Szczegóły</span></th></tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 function statusMatrixGroupHtml(group, rows) {
   const key = `group:${group.id}`; const collapsed = state.collapsedStatusGroups.has(key); const metrics = statusMatrixGroupMetrics(group, rows);
   const directRows = rows.filter(item => !item.status_subgroup_id);
   const directVisible = directRows.length || (group.columns || []).length;
-  return `<section class="status-matrix-group"><header><button type="button" data-status-matrix-toggle="${key}" aria-expanded="${!collapsed}"><span>${collapsed ? '▸' : '▾'}</span><span><b class="matrix-group-title">${escapeHtml(group.name)}</b>${group.description ? `<small>${escapeHtml(group.description)}</small>` : ''}</span>${statusMatrixProgressHtml(metrics)}</button></header>${collapsed ? '' : `<div class="status-matrix-group-body">${directVisible ? `<section class="status-matrix-scope direct"><header><div><b>Punkty grupy</b><small>${directRows.length} pozycji</small></div>${statusMatrixProgressHtml(statusMatrixProgress(directRows, group.columns || []))}</header>${statusMatrixTableHtml(directRows, group.columns || [], 'Brak punktów bezpośrednio w tej grupie.')}</section>` : ''}${(group.subgroups || []).map(subgroup => {
+  return `<section class="status-matrix-group"><header><button type="button" data-status-matrix-toggle="${key}" aria-expanded="${!collapsed}"><span>${collapsed ? '▸' : '▾'}</span><span><b class="matrix-group-title">${escapeHtml(group.name)}</b>${group.description ? `<small>${escapeHtml(group.description)}</small>` : ''}</span>${statusMatrixProgressHtml(metrics)}</button></header>${collapsed ? '' : `<div class="status-matrix-group-body">${directVisible ? `<section class="status-matrix-scope direct">${statusMatrixTableHtml(directRows, group.columns || [], 'Brak punktów bezpośrednio w tej grupie.')}</section>` : ''}${(group.subgroups || []).map(subgroup => {
     const subgroupRows = rows.filter(item => Number(item.status_subgroup_id) === Number(subgroup.id)); const subKey = `subgroup:${subgroup.id}`; const subCollapsed = state.collapsedStatusGroups.has(subKey); const subMetrics = statusMatrixProgress(subgroupRows, subgroup.columns || []);
     return `<section class="status-matrix-scope subgroup"><header><button type="button" data-status-matrix-toggle="${subKey}" aria-expanded="${!subCollapsed}"><span>${subCollapsed ? '▸' : '▾'}</span><span><b>${escapeHtml(subgroup.name)}</b>${subgroup.description ? `<small>${escapeHtml(subgroup.description)}</small>` : ''}</span>${statusMatrixProgressHtml(subMetrics)}</button></header>${subCollapsed ? '' : statusMatrixTableHtml(subgroupRows, subgroup.columns || [], 'Brak punktów w tej podgrupie.')}</section>`;
   }).join('')}</div>`}</section>`;
@@ -3470,12 +3478,11 @@ function renderQuickStatusRows() {
     <td><select data-field="controller" class="quick-controller">${selectOptions(state.controllers.map(controller => ({ value: controller.code, label: controller.display_name || controller.code })), item.controller)}</select></td>
     <td><select data-field="status_group_id" class="quick-status-group">${selectOptions(statusGroups().map(group => ({ value: group.id, label: group.name })), item.status_group_id, 'Wybierz grupę')}</select></td>
     <td><select data-field="status_subgroup_id" class="quick-status-subgroup">${selectOptions(statusSubgroups(item.status_group_id).map(subgroup => ({ value: subgroup.id, label: subgroup.name })), item.status_subgroup_id, 'Bezpośrednio w grupie')}</select></td>
-    <td><input data-field="function_detail" value="${escapeHtml(item.function_detail)}"></td>
     <td><select data-field="criticality">${selectOptions(['Low', 'Medium', 'High', 'Critical'], item.criticality)}</select></td>
     <td><select data-field="status">${selectOptions(statusWorkflowOptions, item.status)}</select></td>
     <td><select data-field="responsible_user_ids" multiple size="2">${assignableUsers(item.responsible_user_ids || []).map(user => `<option value="${user.id}" ${(item.responsible_user_ids || []).includes(user.id) ? 'selected' : ''}>${escapeHtml(user.display_name)}</option>`).join('')}</select></td>
     <td><textarea data-field="current_note" rows="2">${escapeHtml(item.current_note)}</textarea></td>
-  </tr>`).join('') || '<tr><td colspan="8" class="empty">Brak wyników</td></tr>';
+  </tr>`).join('') || '<tr><td colspan="7" class="empty">Brak wyników</td></tr>';
   $$('#quick-status-body .quick-status-group').forEach(select => select.addEventListener('change', () => {
     captureQuickStatusRows();
     const row = select.closest('tr');
@@ -3490,7 +3497,7 @@ async function saveQuickStatus() {
   const button = $('#quick-status-save');
   button.disabled = true;
   try {
-    const fields = ['controller', 'status_group_id', 'status_subgroup_id', 'function_detail', 'criticality', 'status', 'responsible_user_ids', 'current_note'];
+    const fields = ['controller', 'status_group_id', 'status_subgroup_id', 'criticality', 'status', 'responsible_user_ids', 'current_note'];
     const changed = state.quickStatusDraft.filter(item => {
       const previous = state.status.find(row => row.id === item.id);
       return fields.some(field => JSON.stringify(item[field] ?? null) !== JSON.stringify(previous?.[field] ?? null));
@@ -3518,7 +3525,7 @@ function openBulkStatus() {
     <label class="field"><span>Podgrupa</span><select name="status_subgroup_id" id="bulk-status-matrix-subgroup">${selectOptions((statusGroup?.subgroups || []).map(item => ({ value: item.id, label: item.name })), '', 'Bezpośrednio w grupie')}</select></label>
     <label class="field"><span>Krytyczność</span><select name="criticality">${selectOptions(['Low', 'Medium', 'High', 'Critical'], 'Medium', '')}</select></label>
     <label class="field"><span>Status początkowy</span><select name="status">${selectOptions(statusWorkflowOptions, 'Ready to test', '')}</select></label>
-    <label class="field full required-field big"><span>Punkty do dodania *</span><textarea name="names" rows="14" required placeholder="Każdy wiersz to osobny punkt, np.&#10;Sprawdź sygnał QM1&#10;Sprawdź sygnał QM2&#10;Potwierdź blokadę osłony"></textarea><small class="sub">Maksymalnie 500 punktów w jednej operacji. Nazwy mogą się powtarzać.</small></label>${requirementsField({}, 'requirement_ids', 'Dodatkowe zapotrzebowanie')}`;
+    <label class="field full required-field big"><span>Punkty do dodania *</span><textarea name="names" rows="14" required placeholder="Każdy wiersz to osobny punkt, np.&#10;Sprawdź sygnał QM1&#10;Sprawdź sygnał QM2&#10;Potwierdź blokadę osłony"></textarea><small class="sub">Maksymalnie 500 punktów w jednej operacji. Nazwy mogą się powtarzać.</small></label>${requirementsField({}, 'requirement_ids', 'Zapotrzebowanie')}`;
   $('#bulk-status-matrix-group').addEventListener('change', event => { $('#bulk-status-matrix-subgroup').innerHTML = selectOptions(statusSubgroups(event.target.value).map(item => ({ value: item.id, label: item.name })), '', 'Bezpośrednio w grupie'); });
   $('#bulk-status-dialog').dataset.dirty = '';
   $('#bulk-status-dialog').showModal();
@@ -3947,7 +3954,8 @@ function statusMatrixConfig(canEdit) {
     const checks = columns.filter(column => column.field_type === 'status');
     return `<div class="status-column-kinds"><section><h5>Kolumny podstawowe</h5>${basic.length ? rows(basic) : '<div class="empty compact-empty">Brak kolumn opisowych.</div>'}</section><section><h5>Podpunkty statusowe</h5>${checks.length ? rows(checks) : '<div class="empty compact-empty">Brak podpunktów do weryfikacji.</div>'}</section></div>`;
   };
-  return `<section class="config-panel-body status-matrix-config"><header class="status-config-intro"><div><h3>Układ tabel statusowych</h3><p class="sub">Kolumny podstawowe opisują element, np. typ i nazwę urządzenia. Podpunkty statusowe, np. +24V lub PN, mają osobny workflow i symbol statusu.</p></div>${canEdit ? '<button class="secondary" id="new-status-group">+ Dodaj grupę</button>' : ''}</header>${groups.map((group, groupIndex) => `<article class="status-config-group"><header>${canEdit ? orderControls('status_groups', groups, groupIndex) : ''}<span><b class="status-config-group-title">${escapeHtml(group.name)}</b>${group.description ? `<small>${escapeHtml(group.description)}</small>` : ''}</span>${canEdit ? `<button class="mini edit-status-group" data-id="${group.id}">Edytuj</button><button class="mini add-status-subgroup" data-group="${group.id}">+ Podgrupa</button><button class="mini add-status-column" data-group="${group.id}" data-subgroup="">+ Pole grupy</button><button class="mini danger-outline delete-status-group" data-id="${group.id}">Usuń</button>` : ''}</header><section class="status-config-direct"><h4>Punkty bezpośrednio w grupie</h4>${columnRows(group, null, group.columns || [])}</section><div class="status-config-subgroups">${(group.subgroups || []).map((subgroup, subgroupIndex, subgroups) => `<section class="status-config-subgroup"><header>${canEdit ? orderControls('status_subgroups', subgroups, subgroupIndex) : ''}<span><b>${escapeHtml(subgroup.name)}</b>${subgroup.description ? `<small>${escapeHtml(subgroup.description)}</small>` : ''}</span>${canEdit ? `<button class="mini edit-status-subgroup" data-group="${group.id}" data-id="${subgroup.id}">Edytuj</button><button class="mini add-status-column" data-group="${group.id}" data-subgroup="${subgroup.id}">+ Pole</button><button class="mini danger-outline delete-status-subgroup" data-group="${group.id}" data-id="${subgroup.id}">Usuń</button>` : ''}</header>${columnRows(group, subgroup, subgroup.columns || [])}</section>`).join('') || '<div class="empty compact-empty">Ta grupa nie ma podgrup. Punkty mogą znajdować się bezpośrednio w grupie.</div>'}</div></article>`).join('') || '<div class="empty">Nie skonfigurowano jeszcze tabel statusowych.</div>'}</section>`;
+  const addColumnButtons = (groupId, subgroupId = '') => `<button class="mini add-status-column" data-column-type="text" data-group="${groupId}" data-subgroup="${subgroupId}">+ Kolumna podstawowa</button><button class="mini add-status-column" data-column-type="status" data-group="${groupId}" data-subgroup="${subgroupId}">+ Podpunkt statusowy</button>`;
+  return `<section class="config-panel-body status-matrix-config"><header class="status-config-intro"><div><h3>Układ tabel statusowych</h3><p class="sub">Kolumny podstawowe opisują element, np. typ i nazwę urządzenia. Podpunkty statusowe, np. +24V lub PN, mają osobny workflow i symbol statusu.</p></div>${canEdit ? '<button class="secondary" id="new-status-group">+ Dodaj grupę</button>' : ''}</header>${groups.map((group, groupIndex) => `<article class="status-config-group"><header>${canEdit ? orderControls('status_groups', groups, groupIndex) : ''}<span><b class="status-config-group-title">${escapeHtml(group.name)}</b>${group.description ? `<small>${escapeHtml(group.description)}</small>` : ''}</span>${canEdit ? `<button class="mini edit-status-group" data-id="${group.id}">Edytuj</button><button class="mini add-status-subgroup" data-group="${group.id}">+ Podgrupa</button>${addColumnButtons(group.id)}<button class="mini danger-outline delete-status-group" data-id="${group.id}">Usuń</button>` : ''}</header><section class="status-config-direct"><h4>Punkty bezpośrednio w grupie</h4>${columnRows(group, null, group.columns || [])}</section><div class="status-config-subgroups">${(group.subgroups || []).map((subgroup, subgroupIndex, subgroups) => `<section class="status-config-subgroup"><header>${canEdit ? orderControls('status_subgroups', subgroups, subgroupIndex) : ''}<span><b>${escapeHtml(subgroup.name)}</b>${subgroup.description ? `<small>${escapeHtml(subgroup.description)}</small>` : ''}</span>${canEdit ? `<button class="mini edit-status-subgroup" data-group="${group.id}" data-id="${subgroup.id}">Edytuj</button>${addColumnButtons(group.id, subgroup.id)}<button class="mini danger-outline delete-status-subgroup" data-group="${group.id}" data-id="${subgroup.id}">Usuń</button>` : ''}</header>${columnRows(group, subgroup, subgroup.columns || [])}</section>`).join('') || '<div class="empty compact-empty">Ta grupa nie ma podgrup. Punkty mogą znajdować się bezpośrednio w grupie.</div>'}</div></article>`).join('') || '<div class="empty">Nie skonfigurowano jeszcze tabel statusowych.</div>'}</section>`;
 }
 
 function controllerHierarchyConfig(admin) {
@@ -3992,7 +4000,7 @@ function renderSettings() {
     ['announcements', 'Informator', 'Etykiety oraz poziomy ważności wiadomości', (state.config.announcement_labels || []).length, '◆'],
     ...(admin ? [['planner', 'Planner i czas pracy', 'Święta, normy godzin i mnożniki nadgodzin', (state.planner?.holidays || []).length, '▥']] : []),
     ['dictionaries', 'Słowniki projektu', 'Zmiany, typy notatek i „Oczekiwanie na”', state.config.options.length, '≡'],
-    ['completion_requirements', 'Wymagania do spełnienia', 'Zapotrzebowanie wybierane w statusie, zadaniach i otwartych punktach', (state.config.requirements || []).length, '◇'],
+    ['completion_requirements', 'Zapotrzebowanie', 'Lista zapotrzebowania wybierana w Statusie, Zadaniach i Otwartych punktach', (state.config.requirements || []).length, '◇'],
     ['reminders', 'Przypomnienia', 'Domyślne terminy i okno ostrzegawcze', 2, '◷'],
     ...(admin ? [['backup', 'Backup projektu', 'Pobieranie i odtwarzanie kompletnego projektu', '', '⇄'], ['exports', 'Szablony eksportu', 'Predefiniowane raporty statusu do Excel', (state.config.export_templates || []).length, '↗']] : [])
   ];
@@ -4035,7 +4043,7 @@ function configPanelDefinition(key) {
     announcements: ['Informator · etykiety i ważność', announcementConfig],
     planner: ['Planner · konfiguracja', plannerConfig],
     dictionaries: ['Słowniki projektu', `<section class="config-panel-body config-dictionaries">${dictionaries}</section>`],
-    completion_requirements: ['Wymagania do spełnienia', `<section class="config-panel-body"><p class="sub">Ta uporządkowana lista jest dostępna jako wielokrotny wybór w Statusie, Zadaniach i Otwartych punktach.</p>${(state.config.requirements || []).map((item, index, items) => `<div class="settings-row">${canEdit ? orderControls('completion_requirements', items, index) : ''}<span><b>${escapeHtml(item.name)}</b><small class="sub">${escapeHtml(item.description || 'Bez opisu')}</small><small class="requirement-flags">${item.requires_evidence ? 'Dowód wymagany' : 'Dowód opcjonalny'} · ${item.requires_second_approval ? 'zatwierdza druga osoba' : 'bez drugiego zatwierdzenia'}</small></span>${canEdit ? `<button class="mini edit-requirement-config" data-id="${item.id}">Edytuj</button>` : ''}${admin ? `<button class="mini delete-requirement-config" data-id="${item.id}">Usuń</button>` : ''}</div>`).join('') || '<div class="empty compact-empty">Nie zdefiniowano jeszcze wymagań.</div>'}${canEdit ? '<button class="secondary" id="new-requirement-config">+ Dodaj wymaganie</button>' : ''}</section>`],
+    completion_requirements: ['Zapotrzebowanie', `<section class="config-panel-body"><p class="sub">Ta lista jest dostępna jako wielokrotny wybór w Statusie, Zadaniach i Otwartych punktach.</p>${(state.config.requirements || []).map((item, index, items) => `<div class="settings-row">${canEdit ? orderControls('completion_requirements', items, index) : ''}<span><b>${escapeHtml(item.name)}</b><small class="sub">${escapeHtml(item.description || 'Bez opisu')}</small></span>${canEdit ? `<button class="mini edit-requirement-config" data-id="${item.id}">Edytuj</button>` : ''}${admin ? `<button class="mini delete-requirement-config" data-id="${item.id}">Usuń</button>` : ''}</div>`).join('') || '<div class="empty compact-empty">Nie zdefiniowano jeszcze zapotrzebowania.</div>'}${canEdit ? '<button class="secondary" id="new-requirement-config">+ Dodaj pozycję</button>' : ''}</section>`],
     reminders: ['Ustawienia przypomnień', `<section class="config-panel-body">${admin ? `<p class="sub">Źródło obszarów dla „Mojego podsumowania” każdy użytkownik wybiera indywidualnie w tym module.</p><label class="field"><span>Domyślne przypomnienie po utworzeniu (dni)</span><input id="default-reminder" type="number" min="1" value="${escapeHtml(state.config.settings.default_reminder_days || 14)}"></label><label class="field"><span>Okno „zbliżających się” przypomnień (dni)</span><input id="warning-days" type="number" min="1" value="${escapeHtml(state.config.settings.reminder_warning_days || 7)}"></label>` : '<p class="sub">Tylko administrator może zmieniać ustawienia projektu.</p>'}</section>`],
     backup: ['Backup projektu', `<section class="config-panel-body"><p class="sub">Backup zawiera konfigurację i dane projektu. Nowe pliki są szyfrowane hasłem lokalnie w przeglądarce; hasło nie trafia na serwer.</p><div class="backup-actions"><button class="secondary" id="download-backup">Pobierz zaszyfrowany backup</button><label class="secondary file-button">Wczytaj backup<input id="restore-backup" type="file" accept="application/json,.json,.plcbak"></label></div></section>`],
     exports: ['Szablony eksportu statusu', `<section class="config-panel-body">${(state.config.export_templates || []).map((item, index) => `<div class="settings-row">${orderControls('export_templates', state.config.export_templates, index)}<span><b>${escapeHtml(item.name)}</b><small class="sub">${escapeHtml(item.detail_level)}</small></span><button class="mini edit-export-template" data-id="${item.id}">Edytuj</button><button class="mini delete-export-template" data-id="${item.id}">Usuń</button></div>`).join('') || '<p class="sub">Brak własnych szablonów.</p>'}<button class="secondary" id="new-export-template">+ Nowy szablon</button></section>`]
@@ -4065,7 +4073,7 @@ function bindSettings() {
   $$('.edit-status-group').forEach(button => button.addEventListener('click', () => editStatusGroup(Number(button.dataset.id))));
   $$('.add-status-subgroup').forEach(button => button.addEventListener('click', () => editStatusSubgroup(Number(button.dataset.group))));
   $$('.edit-status-subgroup').forEach(button => button.addEventListener('click', () => editStatusSubgroup(Number(button.dataset.group), Number(button.dataset.id))));
-  $$('.add-status-column').forEach(button => button.addEventListener('click', () => editStatusColumn(Number(button.dataset.group), Number(button.dataset.subgroup) || null)));
+  $$('.add-status-column').forEach(button => button.addEventListener('click', () => editStatusColumn(Number(button.dataset.group), Number(button.dataset.subgroup) || null, null, button.dataset.columnType)));
   $$('.edit-status-column').forEach(button => button.addEventListener('click', () => editStatusColumn(Number(button.dataset.group), Number(button.dataset.subgroup) || null, Number(button.dataset.id))));
   $$('.delete-status-column').forEach(button => button.addEventListener('click', async () => { if (!await uiConfirm('Usuń kolumnę', 'Wartości zapisane w tej kolumnie zostaną usunięte.', 'Usuń kolumnę', true)) return; const base = `/api/status-groups/${button.dataset.group}${button.dataset.subgroup ? `/subgroups/${button.dataset.subgroup}` : ''}/columns/${button.dataset.id}`; try { await api(base, { method: 'DELETE' }); await loadData(true); toast('Kolumna została usunięta'); } catch (error) { toast(error.message, true); } }));
   $$('.delete-status-subgroup').forEach(button => button.addEventListener('click', async () => { if (!await uiConfirm('Usuń podgrupę', 'Punkty zostaną przeniesione bezpośrednio do grupy, a wartości kolumn podgrupy usunięte.', 'Usuń podgrupę', true)) return; try { await api(`/api/status-groups/${button.dataset.group}/subgroups/${button.dataset.id}`, { method: 'DELETE' }); await loadData(true); toast('Podgrupa została usunięta'); } catch (error) { toast(error.message, true); } }));
@@ -4158,8 +4166,8 @@ function bindSettings() {
   $('#new-requirement-config')?.addEventListener('click', () => editCompletionRequirement());
   $$('.edit-requirement-config').forEach(button => button.addEventListener('click', () => editCompletionRequirement(Number(button.dataset.id))));
   $$('.delete-requirement-config').forEach(button => button.addEventListener('click', async () => {
-    if (!await uiConfirm('Usuń wymaganie', 'Wymaganie zostanie odłączone od wszystkich elementów projektu.', 'Usuń', true)) return;
-    try { await api(`/api/completion-requirements/${button.dataset.id}`, { method: 'DELETE' }); toast('Wymaganie usunięto'); await loadData(); } catch (error) { toast(error.message, true); }
+    if (!await uiConfirm('Usuń pozycję zapotrzebowania', 'Pozycja zostanie odłączona od wszystkich elementów projektu.', 'Usuń', true)) return;
+    try { await api(`/api/completion-requirements/${button.dataset.id}`, { method: 'DELETE' }); toast('Pozycja zapotrzebowania została usunięta'); await loadData(); } catch (error) { toast(error.message, true); }
   }));
 }
 
@@ -4292,14 +4300,12 @@ async function moveFunctionGroupListItem(row, direction) {
 
 async function editCompletionRequirement(id = null) {
   const existing = (state.config.requirements || []).find(item => item.id === id);
-  const result = await uiForm({ title: id ? 'Edytuj wymaganie' : 'Nowe wymaganie do spełnienia', fields: [
+  const result = await uiForm({ title: id ? 'Edytuj pozycję zapotrzebowania' : 'Nowa pozycja zapotrzebowania', fields: [
     { name: 'name', label: 'Nazwa', value: existing?.name || '', required: true },
-    { name: 'description', label: 'Krótki opis dla pracownika', type: 'textarea', value: existing?.description || '', full: true },
-    { name: 'requires_evidence', label: 'Wymagaj dowodu lub linku', type: 'checkbox', value: Boolean(existing?.requires_evidence) },
-    { name: 'requires_second_approval', label: 'Wymagaj zatwierdzenia przez drugą osobę', type: 'checkbox', value: Boolean(existing?.requires_second_approval) }
-  ], submitLabel: id ? 'Zapisz wymaganie' : 'Dodaj wymaganie' });
+    { name: 'description', label: 'Krótki opis', type: 'textarea', value: existing?.description || '', full: true }
+  ], submitLabel: id ? 'Zapisz' : 'Dodaj' });
   if (!result?.name) return;
-  try { await api('/api/completion-requirements' + (id ? `/${id}` : ''), { method: id ? 'PATCH' : 'POST', body: JSON.stringify(result) }); toast('Lista wymagań została zapisana'); await loadData(); } catch (error) { toast(error.message, true); }
+  try { await api('/api/completion-requirements' + (id ? `/${id}` : ''), { method: id ? 'PATCH' : 'POST', body: JSON.stringify(result) }); toast('Lista zapotrzebowania została zapisana'); await loadData(); } catch (error) { toast(error.message, true); }
 }
 
 async function saveControllerGroup(id, parentId, existingName = '') {
@@ -4576,16 +4582,18 @@ async function editStatusSubgroup(groupId, id = null) {
   catch (error) { toast(error.message, true); }
 }
 
-async function editStatusColumn(groupId, subgroupId = null, id = null) {
+async function editStatusColumn(groupId, subgroupId = null, id = null, requestedType = null) {
   const group = statusGroups().find(item => item.id === Number(groupId)); const subgroup = group?.subgroups?.find(item => item.id === Number(subgroupId));
   const columns = subgroup ? subgroup.columns || [] : group?.columns || []; const item = columns.find(column => column.id === Number(id));
   if (!group) return;
-  const result = await uiForm({ title: item ? 'Edytuj kolumnę' : 'Dodaj kolumnę', description: `${group.name}${subgroup ? ` → ${subgroup.name}` : ' → punkty grupy'}`, submitLabel: item ? 'Zapisz kolumnę' : 'Dodaj kolumnę', fields: [
+  const fieldType = item?.field_type || requestedType || 'status';
+  const result = await uiForm({ title: item ? `Edytuj ${fieldType === 'status' ? 'podpunkt statusowy' : 'kolumnę podstawową'}` : `Dodaj ${fieldType === 'status' ? 'podpunkt statusowy' : 'kolumnę podstawową'}`, description: `${group.name}${subgroup ? ` → ${subgroup.name}` : ' → punkty grupy'}`, submitLabel: item ? 'Zapisz' : 'Dodaj', fields: [
     { name: 'name', label: 'Nazwa kolumny', value: item?.name || '', required: true },
-    { name: 'field_type', label: 'Rodzaj pola', type: 'select', value: item?.field_type || 'status', options: [{ value: 'text', label: 'Kolumna podstawowa — dane elementu' }, { value: 'status', label: 'Podpunkt statusowy — workflow i symbole' }] },
-    { name: 'include_in_progress', label: 'Uwzględniaj podpunkt w procencie realizacji', type: 'checkbox', value: item ? Number(item.include_in_progress) : 1, full: true, hint: 'To ustawienie dotyczy wyłącznie podpunktów statusowych.' }
+    ...(fieldType === 'status' ? [{ name: 'include_in_progress', label: 'Uwzględniaj podpunkt w procencie realizacji', type: 'checkbox', value: item ? Number(item.include_in_progress) : 1, full: true }] : [])
   ] });
   if (!result) return;
+  result.field_type = fieldType;
+  if (fieldType === 'text') result.include_in_progress = 0;
   const base = `/api/status-groups/${group.id}${subgroup ? `/subgroups/${subgroup.id}` : ''}/columns`;
   try { await api(base + (item ? `/${item.id}` : ''), { method: item ? 'PATCH' : 'POST', body: JSON.stringify(result) }); toast('Kolumna została zapisana'); await loadData(true); }
   catch (error) { toast(error.message, true); }
@@ -4599,24 +4607,24 @@ async function saveSetting(key, value) {
 
 const formDefinitions = {
   status: { endpoint: '/api/status', title: 'punkt statusu', fields: [
-    ['controller', 'Sterownik', 'controller'], ['status_group_id', 'Grupa tabeli statusowej', 'status-group'], ['status_subgroup_id', 'Podgrupa tabeli statusowej', 'status-subgroup'], ['function_group_id', 'Grupa funkcyjna', 'function-group'], ['function_group_subcategory_id', 'Podkategoria grupy funkcyjnej', 'function-subcategory'], ['function_group_element_id', 'Obiekt / element grupy', 'function-element'], ['function_detail', 'Punkt / element', 'textarea'],
-    ['matrix_values', 'Kolumny i podpunkty statusowe', 'status-matrix'],
+    ['controller', 'Sterownik', 'controller'], ['status_group_id', 'Grupa tabeli statusowej', 'status-group'], ['status_subgroup_id', 'Podgrupa tabeli statusowej', 'status-subgroup'],
+    ['matrix_values', 'Dane punktu statusowego', 'status-matrix'], ['function_group_id', 'Grupa funkcyjna', 'function-group'], ['function_group_subcategory_id', 'Podkategoria grupy funkcyjnej', 'function-subcategory'], ['function_group_element_id', 'Obiekt / element grupy', 'function-element'],
     ['criticality', 'Krytyczność', 'select', ['Low', 'Medium', 'High', 'Critical']], ['responsible_user_ids', 'Osoby odpowiedzialne', 'users'], ['dependency_refs', 'Zależności — elementy wymagane wcześniej', 'dependencies'],
-    ['requirement_ids', 'Dodatkowe zapotrzebowanie', 'requirements'], ['current_note', 'Aktualna notatka', 'textarea'], ['evidence_link', 'Dodatkowe informacje / link'], ['links', 'Powiązane elementy', 'multi-links', ['task', 'point', 'note', 'goal']]
+    ['requirement_ids', 'Zapotrzebowanie', 'requirements'], ['current_note', 'Aktualna notatka', 'textarea'], ['evidence_link', 'Dodatkowe informacje / link'], ['links', 'Powiązane elementy', 'multi-links', ['task', 'point', 'note', 'goal']]
   ] },
   tasks: { endpoint: '/api/tasks', title: 'zadanie', fields: [
     ['hierarchy_target', 'Zakres w hierarchii projektu', 'hierarchy-target'], ['title', 'Tytuł', 'wide-text'], ['description', 'Opis', 'textarea'], ['info_link', 'Dodatkowe informacje / link', 'wide-text'],
     ['direct_assignee_user_ids', 'Odpowiedzialni', 'users'], ['dependency_refs', 'Zależności — elementy wymagane wcześniej', 'dependencies'], ['checklist', 'Lista kontrolna', 'checklist'], ['scope_checklist', 'Kontrola sterowników w zakresie', 'scope-checklist'],
     ['function_group_id', 'Grupa funkcyjna', 'function-group'], ['function_group_element_id', 'Element grupy funkcyjnej', 'function-element'], ['other_object', 'Inne (gdy nie dotyczy grupy)'],
     ['status', 'Status', 'select', ['To do', 'In progress', 'Done']], ['priority', 'Priorytet', 'select', ['Low', 'Medium', 'High', 'Critical']],
-    ['start_date', 'Planowany start', 'date'], ['due_date', 'Deadline', 'date'], ['category', 'Kategoria zadania', 'category', 'task'], ['subcategory', 'Podkategoria zadania', 'subcategory', 'task'], ['requirement_ids', 'Dodatkowe zapotrzebowanie', 'requirements'],
+    ['start_date', 'Planowany start', 'date'], ['due_date', 'Deadline', 'date'], ['category', 'Kategoria zadania', 'category', 'task'], ['subcategory', 'Podkategoria zadania', 'subcategory', 'task'], ['requirement_ids', 'Zapotrzebowanie', 'requirements'],
     ['links', 'Powiązane elementy', 'multi-links', ['status', 'point', 'note']]
   ] },
   points: { endpoint: '/api/open-points', title: 'otwarty punkt', fields: [
     ['controller', 'Sterownik', 'controller'], ['title', 'Temat'], ['owner_user_id', 'Odpowiedzialny', 'user'],
     ['status', 'Status', 'select', ['Open', 'Waiting', 'In progress', 'Closed']], ['priority', 'Priorytet', 'select', ['Low', 'Medium', 'High', 'Critical']], ['dependency_refs', 'Zależności — elementy wymagane wcześniej', 'dependencies'],
     ['start_date', 'Planowany start', 'date'], ['due_date', 'Deadline', 'date'], ['reminder_date', 'Przypomnienie', 'date'],
-    ['category', 'Kategoria', 'category', 'status'], ['subcategory', 'Podkategoria', 'subcategory', 'status'], ['waiting_for', 'Oczekiwanie na', 'options', 'waiting_for'], ['requirement_ids', 'Dodatkowe zapotrzebowanie', 'requirements'],
+    ['category', 'Kategoria', 'category', 'status'], ['subcategory', 'Podkategoria', 'subcategory', 'status'], ['waiting_for', 'Oczekiwanie na', 'options', 'waiting_for'], ['requirement_ids', 'Zapotrzebowanie', 'requirements'],
     ['links', 'Powiązane elementy', 'multi-links', ['status', 'task', 'point', 'note']], ['info_link', 'Dodatkowe informacje / link'],
     ['impact', 'Wpływ', 'textarea'], ['next_action', 'Następny krok', 'textarea'], ['description', 'Opis techniczny', 'textarea'], ['mentioned_user_ids', 'Wspomniane osoby', 'mentions']
   ] },
@@ -4678,7 +4686,6 @@ async function openRecord(type, record = null, prefill = null, duplicateSource =
   $('#comment-content').value = '';
   if (commentable) renderEntityComments(record.comments || []);
   resetSimilarKnowledge();
-  renderDefinitionOfDone(type, record);
   $('#fields').innerHTML = definition.fields.map(field => fieldHtml(field, source, type)).join('');
   if (type === 'users' && state.me.role !== 'system_admin') {
     ['username', 'display_name', 'password', 'system_role', 'active'].forEach(name => { const input = $(`#fields [name="${name}"]`); if (input) input.disabled = true; });
@@ -4707,7 +4714,7 @@ function setRecordDialogMode(editing) {
   if (editing && dialog.record?.edit_locked && !dialog.record?.can_override_edit_lock) return toast(`Edycja jest zablokowana przez ${dialog.record.edit_lock?.locked_by_name || 'managera'}.`, true);
   dialog.editing = Boolean(editing || !lockable);
   $('#fields').classList.toggle('record-readonly', !dialog.editing);
-  $$('#fields input, #fields select, #fields textarea, #fields button, #dod-section button').forEach(control => { control.disabled = !dialog.editing; });
+  $$('#fields input, #fields select, #fields textarea, #fields button').forEach(control => { control.disabled = !dialog.editing; });
   $('#record-save').disabled = !dialog.editing;
   $('#edit-record').hidden = !lockable || dialog.editing;
   $('#remove').disabled = lockable && !dialog.editing;
@@ -4757,31 +4764,6 @@ async function loadSimilarKnowledge(entityType, entityId) {
   } catch {
     resetSimilarKnowledge();
   }
-}
-
-function renderDefinitionOfDone(formType, record) {
-  const entityType = typeToEntity(formType);
-  const requirements = record?.requirements || [];
-  const visible = Boolean(record && ['status', 'task', 'point'].includes(entityType) && requirements.length);
-  $('#dod-section').classList.toggle('hidden', !visible);
-  if (!visible) { $('#dod-list').innerHTML = ''; return; }
-  const done = requirements.filter(item => item.completed_at && (!item.requires_second_approval || item.approved_at)).length;
-  $('#dod-count').textContent = `${done}/${requirements.length} spełnione`;
-  $('#dod-list').innerHTML = requirements.map(item => {
-    const complete = Boolean(item.completed_at); const approved = Boolean(item.approved_at); const ready = complete && (!item.requires_second_approval || approved);
-    return `<article class="dod-row ${ready ? 'done' : complete ? 'waiting-approval' : ''}"><span class="dod-state">${ready ? '✓' : complete ? '2' : '1'}</span><span><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.description || '')}</small>${item.evidence ? `<em>Dowód: ${escapeHtml(item.evidence)}</em>` : ''}${complete ? `<em>Wykonał: ${escapeHtml(item.completed_by_name || '')} · ${displayDateTime(item.completed_at)}</em>` : ''}${approved ? `<em>Zatwierdził: ${escapeHtml(item.approved_by_name || '')} · ${displayDateTime(item.approved_at)}</em>` : ''}</span><div>${!complete ? `<button type="button" class="mini" data-dod-action="complete" data-requirement="${item.id}">Oznacz wykonanie</button>` : item.requires_second_approval && !approved && canCoordinate() && Number(item.completed_by) !== Number(state.me.id) ? `<button type="button" class="mini green-outline" data-dod-action="approve" data-requirement="${item.id}">Zatwierdź</button>` : ''}${complete ? `<button type="button" class="mini" data-dod-action="reopen" data-requirement="${item.id}">Cofnij</button>` : ''}</div></article>`;
-  }).join('');
-  $$('[data-dod-action]').forEach(button => button.addEventListener('click', () => updateDefinitionOfDone(entityType, record, Number(button.dataset.requirement), button.dataset.dodAction)));
-}
-
-async function updateDefinitionOfDone(entityType, record, requirementId, action) {
-  const requirement = record.requirements.find(item => item.id === requirementId);
-  let evidence = '';
-  if (action === 'complete') {
-    const result = await uiForm({ title: `Wykonano · ${requirement.name}`, description: requirement.requires_second_approval ? 'Po zapisaniu druga osoba będzie musiała zatwierdzić spełnienie wymagania.' : 'Wymaganie zostanie oznaczone jako spełnione.', submitLabel: 'Potwierdź wykonanie', fields: [{ name: 'evidence', label: requirement.requires_evidence ? 'Dowód / link *' : 'Dowód / link (opcjonalnie)', required: Boolean(requirement.requires_evidence), full: true }] });
-    if (!result) return; evidence = result.evidence;
-  } else if (!await uiConfirm(action === 'approve' ? 'Zatwierdź Definition of Done' : 'Cofnij wykonanie wymagania', action === 'approve' ? 'Potwierdzasz rezultat wykonany przez inną osobę.' : 'Element ponownie będzie wymagał wykonania tego warunku.', action === 'approve' ? 'Zatwierdź' : 'Cofnij')) return;
-  try { record.requirements = await api(`/api/${entityType}/${record.id}/requirements/${requirementId}`, { method: 'PATCH', body: JSON.stringify({ action, evidence }) }); renderDefinitionOfDone(state.dialog.type, record); toast('Definition of Done została zaktualizowana'); } catch (error) { toast(error.message, true); }
 }
 
 function typeToEntity(type) { return ({ status: 'status', tasks: 'task', points: 'point', notes: 'note', goals: 'goal' })[type]; }
@@ -4879,7 +4861,7 @@ function defaultValue(name) {
 
 function requiredRecordField(formType, name, record) {
   const fields = {
-    status: ['controller', 'status_group_id', 'function_detail'], tasks: ['hierarchy_target', 'title', 'status'],
+    status: ['controller', 'status_group_id'], tasks: ['hierarchy_target', 'title', 'status'],
     points: ['controller', 'title', 'status'], goals: ['controller', 'title', 'status'], announcements: ['title', 'content'],
     users: ['username', 'display_name'], controllers: ['leaf_code']
   };
@@ -4974,11 +4956,11 @@ function fieldHtml([name, label, type = 'text', extra], record, formType = '') {
   return `<label class="field ${required ? 'required-field' : ''} ${['textarea', 'bigtextarea', 'wide-text'].includes(type) ? `full ${type === 'bigtextarea' ? 'big' : ''}` : ''}"><span>${label}${required ? ' *' : ''}${info}</span>${input}${type === 'readonly' ? '<small class="sub">ID jest unikalne w projekcie i nie można go edytować.</small>' : ''}</label>`;
 }
 
-function requirementsField(record, name = 'requirement_ids', label = 'Dodatkowe zapotrzebowanie') {
+function requirementsField(record, name = 'requirement_ids', label = 'Zapotrzebowanie') {
   const selected = new Set((record?.[name] || []).map(Number));
   const items = state.config.requirements || [];
   const selectedNames = items.filter(item => selected.has(item.id)).map(item => item.name);
-  return `<div class="field full requirement-field"><label>${escapeHtml(label)}</label><details class="multi-user-select" data-empty-label="Brak dodatkowych wymagań"><summary>${selectedNames.length ? `${selectedNames.length} · ${escapeHtml(selectedNames.join(', '))}` : 'Brak dodatkowych wymagań'}</summary><div class="mentions requirement-picks">${items.map(item => `<label class="mention" title="${escapeHtml(item.description || '')}"><input type="checkbox" name="${name}" value="${item.id}" ${selected.has(item.id) ? 'checked' : ''}><span><b>${escapeHtml(item.name)}</b>${item.description ? `<small>${escapeHtml(item.description)}</small>` : ''}</span></label>`).join('') || '<span class="form-hint">Lista jest pusta. Dodaj wymagania w Konfiguracji.</span>'}</div></details></div>`;
+  return `<div class="field full requirement-field"><label>${escapeHtml(label)}</label><details class="multi-user-select" data-empty-label="Brak zapotrzebowania"><summary>${selectedNames.length ? `${selectedNames.length} · ${escapeHtml(selectedNames.join(', '))}` : 'Brak zapotrzebowania'}</summary><div class="mentions requirement-picks">${items.map(item => `<label class="mention" title="${escapeHtml(item.description || '')}"><input type="checkbox" name="${name}" value="${item.id}" ${selected.has(item.id) ? 'checked' : ''}><span><b>${escapeHtml(item.name)}</b>${item.description ? `<small>${escapeHtml(item.description)}</small>` : ''}</span></label>`).join('') || '<span class="form-hint">Lista jest pusta. Dodaj pozycje w Konfiguracji.</span>'}</div></details></div>`;
 }
 
 function dependenciesField(record, currentType) {
@@ -5368,12 +5350,12 @@ function auditAction(action) { return ({ create: 'utworzenie', update: 'edycja',
 function fieldLabel(field) { return ({
   created: 'Utworzenie elementu', migrated: 'Migracja danych', controller_id: 'Sterownik', controller_group_id: 'Zakres hierarchii',
   title: 'Tytuł', description: 'Opis', status: 'Status', priority: 'Priorytet', category: 'Kategoria', subcategory: 'Podkategoria',
-  station: 'Stacja / obiekt', function_detail: 'Punkt / element', function_group_id: 'Grupa funkcyjna', function_group_element_id: 'Element grupy', function_group_subcategory_id: 'Podkategoria grupy funkcyjnej', status_group_id: 'Grupa tabeli statusowej', status_subgroup_id: 'Podgrupa tabeli statusowej', matrix_values: 'Wartości tabeli statusowej',
+  station: 'Stacja / obiekt', function_detail: 'Dane identyfikujące', function_group_id: 'Grupa funkcyjna', function_group_element_id: 'Element grupy', function_group_subcategory_id: 'Podkategoria grupy funkcyjnej', status_group_id: 'Grupa tabeli statusowej', status_subgroup_id: 'Podgrupa tabeli statusowej', matrix_values: 'Wartości tabeli statusowej',
   other_object: 'Inny obiekt', owner: 'Odpowiedzialny (opis)', owner_user_id: 'Odpowiedzialny', responsible: 'Odpowiedzialny (opis)', responsible_user_id: 'Odpowiedzialny', responsible_user_ids: 'Osoby odpowiedzialne', direct_assignee_user_ids: 'Odpowiedzialni', mentioned_user_ids: 'Wspomniane osoby',
   due_date: 'Deadline', reminder_date: 'Przypomnienie', start_date: 'Planowany start', note_date: 'Data wpisu', checked_on: 'Data sprawdzenia', checked_by: 'Sprawdził',
   current_note: 'Aktualna notatka', environment: 'Środowisko', criticality: 'Krytyczność', evidence_link: 'Dowód / link', info_link: 'Dodatkowe informacje / link',
   impact: 'Wpływ', waiting_for: 'Oczekiwanie na', next_action: 'Następny krok', shift: 'Zmiana', type: 'Typ wpisu', content: 'Treść', sections: 'Informacje przekazania', author: 'Autor', comment: 'Dodany komentarz',
-  linked_entity_id: 'Powiązany element', linked_entity_type: 'Typ powiązania', checklist: 'Lista kontrolna / podzadania', scope_checklist: 'Kontrola sterowników w zakresie', links: 'Powiązania', requirement_ids: 'Dodatkowe zapotrzebowanie', dependency_task_ids: 'Zależności zadania', dependency_refs: 'Zależności kolejki'
+  linked_entity_id: 'Powiązany element', linked_entity_type: 'Typ powiązania', checklist: 'Lista kontrolna / podzadania', scope_checklist: 'Kontrola sterowników w zakresie', links: 'Powiązania', requirement_ids: 'Zapotrzebowanie', dependency_task_ids: 'Zależności zadania', dependency_refs: 'Zależności kolejki'
 })[field] || field.replaceAll('_', ' '); }
 
 function auditUserName(id) { return state.users.find(user => user.id === Number(id))?.display_name || 'Nieprzypisane'; }
@@ -5395,7 +5377,7 @@ function formatAuditValue(field, value) {
     return Object.entries(value || {}).map(([id, cell]) => `${columns.find(column => column.id === Number(id))?.name || `Kolumna ${id}`}: ${badgeMap[cell]?.[0] || cell || '—'}`).join('; ') || '—';
   }
   if (field === 'links') return (value || []).map(auditLinkName).join(', ') || '—';
-  if (field === 'requirement_ids') return (value || []).map(id => (state.config.requirements || []).find(item => item.id === Number(id))?.name || `Usunięte wymaganie`).join(', ') || '—';
+  if (field === 'requirement_ids') return (value || []).map(id => (state.config.requirements || []).find(item => item.id === Number(id))?.name || 'Usunięta pozycja zapotrzebowania').join(', ') || '—';
   if (field === 'dependency_task_ids') return (value || []).map(id => (state.taskDependencyOptions.length ? state.taskDependencyOptions : state.tasks).find(item => item.id === Number(id))?.title || 'Usunięte zadanie').join(', ') || '—';
   if (field === 'dependency_refs') return (value || []).map(link => auditLinkName(link)).join(', ') || '—';
   if (['due_date', 'reminder_date', 'start_date', 'note_date', 'checked_on'].includes(field)) return displayDate(String(value).slice(0, 10));

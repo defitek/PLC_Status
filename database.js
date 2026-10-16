@@ -91,6 +91,7 @@ export function openDatabase(databasePath) {
   migrateEntityDependencies(db);
   migrateGlobalPlannerData(db);
   removeCommissioningModule(db);
+  removeDefinitionOfDone(db);
   syncProjectMemberships(db);
   removeEmptyDuplicateControllerRoots(db);
   backfillV3(db);
@@ -195,6 +196,12 @@ function removeCommissioningModule(db) {
     DROP TABLE IF EXISTS test_campaigns;
     DROP TABLE IF EXISTS readiness_gates;
     DROP TABLE IF EXISTS commissioning_templates;
+  `);
+}
+
+function removeDefinitionOfDone(db) {
+  db.exec(`
+    DROP TABLE IF EXISTS entity_requirement_status;
   `);
 }
 
@@ -1218,6 +1225,18 @@ function createRepository(db, defaultProjectId) {
     return Object.fromEntries(all('SELECT column_id,value FROM status_cell_values WHERE status_item_id=? ORDER BY column_id', statusId).map(item => [item.column_id, item.value]));
   }
 
+  function syncStatusIdentity(statusId) {
+    const row = one('SELECT id,status_group_id,status_subgroup_id,test_id,function_detail FROM status_items WHERE id=? AND project_id=?', asId(statusId), activeProjectId());
+    if (!row) return;
+    const basicValues = all(`SELECT scv.value FROM status_columns sc JOIN status_cell_values scv ON scv.column_id=sc.id
+      WHERE scv.status_item_id=? AND sc.active=1 AND sc.field_type='text' AND sc.status_group_id=?
+        AND ((sc.status_subgroup_id IS NULL AND ? IS NULL) OR sc.status_subgroup_id=?)
+      ORDER BY sc.sort_order,sc.name,sc.id`, row.id, row.status_group_id, row.status_subgroup_id, row.status_subgroup_id)
+      .map(item => clean(item.value)).filter(Boolean);
+    if (!basicValues.length) return;
+    db.prepare('UPDATE status_items SET function_detail=? WHERE id=? AND project_id=?').run(basicValues.join(' · ').slice(0, 4000), row.id, activeProjectId());
+  }
+
   function ensureStatusCells(statusId, groupId, subgroupId, defaultStatus, userId = null) {
     const columns = applicableStatusColumns(groupId, subgroupId);
     if (!columns.length) return;
@@ -1436,15 +1455,8 @@ function createRepository(db, defaultProjectId) {
   }
 
   function requirementRows(type, id) {
-    return all(`SELECT cr.id,cr.name,cr.description,cr.requires_evidence,cr.requires_second_approval,
-      ers.evidence,ers.completed_by,ers.completed_at,ers.approved_by,ers.approved_at,
-      completed.display_name completed_by_name,approved.display_name approved_by_name
-      FROM entity_requirements er
+    return all(`SELECT cr.id,cr.name,cr.description FROM entity_requirements er
       JOIN completion_requirements cr ON cr.id=er.requirement_id
-      LEFT JOIN entity_requirement_status ers ON ers.project_id=er.project_id AND ers.entity_type=er.entity_type
-        AND ers.entity_id=er.entity_id AND ers.requirement_id=er.requirement_id
-      LEFT JOIN users completed ON completed.id=ers.completed_by
-      LEFT JOIN users approved ON approved.id=ers.approved_by
       WHERE er.project_id=? AND er.entity_type=? AND er.entity_id=? AND cr.active=1
       ORDER BY cr.sort_order,cr.name`, activeProjectId(), type, id);
   }
@@ -1452,9 +1464,7 @@ function createRepository(db, defaultProjectId) {
   function setEntityRequirements(type, id, requested) {
     if (!['status', 'task', 'point'].includes(type)) return [];
     const ids = [...new Set((Array.isArray(requested) ? requested : []).map(asId).filter(Boolean))];
-    for (const requirementId of ids) if (!one('SELECT 1 FROM completion_requirements WHERE id=? AND project_id=? AND active=1', requirementId, activeProjectId())) throw appError('Wybrane dodatkowe zapotrzebowanie nie należy do projektu');
-    if (ids.length) db.prepare(`DELETE FROM entity_requirement_status WHERE project_id=? AND entity_type=? AND entity_id=? AND requirement_id NOT IN (${ids.map(() => '?').join(',')})`).run(activeProjectId(), type, id, ...ids);
-    else db.prepare('DELETE FROM entity_requirement_status WHERE project_id=? AND entity_type=? AND entity_id=?').run(activeProjectId(), type, id);
+    for (const requirementId of ids) if (!one('SELECT 1 FROM completion_requirements WHERE id=? AND project_id=? AND active=1', requirementId, activeProjectId())) throw appError('Wybrane zapotrzebowanie nie należy do projektu');
     db.prepare('DELETE FROM entity_requirements WHERE project_id=? AND entity_type=? AND entity_id=?').run(activeProjectId(), type, id);
     const insert = db.prepare('INSERT INTO entity_requirements(project_id,entity_type,entity_id,requirement_id) VALUES(?,?,?,?)');
     ids.forEach(requirementId => insert.run(activeProjectId(), type, id, requirementId));
@@ -2229,7 +2239,7 @@ function createRepository(db, defaultProjectId) {
     ['daily_note_sections', 'project_id=?'], ['daily_note_section_scopes', 'section_id IN (SELECT id FROM daily_note_sections WHERE project_id=?)'],
     ['daily_note_section_links', 'section_id IN (SELECT id FROM daily_note_sections WHERE project_id=?)'],
     ['goal_links', 'project_id=?'], ['entity_mentions', 'project_id=?'], ['entity_links', 'project_id=?'], ['entity_requirements', 'project_id=?'], ['entity_comments', 'project_id=?'], ['notifications', 'project_id=?'],
-    ['entity_requirement_status', 'project_id=?'], ['entity_edit_locks', 'project_id=?'],
+    ['entity_edit_locks', 'project_id=?'],
     ['announcements', 'project_id=?'],
     ['announcement_labels', 'project_id=?'],
     ['announcement_label_links', 'announcement_id IN (SELECT id FROM announcements WHERE project_id=?)'],
@@ -2251,7 +2261,7 @@ function createRepository(db, defaultProjectId) {
     'controller_groups', 'controllers', 'categories', 'subcategories', 'task_categories', 'task_subcategories',
     'options', 'settings', 'completion_requirements', 'function_groups', 'function_group_elements', 'function_group_subcategories', 'function_group_checks',
     'function_group_check_subcategories', 'status_groups', 'status_subgroups', 'status_columns', 'status_items', 'status_cell_values', 'status_assignees', 'tasks', 'task_dependencies', 'task_checklist', 'task_scope_checklist', 'task_assignees', 'open_points', 'entity_dependencies',
-    'daily_notes', 'daily_note_sections', 'daily_note_section_scopes', 'daily_note_section_links', 'goals', 'goal_links', 'entity_mentions', 'entity_links', 'entity_requirements', 'entity_requirement_status', 'entity_edit_locks', 'entity_comments', 'notifications', 'audit_log',
+    'daily_notes', 'daily_note_sections', 'daily_note_section_scopes', 'daily_note_section_links', 'goals', 'goal_links', 'entity_mentions', 'entity_links', 'entity_requirements', 'entity_edit_locks', 'entity_comments', 'notifications', 'audit_log',
     'export_templates', 'project_sequences', 'project_user_areas', 'planner_entries', 'planner_requirements', 'planner_holidays', 'planner_absences', 'planner_time_adjustments',
     'announcements', 'announcement_labels', 'announcement_scopes', 'announcement_users', 'announcement_links', 'announcement_label_links', 'announcement_reads', 'calendar_annotations', 'calendar_item_dates',
     'shift_handovers', 'shift_handover_items', 'automation_rules', 'automation_rule_hits', 'saved_views',
@@ -3181,59 +3191,21 @@ function createRepository(db, defaultProjectId) {
 
   function saveCompletionRequirement(id, input) {
     const name = clean(input.name); const description = clean(input.description);
-    const requiresEvidence = Number(input.requires_evidence) ? 1 : 0;
-    const requiresSecondApproval = Number(input.requires_second_approval) ? 1 : 0;
-    if (!name) throw appError('Nazwa wymagania jest wymagana');
+    if (!name) throw appError('Nazwa zapotrzebowania jest wymagana');
     let recordId = asId(id);
     if (recordId) {
-      const result = db.prepare('UPDATE completion_requirements SET name=?,description=?,requires_evidence=?,requires_second_approval=? WHERE id=? AND project_id=?').run(name, description, requiresEvidence, requiresSecondApproval, recordId, activeProjectId());
-      if (!result.changes) throw appError('Nie znaleziono wymagania', 404);
+      const result = db.prepare('UPDATE completion_requirements SET name=?,description=?,requires_evidence=0,requires_second_approval=0 WHERE id=? AND project_id=?').run(name, description, recordId, activeProjectId());
+      if (!result.changes) throw appError('Nie znaleziono zapotrzebowania', 404);
     } else {
       const sortOrder = Number(one('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM completion_requirements WHERE project_id=?', activeProjectId())?.value || 0);
-      recordId = insertRecord('completion_requirements', { project_id: activeProjectId(), name, description, requires_evidence: requiresEvidence, requires_second_approval: requiresSecondApproval, sort_order: sortOrder, active: 1 });
+      recordId = insertRecord('completion_requirements', { project_id: activeProjectId(), name, description, requires_evidence: 0, requires_second_approval: 0, sort_order: sortOrder, active: 1 });
     }
     return one('SELECT * FROM completion_requirements WHERE id=?', recordId);
   }
 
-  function updateRequirementStatus(type, entityId, requirementId, input, currentUser) {
-    if (!['status', 'task', 'point'].includes(type)) throw appError('Nieprawidłowy typ elementu');
-    const target = baseSnapshot(type, asId(entityId));
-    if (!target) throw appError('Nie znaleziono elementu', 404);
-    const requirement = one(`SELECT cr.* FROM completion_requirements cr JOIN entity_requirements er ON er.requirement_id=cr.id
-      WHERE cr.project_id=? AND er.project_id=? AND er.entity_type=? AND er.entity_id=? AND cr.id=?`, activeProjectId(), activeProjectId(), type, asId(entityId), asId(requirementId));
-    if (!requirement) throw appError('To wymaganie nie jest przypisane do elementu', 404);
-    const action = clean(input.action);
-    const current = one('SELECT * FROM entity_requirement_status WHERE project_id=? AND entity_type=? AND entity_id=? AND requirement_id=?', activeProjectId(), type, asId(entityId), requirement.id);
-    if (action === 'complete') {
-      const evidence = clean(input.evidence);
-      if (requirement.requires_evidence && !evidence) throw appError('To wymaganie wymaga podania dowodu lub odnośnika');
-      db.prepare(`INSERT INTO entity_requirement_status(project_id,entity_type,entity_id,requirement_id,evidence,completed_by,completed_at,approved_by,approved_at,updated_at)
-        VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP,NULL,NULL,CURRENT_TIMESTAMP)
-        ON CONFLICT(entity_type,entity_id,requirement_id) DO UPDATE SET evidence=excluded.evidence,completed_by=excluded.completed_by,completed_at=CURRENT_TIMESTAMP,approved_by=NULL,approved_at=NULL,updated_at=CURRENT_TIMESTAMP`)
-        .run(activeProjectId(), type, asId(entityId), requirement.id, evidence, currentUser.id);
-    } else if (action === 'approve') {
-      if (!current?.completed_at) throw appError('Najpierw oznacz wymaganie jako wykonane');
-      if (Number(current.completed_by) === Number(currentUser.id)) throw appError('Wymaganie musi zatwierdzić inna osoba');
-      db.prepare(`UPDATE entity_requirement_status SET approved_by=?,approved_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP
-        WHERE project_id=? AND entity_type=? AND entity_id=? AND requirement_id=?`).run(currentUser.id, activeProjectId(), type, asId(entityId), requirement.id);
-    } else if (action === 'reopen') {
-      db.prepare(`DELETE FROM entity_requirement_status WHERE project_id=? AND entity_type=? AND entity_id=? AND requirement_id=?`).run(activeProjectId(), type, asId(entityId), requirement.id);
-    } else throw appError('Nieznana akcja wymagania');
-    const after = baseSnapshot(type, asId(entityId));
-    writeAudit(type, asId(entityId), 'update', currentUser, target, after);
-    return requirementRows(type, asId(entityId));
-  }
-
-  function assertDefinitionOfDone(type, entityId, requestedStatus) {
-    const closed = type === 'point' ? requestedStatus === 'Closed' : ['Done', 'N/A'].includes(requestedStatus);
-    if (!closed || !entityId) return;
-    const incomplete = requirementRows(type, entityId).filter(item => !item.completed_at || (item.requires_second_approval && !item.approved_at));
-    if (incomplete.length) throw appError(`Nie można zamknąć elementu. Niespełnione Definition of Done: ${incomplete.map(item => item.name).join(', ')}`);
-  }
-
   function deleteCompletionRequirement(id) {
     const result = db.prepare('DELETE FROM completion_requirements WHERE id=? AND project_id=?').run(asId(id), activeProjectId());
-    if (!result.changes) throw appError('Nie znaleziono wymagania', 404);
+    if (!result.changes) throw appError('Nie znaleziono zapotrzebowania', 404);
   }
 
   function historyData(input = {}) {
@@ -4792,7 +4764,6 @@ function createRepository(db, defaultProjectId) {
     clearEntityEditLock(type, id, currentUser) { return clearEntityEditLock(type, id, currentUser); },
     saveCompletionRequirement(id, input) { return saveCompletionRequirement(id, input); },
     deleteCompletionRequirement(id) { return deleteCompletionRequirement(id); },
-    updateRequirementStatus(type, entityId, requirementId, input, currentUser) { return updateRequirementStatus(type, entityId, requirementId, input, currentUser); },
     history(input) { return historyData(input); },
     dailySummary(from, to, currentUser) { return dailySummaryData(from, to, currentUser); },
     savedViews(currentUser) { return savedViewRows(currentUser); },
@@ -4889,10 +4860,10 @@ function createRepository(db, defaultProjectId) {
           .map(item => item.id === column.id ? value : before.matrix_values?.[item.id] || before.status);
         aggregate = aggregateWorkflowValues(statusValues, before.status);
         if (blockers.length && !overrideFlag) aggregate = 'Blocked';
-        if (!['Done', 'N/A'].includes(before.status) && ['Done', 'N/A'].includes(aggregate)) assertDefinitionOfDone('status', statusId, aggregate);
       }
       db.prepare(`INSERT INTO status_cell_values(status_item_id,column_id,value,updated_by,updated_at) VALUES(?,?,?,?,CURRENT_TIMESTAMP)
         ON CONFLICT(status_item_id,column_id) DO UPDATE SET value=excluded.value,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP`).run(statusId, column.id, value, currentUser.id);
+      if (column.field_type === 'text') syncStatusIdentity(statusId);
       db.prepare(`UPDATE status_items SET status=?,dependency_override=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?`)
         .run(aggregate, overrideFlag, statusId, activeProjectId());
       if (Array.isArray(input.dependency_refs)) setEntityDependencies('status', statusId, requestedDependencies, currentUser);
@@ -4964,7 +4935,7 @@ function createRepository(db, defaultProjectId) {
         function_group_subcategory_id: groupSubcategoryId,
         status_group_id: matrixGroupId,
         status_subgroup_id: matrixSubgroupId,
-        station: selectedGroup?.name || clean(input.station), function_detail: defaultFunction || clean(input.function_detail) || `Sprawdź ${clean(input.subcategory) || clean(input.category) || 'punkt'}`,
+        station: selectedGroup?.name || clean(input.station), function_detail: defaultFunction || clean(input.function_detail) || before?.function_detail || matrixScope?.subgroup?.name || matrixScope?.group?.name || 'Element statusu',
         category: matrixScope?.group.name || clean(input.category) || before?.category || 'General', subcategory: matrixScope?.subgroup?.name || (Object.hasOwn(input, 'subcategory') ? clean(input.subcategory) : before?.subcategory || ''), milestone: '',
         criticality: clean(input.criticality) || 'Medium', responsible_user_id: ownerId, responsible: userName(ownerId),
         status: effectiveStatus, dependency_override: overrideFlag, checked_by: clean(input.checked_by), checked_on: nullableDate(input.checked_on),
@@ -4972,8 +4943,6 @@ function createRepository(db, defaultProjectId) {
       };
       if (!values.function_detail) throw appError('Pole „Test / funkcja” jest wymagane');
       assertDependencyTransition('status', before?.status || null, values.status, requestedDependencies, dependencyOverride);
-      if (id && !['Done', 'N/A'].includes(before.status) && ['Done', 'N/A'].includes(values.status)) assertDefinitionOfDone('status', id, values.status);
-      if (!id && ['Done', 'N/A'].includes(values.status) && (input.requirement_ids || []).length) throw appError('Nowy punkt z Definition of Done zapisz najpierw jako otwarty');
       if (id) values.test_id = before.test_id;
       if (id && before.function_group_id !== values.function_group_id) values.function_group_check_id = null;
       ensureDuplicateChanged('status', input.duplicate_source_id, { ...values, responsible_user_ids: ownerIds, dependency_refs: requestedDependencies, requirement_ids: input.requirement_ids || [], links: input.links || [] });
@@ -4999,6 +4968,7 @@ function createRepository(db, defaultProjectId) {
       if (statusChanged && matrixGroupId) db.prepare(`UPDATE status_cell_values SET value=?,updated_by=?,updated_at=CURRENT_TIMESTAMP
         WHERE status_item_id=? AND column_id IN (SELECT id FROM status_columns WHERE status_group_id=? AND active=1 AND field_type='status'
           AND ((status_subgroup_id IS NULL AND ? IS NULL) OR status_subgroup_id=?))`).run(effectiveStatus, currentUser.id, recordId, matrixGroupId, matrixSubgroupId, matrixSubgroupId);
+      syncStatusIdentity(recordId);
       const savedOwners = !id || ownerInputProvided ? saveStatusAssignees(recordId, ownerIds) : ownerIds;
       const primaryOwner = savedOwners[0] || null;
       db.prepare('UPDATE status_items SET responsible_user_id=?,responsible=? WHERE id=? AND project_id=?').run(primaryOwner, userName(primaryOwner), recordId, activeProjectId());
@@ -5095,8 +5065,6 @@ function createRepository(db, defaultProjectId) {
       };
       if (!values.title) throw appError('Tytuł zadania jest wymagany');
       assertDependencyTransition('task', before?.status || null, values.status, requestedDependencies);
-      if (id && before.status !== 'Done' && values.status === 'Done') assertDefinitionOfDone('task', id, values.status);
-      if (!id && values.status === 'Done' && (input.requirement_ids || []).length) throw appError('Nowe zadanie z Definition of Done zapisz najpierw jako otwarte');
       ensureDuplicateChanged('task', input.duplicate_source_id, { ...values, direct_assignee_user_ids: directUserIds, checklist, scope_checklist: input.scope_checklist || [], dependency_refs: requestedDependencies, requirement_ids: input.requirement_ids || [], links: input.links || [] });
       let recordId = id;
       if (id) updateRecord('tasks', id, values, Object.keys(values));
@@ -5150,8 +5118,6 @@ function createRepository(db, defaultProjectId) {
       };
       if (!values.title) throw appError('Temat otwartego punktu jest wymagany');
       assertDependencyTransition('point', before?.status || null, values.status, requestedDependencies);
-      if (id && before.status !== 'Closed' && values.status === 'Closed') assertDefinitionOfDone('point', id, values.status);
-      if (!id && values.status === 'Closed' && (input.requirement_ids || []).length) throw appError('Nowy punkt z Definition of Done zapisz najpierw jako otwarty');
       if (id) values.issue_id = before.issue_id;
       ensureDuplicateChanged('point', input.duplicate_source_id, { ...values, dependency_refs: requestedDependencies, requirement_ids: input.requirement_ids || [], links: input.links || [] });
       let recordId = id;
