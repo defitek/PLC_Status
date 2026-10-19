@@ -281,11 +281,30 @@ test('configurable status matrices keep independent subgroup columns and symbol 
     assert.ok(done.progress_updated_at);
     assert.equal(done.progress_updated_by_name, admin.display_name);
 
+    const imported = repository.importStatusLayout({
+      format: 'plc-status-layout', version: 1, groups: [{
+        name: 'Hardware test', description: 'Układ po imporcie',
+        columns: [{ name: '+24V', column_role: 'subpoint', field_type: 'status', include_in_progress: 1 }],
+        subgroups: [{ name: 'Napędy', description: '', columns: [
+          { name: 'Device Name', column_role: 'basic', field_type: 'text' },
+          { name: 'MAC Address', column_role: 'subpoint', field_type: 'text' },
+          { name: 'Safety', column_role: 'subpoint', field_type: 'status', include_in_progress: 1 }
+        ] }]
+      }]
+    });
+    assert.equal(imported.groups, 1);
+    assert.equal(imported.subgroups, 1);
+    assert.equal(imported.columns, 4);
+    const afterImport = repository.status('all', admin).find(item => item.id === status.id);
+    assert.equal(afterImport.matrix_values[textColumn.id], 'SINAMICS', 'layout import must not overwrite status item data');
+    assert.equal(afterImport.matrix_values[textSubpoint.id], 'de:0b', 'layout import must not carry or reset user values');
+    assert.ok(repository.config().status_groups.find(item => item.id === group.id).subgroups[0].columns.some(item => item.name === 'Safety'));
+
     repository.close();
     repository = openDatabase(temporary.path);
     const reopened = repository.status('all', repository.me(admin.id)).find(item => item.id === status.id);
     assert.equal(reopened.matrix_values[textColumn.id], 'SINAMICS');
-    assert.equal(repository.config().status_groups.find(item => item.id === group.id).subgroups[0].columns.length, 3);
+    assert.equal(repository.config().status_groups.find(item => item.id === group.id).subgroups[0].columns.length, 4);
   } finally {
     repository?.close();
     rmSync(temporary.directory, { recursive: true, force: true });
@@ -881,6 +900,8 @@ test('operational views support dependencies, handovers and automation', () => {
       const first = repository.saveTask(null, { controller, title: 'V12 Analiza', owner_user_id: worker.id, start_date: '2026-10-01', due_date: '2026-10-02', priority: 'High' }, admin);
       const second = repository.saveTask(null, { controller, title: 'V12 Implementacja', owner_user_id: worker.id, start_date: '2026-10-03', due_date: '2026-10-05', dependency_task_ids: [first.id] }, admin);
       const third = repository.saveTask(null, { controller, title: 'V12 Odbiór', start_date: '2026-10-06', due_date: '2026-10-07', dependency_task_ids: [second.id] }, admin);
+      const otherController = repository.controllers().find(item => item.code !== controller).code;
+      const outsideScope = repository.saveTask(null, { controller: otherController, title: 'V12 Poza zakresem', due_date: '2026-10-02', priority: 'High' }, admin);
       assert.equal(repository.tasks('all', admin).find(item => item.id === second.id).blocked_by_dependencies, 1);
       assert.throws(() => repository.saveTask(first.id, { ...first, controller, dependency_task_ids: [third.id] }, admin), /cykl/i);
       const dependencies = repository.operations(admin).dependencies;
@@ -891,6 +912,9 @@ test('operational views support dependencies, handovers and automation', () => {
 
       const triage = repository.operations(admin).triage;
       assert.ok(triage.some(item => item.entity_type === 'task' && item.entity_id === third.id));
+      const scopedTriage = repository.operations(admin, controller).triage;
+      assert.ok(scopedTriage.some(item => item.entity_type === 'task' && item.entity_id === third.id));
+      assert.equal(scopedTriage.some(item => item.entity_type === 'task' && item.entity_id === outsideScope.id), false, 'operations follow the selected data scope');
       assert.equal(repository.triageBatch({ items: [{ entity_type: 'task', entity_id: third.id }], patch: { owner_user_id: worker.id, priority: 'Critical' } }, admin).updated, 1);
 
       const handover = repository.saveHandover(null, { handover_date: '2026-10-08', from_shift: 'Dzień', to_shift: 'Noc', title: 'Przekazanie V12', summary: 'Kontynuować odbiór.', items: [{ entity_type: 'task', entity_id: third.id }] }, admin);
@@ -901,6 +925,10 @@ test('operational views support dependencies, handovers and automation', () => {
       assert.equal(rule.active, 1);
       assert.ok(repository.runAutomations(admin).executed >= 1);
       assert.ok(repository.notifications(worker, 200).some(item => item.kind === 'automation'));
+      const inactiveRule = repository.saveAutomationRule(null, { name: 'V12 jednorazowa', trigger_type: 'overdue', entity_types: ['task'], days_offset: 0, action_type: 'notify_managers', target_priority: 'High', active: 0 }, admin);
+      assert.equal(inactiveRule.active, 0);
+      assert.ok(repository.runAutomationRule(inactiveRule.id, admin).executed >= 1, 'an inactive rule can be run explicitly once');
+      assert.ok(repository.runAutomationRule(inactiveRule.id, admin).executed >= 1, 'each explicit run is a new one-time execution');
 
       const backup = repository.projectBackup();
       assert.equal(backup.version, 1);

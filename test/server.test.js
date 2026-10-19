@@ -156,8 +156,12 @@ test('API protects manager data, project directory and account sessions', async 
   const managerStatusGroup = await managerStatusGroupResponse.json();
   const managerStatusColumn = await request(baseUrl, `/api/status-groups/${managerStatusGroup.id}/columns`, { cookie: managerLogin.cookie, method: 'POST', body: { name: 'Test result', field_type: 'status', include_in_progress: 1 } });
   assert.equal(managerStatusColumn.status, 201);
+  const layout = { format: 'plc-status-layout', version: 1, groups: [{ name: 'Imported API layout', description: '', columns: [{ name: 'Device Name', column_role: 'basic', field_type: 'text' }], subgroups: [] }] };
+  assert.equal((await request(baseUrl, '/api/status-layout/import', { cookie: workerLogin.cookie, method: 'POST', body: layout })).status, 403);
+  assert.equal((await request(baseUrl, '/api/status-layout/import', { cookie: managerLogin.cookie, method: 'POST', body: layout })).status, 200);
   const publicConfig = await (await request(baseUrl, '/api/config', { cookie: workerLogin.cookie })).json();
   assert.ok(publicConfig.status_groups.some(group => group.id === managerStatusGroup.id && group.columns.some(column => column.name === 'Test result')));
+  assert.ok(publicConfig.status_groups.some(group => group.name === 'Imported API layout' && group.columns.some(column => column.name === 'Device Name')));
   const managerPlanner = await (await request(baseUrl, `/api/planner?from=${planDate}&to=${planDate}`, { cookie: managerLogin.cookie })).json();
   assert.ok(managerPlanner.cross_project_entries.some(entry => entry.user_id === worker.id));
   assert.ok(managerPlanner.cross_project_entries.some(entry => entry.user_id === manager.id));

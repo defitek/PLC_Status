@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="pl">
+<html lang="pl" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -10,7 +10,9 @@
 </head>
 <body class="login-page">
   <main class="login-card">
-    <div class="login-logo">PLC</div>
+    <div class="login-logo logo-mark" aria-label="Commissioning Hub">
+      <svg viewBox="0 0 48 48" aria-hidden="true"><path class="logo-track" d="M9 15h9l5 7h7l4-7h5M9 33h9l5-7h7l4 7h5"/><circle cx="9" cy="15" r="3"/><circle cx="39" cy="15" r="3"/><circle cx="9" cy="33" r="3"/><circle cx="39" cy="33" r="3"/><rect x="19" y="18" width="14" height="12" rx="3"/></svg>
+    </div>
     <h1>Commissioning Hub</h1>
     <p id="login-description">Zaloguj się, a następnie wybierz dostępny projekt</p>
     <form id="login">
@@ -25,6 +27,7 @@
       <div id="login-error" class="login-error" role="alert"></div>
       <button class="primary" id="login-submit">Zaloguj</button>
     </form>
+    <p class="login-credit">Marcin Defitowski <b>@ AI</b></p>
   </main>
 </body>
 </html>

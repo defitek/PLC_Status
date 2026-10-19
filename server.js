@@ -305,7 +305,7 @@ async function handleProjectApi(request, response, url, user) {
     if (method === 'PATCH') return json(response, 200, repository.saveSavedView(savedViewId, await readJson(request), user));
     if (method === 'DELETE') { repository.deleteSavedView(savedViewId, user); response.writeHead(204); return response.end(); }
   }
-  if (method === 'GET' && path === '/api/operations') { requireRole(user, 'moderator'); return json(response, 200, repository.operations(user)); }
+  if (method === 'GET' && path === '/api/operations') { requireRole(user, 'moderator'); return json(response, 200, repository.operations(user, scope)); }
   if (method === 'PATCH' && path === '/api/triage/batch') { requireRole(user, 'moderator'); return json(response, 200, repository.triageBatch(await readJson(request), user)); }
   const orphanLinkId = path.match(/^\/api\/data-quality\/orphan-links\/(\d+)$/);
   if (orphanLinkId && method === 'DELETE') { requireRole(user, 'moderator'); return json(response, 200, repository.deleteOrphanLink(Number(orphanLinkId[1]))); }
@@ -343,6 +343,8 @@ async function handleProjectApi(request, response, url, user) {
   if (method === 'GET' && path === '/api/automation-rules') { requireRole(user, 'moderator'); return json(response, 200, repository.automationRules()); }
   if (method === 'POST' && path === '/api/automation-rules') { requireRole(user, 'moderator'); return json(response, 201, repository.saveAutomationRule(null, await readJson(request), user)); }
   if (method === 'POST' && path === '/api/automation-rules/run') { requireRole(user, 'moderator'); return json(response, 200, repository.runAutomations(user)); }
+  const automationRuleRun = path.match(/^\/api\/automation-rules\/(\d+)\/run$/);
+  if (automationRuleRun && method === 'POST') { requireRole(user, 'moderator'); return json(response, 200, repository.runAutomationRule(Number(automationRuleRun[1]), user)); }
   const automationRuleId = numericId(path, '/api/automation-rules');
   if (automationRuleId !== null) {
     requireRole(user, 'moderator');
@@ -449,6 +451,7 @@ async function handleProjectApi(request, response, url, user) {
   }
   if (method === 'PATCH' && path === '/api/status/batch') return json(response, 200, repository.batchUpdateStatus(await readJson(request), user));
   if (method === 'POST' && path === '/api/status/bulk-create') return json(response, 201, repository.bulkCreateStatus(await readJson(request), user));
+  if (method === 'POST' && path === '/api/status-layout/import') { requireRole(user, 'moderator'); return json(response, 200, repository.importStatusLayout(await readJson(request, 2_000_000))); }
   const statusCellMatch = path.match(/^\/api\/status\/(\d+)\/cells\/(\d+)$/);
   if (statusCellMatch && method === 'PATCH') return json(response, 200, repository.saveStatusCell(Number(statusCellMatch[1]), Number(statusCellMatch[2]), await readJson(request), user));
 

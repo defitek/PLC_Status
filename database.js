@@ -352,7 +352,8 @@ function migrateToV4(db) {
 
   const usersBefore = columnNames(db, 'users');
   ensureColumn(db, 'users', 'system_role', "TEXT NOT NULL DEFAULT 'user'");
-  ensureColumn(db, 'users', 'theme', "TEXT NOT NULL DEFAULT 'blue'");
+  ensureColumn(db, 'users', 'theme', "TEXT NOT NULL DEFAULT 'dark'");
+  db.exec("UPDATE users SET theme='dark' WHERE theme IN ('blue','classic') OR trim(COALESCE(theme,''))=''");
   if (!usersBefore.has('system_role')) db.exec("UPDATE users SET system_role=CASE WHEN role='admin' THEN 'system_admin' ELSE 'user' END");
 
   const controllersSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='controllers'").get()?.sql || '';
@@ -1205,6 +1206,98 @@ function createRepository(db, defaultProjectId) {
         columns: all('SELECT * FROM status_columns WHERE status_group_id=? AND status_subgroup_id=? AND active=1 ORDER BY sort_order,name,id', group.id, subgroup.id)
       }))
     }));
+  }
+
+  function importStatusLayout(input) {
+    if (!input || input.format !== 'plc-status-layout' || Number(input.version) !== 1 || !Array.isArray(input.groups)) throw appError('Nieprawidłowy plik układu tabel statusowych');
+    if (!input.groups.length || input.groups.length > 100) throw appError('Plik musi zawierać od 1 do 100 grup statusowych');
+    const normalizedColumns = (columns, scopeName) => {
+      if (!Array.isArray(columns) || columns.length > 100) throw appError(`Nieprawidłowa lista kolumn: ${scopeName}`);
+      const seen = new Set();
+      return columns.map((column, index) => {
+        const name = clean(column?.name);
+        if (!name || name.length > 160) throw appError(`Kolumna ${index + 1} w „${scopeName}” nie ma poprawnej nazwy`);
+        const key = name.toLocaleLowerCase('pl-PL');
+        if (seen.has(key)) throw appError(`Powtórzona kolumna „${name}” w „${scopeName}”`);
+        seen.add(key);
+        const columnRole = clean(column.column_role) === 'basic' ? 'basic' : 'subpoint';
+        const fieldType = columnRole === 'basic' ? 'text' : clean(column.field_type) === 'text' ? 'text' : 'status';
+        return { name, column_role: columnRole, field_type: fieldType, include_in_progress: columnRole === 'subpoint' && fieldType === 'status' && Number(column.include_in_progress) ? 1 : 0 };
+      });
+    };
+    const groupNames = new Set();
+    const groups = input.groups.map((group, groupIndex) => {
+      const name = clean(group?.name);
+      if (!name || name.length > 160) throw appError(`Grupa ${groupIndex + 1} nie ma poprawnej nazwy`);
+      const key = name.toLocaleLowerCase('pl-PL');
+      if (groupNames.has(key)) throw appError(`Powtórzona grupa „${name}”`);
+      groupNames.add(key);
+      const subgroupNames = new Set();
+      const subgroups = (Array.isArray(group.subgroups) ? group.subgroups : []).map((subgroup, subgroupIndex) => {
+        const subgroupName = clean(subgroup?.name);
+        if (!subgroupName || subgroupName.length > 160) throw appError(`Podgrupa ${subgroupIndex + 1} w „${name}” nie ma poprawnej nazwy`);
+        const subgroupKey = subgroupName.toLocaleLowerCase('pl-PL');
+        if (subgroupNames.has(subgroupKey)) throw appError(`Powtórzona podgrupa „${subgroupName}” w „${name}”`);
+        subgroupNames.add(subgroupKey);
+        return { name: subgroupName, description: clean(subgroup.description).slice(0, 2000), columns: normalizedColumns(subgroup.columns || [], `${name} → ${subgroupName}`) };
+      });
+      if (subgroups.length > 100) throw appError(`Grupa „${name}” zawiera zbyt wiele podgrup`);
+      return { name, description: clean(group.description).slice(0, 2000), columns: normalizedColumns(group.columns || [], name), subgroups };
+    });
+    let importedColumns = 0; let importedSubgroups = 0;
+    const projectId = activeProjectId();
+    const applyColumns = (groupId, subgroupId, columns) => {
+      const scopeCondition = 'status_group_id=? AND ((status_subgroup_id IS NULL AND ? IS NULL) OR status_subgroup_id=?)';
+      db.prepare(`UPDATE status_columns SET sort_order=sort_order+? WHERE ${scopeCondition}`).run(columns.length + 1, groupId, subgroupId, subgroupId);
+      for (const [index, column] of columns.entries()) {
+        const existing = one(`SELECT * FROM status_columns WHERE ${scopeCondition} AND name=? COLLATE NOCASE`, groupId, subgroupId, subgroupId, column.name);
+        let columnId;
+        if (existing) {
+          columnId = existing.id;
+          db.prepare(`UPDATE status_columns SET name=?,column_role=?,field_type=?,include_in_progress=?,sort_order=?,active=1,updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+            .run(column.name, column.column_role, column.field_type, column.include_in_progress, index, columnId);
+        } else columnId = insertRecord('status_columns', { status_group_id: groupId, status_subgroup_id: subgroupId, name: column.name, column_role: column.column_role, field_type: column.field_type, include_in_progress: column.include_in_progress, sort_order: index, active: 1 });
+        const items = all(`SELECT id,status FROM status_items WHERE project_id=? AND status_group_id=? AND ((status_subgroup_id IS NULL AND ? IS NULL) OR status_subgroup_id=?)`, projectId, groupId, subgroupId, subgroupId);
+        if (!existing) {
+          const insertCell = db.prepare('INSERT OR IGNORE INTO status_cell_values(status_item_id,column_id,value) VALUES(?,?,?)');
+          items.forEach(item => insertCell.run(item.id, columnId, column.field_type === 'status' ? (statusWorkflowValues.has(item.status) ? item.status : 'Ready to test') : ''));
+        }
+        importedColumns += 1;
+      }
+      const items = all(`SELECT id,status FROM status_items WHERE project_id=? AND status_group_id=? AND ((status_subgroup_id IS NULL AND ? IS NULL) OR status_subgroup_id=?)`, projectId, groupId, subgroupId, subgroupId);
+      for (const item of items) {
+        ensureStatusCells(item.id, groupId, subgroupId, item.status);
+        syncStatusIdentity(item.id);
+        db.prepare('UPDATE status_items SET status=? WHERE id=? AND project_id=?').run(aggregateMatrixStatus(item.id, item.status), item.id, projectId);
+      }
+    };
+    const statusWorkflowValues = new Set(['Ready to test', 'In progress', 'Blocked', 'NOK / Retest required', 'Done', 'N/A']);
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare('UPDATE status_groups SET sort_order=sort_order+? WHERE project_id=?').run(groups.length + 1, projectId);
+      for (const [groupIndex, group] of groups.entries()) {
+        let storedGroup = one('SELECT * FROM status_groups WHERE project_id=? AND name=? COLLATE NOCASE', projectId, group.name);
+        let groupId;
+        if (storedGroup) {
+          groupId = storedGroup.id;
+          db.prepare('UPDATE status_groups SET name=?,description=?,sort_order=?,active=1,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(group.name, group.description, groupIndex, groupId);
+        } else groupId = insertRecord('status_groups', { project_id: projectId, name: group.name, description: group.description, sort_order: groupIndex, active: 1 });
+        applyColumns(groupId, null, group.columns);
+        db.prepare('UPDATE status_subgroups SET sort_order=sort_order+? WHERE status_group_id=?').run(group.subgroups.length + 1, groupId);
+        for (const [subgroupIndex, subgroup] of group.subgroups.entries()) {
+          const storedSubgroup = one('SELECT * FROM status_subgroups WHERE status_group_id=? AND name=? COLLATE NOCASE', groupId, subgroup.name);
+          let subgroupId;
+          if (storedSubgroup) {
+            subgroupId = storedSubgroup.id;
+            db.prepare('UPDATE status_subgroups SET name=?,description=?,sort_order=?,active=1,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(subgroup.name, subgroup.description, subgroupIndex, subgroupId);
+          } else subgroupId = insertRecord('status_subgroups', { status_group_id: groupId, name: subgroup.name, description: subgroup.description, sort_order: subgroupIndex, active: 1 });
+          importedSubgroups += 1;
+          applyColumns(groupId, subgroupId, subgroup.columns);
+        }
+      }
+      db.exec('COMMIT');
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
+    return { groups: groups.length, subgroups: importedSubgroups, columns: importedColumns, status_groups: statusStructureRows() };
   }
 
   function statusMatrixScope(groupId, subgroupId = null) {
@@ -3315,12 +3408,12 @@ function createRepository(db, defaultProjectId) {
     return row.scope_label || row.controller_label || row.controller_path || row.controller || 'Cały projekt';
   }
 
-  function operationCollections(currentUser) {
+  function operationCollections(currentUser, code = 'all') {
     return {
-      status: statusRows('all', currentUser),
-      task: taskRows('all', currentUser),
-      point: pointRows('all', currentUser),
-      goal: goalRows('all', currentUser)
+      status: statusRows(code, currentUser),
+      task: taskRows(code, currentUser),
+      point: pointRows(code, currentUser),
+      goal: goalRows(code, currentUser)
     };
   }
 
@@ -3363,8 +3456,8 @@ function createRepository(db, defaultProjectId) {
     return signals;
   }
 
-  function triageRows(currentUser, dueSoonDays = 7) {
-    const collections = operationCollections(currentUser);
+  function triageRows(currentUser, dueSoonDays = 7, code = 'all') {
+    const collections = operationCollections(currentUser, code);
     const labels = { status: 'Status', task: 'Zadanie', point: 'Otwarty punkt', goal: 'Cel' };
     return Object.entries(collections).flatMap(([type, rows]) => rows.map(row => {
       const signals = triageSignals(type, row, dueSoonDays);
@@ -3379,8 +3472,8 @@ function createRepository(db, defaultProjectId) {
     });
   }
 
-  function qualityRows(currentUser) {
-    const collections = operationCollections(currentUser);
+  function qualityRows(currentUser, code = 'all') {
+    const collections = operationCollections(currentUser, code);
     const issues = [];
     const add = (type, row, code, severity, message) => issues.push({ entity_type: type, entity_id: row.id, title: operationTitle(type, row), scope_label: operationScope(row), code, severity, message });
     for (const row of collections.status) if (!isClosedEntity('status', row)) {
@@ -3410,6 +3503,10 @@ function createRepository(db, defaultProjectId) {
     invalidLinks.forEach(link => {
       const usableType = link.sourceExists ? link.source_type : link.targetExists ? link.target_type : '';
       const usableId = link.sourceExists ? link.source_id : link.targetExists ? link.target_id : null;
+      if (code !== 'all') {
+        const scopedRows = collections[usableType] || [];
+        if (!usableType || !usableId || !scopedRows.some(row => Number(row.id) === Number(usableId))) return;
+      }
       const title = usableType && usableId ? entityDisplayTitle(usableType, usableId) : 'Powiązanie bez istniejących elementów';
       issues.push({ entity_type: usableType, entity_id: usableId, link_id: link.id, jump_available: Boolean(usableType && usableId), title, scope_label: 'Projekt', code: 'orphan_link', severity: 'high', message: `Uszkodzone powiązanie ${link.source_type} → ${link.target_type}. Można je bezpiecznie usunąć.` });
     });
@@ -3428,11 +3525,18 @@ function createRepository(db, defaultProjectId) {
     return { deleted: true, id: link.id };
   }
 
-  function criticalPathData(currentUser) {
-    const tasks = taskRows('all', currentUser).filter(task => task.status !== 'Done');
+  function criticalPathData(currentUser, code = 'all') {
+    const tasks = taskRows(code, currentUser).filter(task => task.status !== 'Done');
     const ids = new Set(tasks.map(task => task.id));
     const edges = all('SELECT * FROM task_dependencies WHERE project_id=? ORDER BY task_id,prerequisite_task_id', activeProjectId()).filter(edge => ids.has(edge.task_id) && ids.has(edge.prerequisite_task_id));
-    const totalEdges = Number(one('SELECT COUNT(*) count FROM entity_dependencies WHERE project_id=?', activeProjectId())?.count || 0);
+    const totalEdges = code === 'all'
+      ? Number(one('SELECT COUNT(*) count FROM entity_dependencies WHERE project_id=?', activeProjectId())?.count || 0)
+      : (() => {
+          const scoped = operationCollections(currentUser, code);
+          const scopedIds = new Map(Object.entries(scoped).map(([type, rows]) => [type, new Set(rows.map(row => Number(row.id)))]));
+          return all('SELECT dependent_type,dependent_id FROM entity_dependencies WHERE project_id=?', activeProjectId())
+            .filter(edge => scopedIds.get(edge.dependent_type)?.has(Number(edge.dependent_id))).length;
+        })();
     const prerequisites = new Map(tasks.map(task => [task.id, []]));
     const dependents = new Map(tasks.map(task => [task.id, []]));
     edges.forEach(edge => { prerequisites.get(edge.task_id).push(edge); dependents.get(edge.prerequisite_task_id).push(edge); });
@@ -3511,15 +3615,25 @@ function createRepository(db, defaultProjectId) {
     let recordId = asId(id);
     if (recordId) updateRecord('project_meetings', recordId, values, Object.keys(values));
     else recordId = insertRecord('project_meetings', { ...values, created_by: currentUser.id });
-    const requested = Array.isArray(input.items) ? input.items : [];
+    const scope = clean(input.scope) || 'all';
+    const scoped = operationCollections(currentUser, scope);
+    const scopedIds = new Map(Object.entries(scoped).map(([type, rows]) => [type, new Set(rows.map(row => Number(row.id)))]));
+    const inScope = (type, entityId) => scope === 'all' || scopedIds.get(type)?.has(Number(entityId));
+    let requested = Array.isArray(input.items) ? input.items : [];
+    if (id && scope !== 'all' && requested.length) {
+      const hiddenExisting = all('SELECT * FROM project_meeting_items WHERE meeting_id=? ORDER BY sort_order,id', recordId)
+        .filter(item => !inScope(item.entity_type, item.entity_id));
+      requested = [...requested, ...hiddenExisting];
+    }
     if (requested.length || !id) {
-      const items = requested.length ? requested : triageRows(currentUser).slice(0, 20).map(item => ({ entity_type: item.entity_type, entity_id: item.entity_id }));
+      const items = requested.length ? requested : triageRows(currentUser, 7, scope).slice(0, 20).map(item => ({ entity_type: item.entity_type, entity_id: item.entity_id }));
       db.prepare('DELETE FROM project_meeting_items WHERE meeting_id=?').run(recordId);
       const insert = db.prepare('INSERT OR IGNORE INTO project_meeting_items(meeting_id,entity_type,entity_id,decision,owner_user_id,due_date,item_status,sort_order) VALUES(?,?,?,?,?,?,?,?)');
       items.forEach((item, index) => { if (operationEntity(item.entity_type, item.entity_id, currentUser)) insert.run(recordId, item.entity_type, asId(item.entity_id), clean(item.decision), asId(item.owner_user_id), nullableDate(item.due_date), ['open', 'decided', 'deferred'].includes(item.item_status) ? item.item_status : 'open', index); });
     }
     if (values.status === 'closed') db.prepare('UPDATE project_meetings SET closed_by=?,closed_at=COALESCE(closed_at,CURRENT_TIMESTAMP) WHERE id=?').run(currentUser.id, recordId);
-    return projectMeetingRows(currentUser).find(item => item.id === recordId);
+    const saved = projectMeetingRows(currentUser).find(item => item.id === recordId);
+    return scope === 'all' ? saved : { ...saved, items: saved.items.filter(item => inScope(item.entity_type, item.entity_id)) };
   }
 
   function deleteProjectMeeting(id) {
@@ -3581,11 +3695,11 @@ function createRepository(db, defaultProjectId) {
     }).filter(item => item.similarity > 0).sort((a, b) => b.similarity - a.similarity || b.use_count - a.use_count).slice(0, 8);
   }
 
-  function riskRadarRows(currentUser) {
+  function riskRadarRows(currentUser, code = 'all') {
     const external = externalDependencyRows(currentUser).filter(item => item.dependency_status !== 'resolved');
     const externalByEntity = new Map();
     for (const item of external) externalByEntity.set(`${item.entity_type}:${item.entity_id}`, (externalByEntity.get(`${item.entity_type}:${item.entity_id}`) || 0) + 1);
-    return triageRows(currentUser, 14).map(item => {
+    return triageRows(currentUser, 14, code).map(item => {
       const ext = externalByEntity.get(`${item.entity_type}:${item.entity_id}`) || 0;
       let score = (item.signals.includes('overdue') ? 35 : 0) + (item.signals.includes('blocked') ? 30 : 0) + (item.signals.includes('dependency') ? 20 : 0) + (item.signals.includes('unassigned') ? 15 : 0) + (item.signals.includes('due_soon') ? 10 : 0) + ext * 12;
       if (item.priority === 'Critical') score += 20; else if (item.priority === 'High') score += 10;
@@ -3594,19 +3708,27 @@ function createRepository(db, defaultProjectId) {
     }).sort((a, b) => b.risk_score - a.risk_score).slice(0, 100);
   }
 
-  function operationsData(currentUser) {
-    const triage = triageRows(currentUser);
-    const quality = qualityRows(currentUser);
+  function operationsData(currentUser, code = 'all') {
+    const collections = operationCollections(currentUser, code);
+    const scopedIds = new Map(Object.entries(collections).map(([type, rows]) => [type, new Set(rows.map(row => Number(row.id)))]));
+    const inScope = (type, id) => scopedIds.get(type)?.has(Number(id));
+    const triage = triageRows(currentUser, 7, code);
+    const quality = qualityRows(currentUser, code);
+    const meetings = projectMeetingRows(currentUser).map(meeting => code === 'all' ? meeting : ({ ...meeting, items: meeting.items.filter(item => inScope(item.entity_type, item.entity_id)) }))
+      .filter(meeting => code === 'all' || meeting.items.length);
+    const externalDependencies = externalDependencyRows(currentUser).filter(item => code === 'all' || inScope(item.entity_type, item.entity_id));
+    const knowledge = knowledgeRows().filter(item => code === 'all' || !item.source_entity_type || !item.source_entity_id || inScope(item.source_entity_type, item.source_entity_id));
     return {
+      scope: code,
       triage,
       triage_counts: Object.fromEntries(['overdue', 'due_soon', 'reminder_due', 'unassigned', 'blocked', 'dependency'].map(signal => [signal, triage.filter(item => item.signals.includes(signal)).length])),
       quality,
       quality_counts: Object.fromEntries(['high', 'medium', 'low'].map(level => [level, quality.filter(item => item.severity === level).length])),
-      dependencies: criticalPathData(currentUser),
-      risk_radar: riskRadarRows(currentUser),
-      meetings: projectMeetingRows(currentUser),
-      external_dependencies: externalDependencyRows(currentUser),
-      knowledge: knowledgeRows(),
+      dependencies: criticalPathData(currentUser, code),
+      risk_radar: riskRadarRows(currentUser, code),
+      meetings,
+      external_dependencies: externalDependencies,
+      knowledge,
       automation_rules: automationRuleRows(),
       can_coordinate: ['system_admin', 'project_admin', 'moderator'].includes(currentUser.role)
     };
@@ -3757,19 +3879,22 @@ function createRepository(db, defaultProjectId) {
     if (!result.changes) throw appError('Nie znaleziono reguły automatyzacji', 404);
   }
 
-  function runAutomationRules(currentUser = null) {
+  function runAutomationRules(currentUser = null, onlyRuleId = null) {
     const actor = currentUser || { id: null, display_name: 'Automatyzacja systemowa', role: 'system_admin' };
     const collections = operationCollections(actor);
     const todayValue = new Date().toISOString().slice(0, 10);
+    const manualRunKey = onlyRuleId ? randomBytes(6).toString('hex') : '';
     let executed = 0;
-    for (const rule of automationRuleRows().filter(item => item.active)) {
+    const rules = automationRuleRows().filter(item => onlyRuleId ? item.id === Number(onlyRuleId) : item.active);
+    if (onlyRuleId && !rules.length) throw appError('Nie znaleziono reguły automatyzacji', 404);
+    for (const rule of rules) {
       for (const type of rule.entity_types) for (const row of collections[type] || []) {
         const signal = triageSignals(type, row, rule.days_offset, rule.trigger_type === 'in_progress');
         if (!signal.includes(rule.trigger_type)) continue;
         const dateKey = rule.trigger_type === 'reminder_due' ? row.reminder_date : ['overdue', 'due_soon'].includes(rule.trigger_type) ? row.due_date : rule.trigger_type === 'in_progress' ? String(inProgressStartedAt(type, row)).slice(0, 10) : row.status || 'state';
         const title = `${rule.name}: ${operationTitle(type, row)}`;
         for (const action of rule.actions) {
-          const hitKey = `${rule.trigger_type}:${dateKey || todayValue}:${action}${action === 'escalate_priority' ? `:${rule.target_priority}` : ''}`;
+          const hitKey = `${rule.trigger_type}:${dateKey || todayValue}:${action}${action === 'escalate_priority' ? `:${rule.target_priority}` : ''}${manualRunKey ? `:manual:${manualRunKey}` : ''}`;
           const hit = db.prepare('INSERT OR IGNORE INTO automation_rule_hits(rule_id,entity_type,entity_id,hit_key) VALUES(?,?,?,?)').run(rule.id, type, row.id, hitKey);
           if (!hit.changes) continue;
           if (action === 'notify_assignees') {
@@ -4038,8 +4163,8 @@ function createRepository(db, defaultProjectId) {
       };
     },
     setPreference(userId, input) {
-      const allowedThemes = ['blue', 'dark', 'graphite', 'contrast', 'classic'];
-      const theme = allowedThemes.includes(clean(input.theme)) ? clean(input.theme) : 'blue';
+      const allowedThemes = ['dark', 'graphite', 'contrast', 'aurora', 'oceanic', 'nord', 'solar', 'sakura', 'cyber'];
+      const theme = allowedThemes.includes(clean(input.theme)) ? clean(input.theme) : 'dark';
       db.prepare('UPDATE users SET theme=? WHERE id=?').run(theme, userId);
       return { theme };
     },
@@ -4482,6 +4607,7 @@ function createRepository(db, defaultProjectId) {
       }
       return one('SELECT * FROM status_groups WHERE id=?', id);
     },
+    importStatusLayout(input) { return importStatusLayout(input); },
     deleteStatusGroup(id) {
       const group = one('SELECT * FROM status_groups WHERE id=? AND project_id=?', asId(id), activeProjectId());
       if (!group) throw appError('Nie znaleziono grupy statusu', 404);
@@ -4781,7 +4907,7 @@ function createRepository(db, defaultProjectId) {
     savedViews(currentUser) { return savedViewRows(currentUser); },
     saveSavedView(id, input, currentUser) { return saveSavedView(id, input, currentUser); },
     deleteSavedView(id, currentUser) { return deleteSavedView(id, currentUser); },
-    operations(currentUser) { return operationsData(currentUser); },
+    operations(currentUser, code) { return operationsData(currentUser, code); },
     triageBatch(input, currentUser) { return triageBatch(input, currentUser); },
     deleteOrphanLink(id) { return deleteOrphanLink(id); },
     saveProjectMeeting(id, input, currentUser) { return saveProjectMeeting(id, input, currentUser); },
@@ -4799,6 +4925,7 @@ function createRepository(db, defaultProjectId) {
     saveAutomationRule(id, input, currentUser) { return saveAutomationRule(id, input, currentUser); },
     deleteAutomationRule(id) { return deleteAutomationRule(id); },
     runAutomations(currentUser) { return runAutomationRules(currentUser); },
+    runAutomationRule(id, currentUser) { return runAutomationRules(currentUser, id); },
     dashboard(code) {
       return dashboardForControllers(controllersForScope(code).map(item => item.id)).status;
     },
