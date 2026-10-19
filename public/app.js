@@ -629,6 +629,9 @@ function bindShell() {
     event.preventDefault();
     const form = new FormData(event.currentTarget); const result = Object.fromEntries(form);
     event.currentTarget.querySelectorAll('[data-ui-multiselect]').forEach(group => { result[group.dataset.uiMultiselect] = form.getAll(group.dataset.uiMultiselect); });
+    event.currentTarget.querySelectorAll('[data-ui-tree]').forEach(tree => {
+      result[tree.dataset.uiTree] = [...tree.querySelectorAll('[data-ui-tree-value]:checked')].map(input => input.value);
+    });
     finishAction(result);
   });
   $('#insight-close').addEventListener('click', () => $('#insight-dialog').close());
@@ -4070,31 +4073,63 @@ function statusMatrixConfig(canEdit) {
   return `<section class="config-panel-body status-matrix-config"><header class="status-config-intro"><div><h3>Układ tabel statusowych</h3><p class="sub">Kolumny podstawowe opisują element, np. typ i nazwę urządzenia. Import i eksport przenoszą wyłącznie układ — bez punktów, wartości, przypisań i historii.</p></div>${layoutActions}</header>${groups.map((group, groupIndex) => `<article class="status-config-group"><header>${canEdit ? orderControls('status_groups', groups, groupIndex) : ''}<span><b class="status-config-group-title">${escapeHtml(group.name)}</b>${group.description ? `<small>${escapeHtml(group.description)}</small>` : ''}</span>${canEdit ? `<button class="mini edit-status-group" data-id="${group.id}">Edytuj</button><button class="mini add-status-subgroup" data-group="${group.id}">+ Podgrupa</button>${addColumnButtons(group.id)}<button class="mini danger-outline delete-status-group" data-id="${group.id}">Usuń</button>` : ''}</header><section class="status-config-direct"><h4>Punkty bezpośrednio w grupie</h4>${columnRows(group, null, group.columns || [])}</section><div class="status-config-subgroups">${(group.subgroups || []).map((subgroup, subgroupIndex, subgroups) => `<section class="status-config-subgroup"><header>${canEdit ? orderControls('status_subgroups', subgroups, subgroupIndex) : ''}<span><b>${escapeHtml(subgroup.name)}</b>${subgroup.description ? `<small>${escapeHtml(subgroup.description)}</small>` : ''}</span>${canEdit ? `<button class="mini edit-status-subgroup" data-group="${group.id}" data-id="${subgroup.id}">Edytuj</button>${addColumnButtons(group.id, subgroup.id)}<button class="mini danger-outline delete-status-subgroup" data-group="${group.id}" data-id="${subgroup.id}">Usuń</button>` : ''}</header>${columnRows(group, subgroup, subgroup.columns || [])}</section>`).join('') || '<div class="empty compact-empty">Ta grupa nie ma podgrup. Punkty mogą znajdować się bezpośrednio w grupie.</div>'}</div></article>`).join('') || '<div class="empty">Nie skonfigurowano jeszcze tabel statusowych.</div>'}</section>`;
 }
 
-function statusLayoutScopeOptions(groups) {
-  return groups.flatMap((group, groupIndex) => [
-    { value: `group:${groupIndex}`, label: `Cała grupa — ${group.name || `Grupa ${groupIndex + 1}`}` },
-    ...(group.subgroups || []).map((subgroup, subgroupIndex) => ({ value: `subgroup:${groupIndex}:${subgroupIndex}`, label: `Tylko podgrupa — ${group.name || `Grupa ${groupIndex + 1}`} → ${subgroup.name || `Podgrupa ${subgroupIndex + 1}`}` }))
-  ]);
+function statusLayoutTreeHtml(groups) {
+  const branches = groups.map((group, groupIndex) => {
+    const groupName = group.name || `Grupa ${groupIndex + 1}`;
+    const children = (group.subgroups || []).map((subgroup, subgroupIndex) => `<label class="ui-tree-node ui-tree-child"><input type="checkbox" value="subgroup:${groupIndex}:${subgroupIndex}" data-ui-tree-value data-ui-tree-child checked><span><b>${escapeHtml(subgroup.name || `Podgrupa ${subgroupIndex + 1}`)}</b><small>Podgrupa · razem z „${escapeHtml(groupName)}”</small></span></label>`).join('');
+    return `<section class="ui-tree-branch" data-ui-tree-branch><label class="ui-tree-node ui-tree-group"><input type="checkbox" value="group:${groupIndex}" data-ui-tree-value data-ui-tree-group checked><span><b>${escapeHtml(groupName)}</b><small data-ui-tree-summary>${children ? `${group.subgroups.length} podgrupy` : 'Bez podgrup'}</small></span></label>${children ? `<div class="ui-tree-children">${children}</div>` : ''}</section>`;
+  }).join('');
+  return `<div class="ui-tree-select" data-ui-tree="layout_scopes" data-status-layout-tree><label class="ui-tree-root"><input type="checkbox" data-ui-tree-all checked><span><b>Cały układ tabel statusowych</b><small>Wszystkie grupy i podgrupy</small></span></label><div class="ui-tree-branches">${branches}</div></div>`;
+}
+
+function bindStatusLayoutTree() {
+  const tree = $('[data-status-layout-tree]');
+  if (!tree) return;
+  const all = tree.querySelector('[data-ui-tree-all]');
+  const inputs = [...tree.querySelectorAll('[data-ui-tree-value]')];
+  const update = () => {
+    const selected = inputs.filter(input => input.checked).length;
+    all.checked = selected > 0;
+    all.indeterminate = selected > 0 && selected < inputs.length;
+    tree.querySelectorAll('[data-ui-tree-branch]').forEach(branch => {
+      const group = branch.querySelector('[data-ui-tree-group]');
+      const children = [...branch.querySelectorAll('[data-ui-tree-child]')];
+      const chosen = children.filter(input => input.checked).length;
+      const summary = branch.querySelector('[data-ui-tree-summary]');
+      branch.classList.toggle('selected', group.checked);
+      if (summary && children.length) summary.textContent = chosen ? `${chosen}/${children.length} podgrup w zakresie` : 'Tylko kolumny grupy';
+    });
+  };
+  all.addEventListener('change', () => { inputs.forEach(input => { input.checked = all.checked; }); update(); });
+  tree.querySelectorAll('[data-ui-tree-branch]').forEach(branch => {
+    const group = branch.querySelector('[data-ui-tree-group]');
+    const children = [...branch.querySelectorAll('[data-ui-tree-child]')];
+    group.addEventListener('change', () => { if (!group.checked) children.forEach(input => { input.checked = false; }); update(); });
+    children.forEach(child => child.addEventListener('change', () => { if (child.checked) group.checked = true; update(); }));
+  });
+  update();
 }
 
 function selectedStatusLayout(groups, selectedScopes) {
   const selected = new Set(selectedScopes || []);
   return groups.map((group, groupIndex) => {
-    const wholeGroup = selected.has(`group:${groupIndex}`);
-    const subgroups = wholeGroup ? (group.subgroups || []) : (group.subgroups || []).filter((subgroup, subgroupIndex) => selected.has(`subgroup:${groupIndex}:${subgroupIndex}`));
-    return wholeGroup || subgroups.length ? { ...group, columns: wholeGroup ? (group.columns || []) : [], subgroups } : null;
+    const groupSelected = selected.has(`group:${groupIndex}`);
+    const subgroups = (group.subgroups || []).filter((subgroup, subgroupIndex) => selected.has(`subgroup:${groupIndex}:${subgroupIndex}`));
+    const includeGroup = groupSelected || subgroups.length;
+    return includeGroup ? { ...group, columns: group.columns || [], subgroups } : null;
   }).filter(Boolean);
 }
 
 async function chooseStatusLayout(groups, mode) {
-  const options = statusLayoutScopeOptions(groups);
-  if (!options.length) return toast('Brak grup statusowych do wybrania', true), null;
-  const result = await uiForm({
+  if (!groups.length) return toast('Brak grup statusowych do wybrania', true), null;
+  const formPromise = uiForm({
     title: mode === 'export' ? 'Wybierz zakres eksportu' : 'Wybierz zakres importu',
-    description: 'Zaznaczenie całej grupy obejmuje jej kolumny i wszystkie podgrupy. Możesz zamiast tego wybrać tylko konkretne podgrupy.',
+    description: 'Wybierz gałęzie układu od góry do dołu. Podgrupa zawsze dołącza swoją grupę nadrzędną.',
     submitLabel: mode === 'export' ? 'Eksportuj wybrane' : 'Importuj wybrane',
-    fields: [{ name: 'layout_scopes', label: 'Grupy i podgrupy', type: 'multiselect', value: groups.map((group, index) => `group:${index}`), options, full: true }]
+    fields: [{ type: 'html', html: statusLayoutTreeHtml(groups), full: true }]
   });
+  bindStatusLayoutTree();
+  const result = await formPromise;
   if (!result) return null;
   const selected = selectedStatusLayout(groups, result.layout_scopes || []);
   if (!selected.length) { toast('Wybierz co najmniej jedną grupę lub podgrupę', true); return null; }
