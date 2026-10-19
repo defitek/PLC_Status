@@ -260,6 +260,8 @@ CREATE TABLE IF NOT EXISTS status_items (
   function_group_check_id INTEGER REFERENCES function_group_checks(id) ON DELETE SET NULL,
   status_group_id INTEGER REFERENCES status_groups(id) ON DELETE SET NULL,
   status_subgroup_id INTEGER REFERENCES status_subgroups(id) ON DELETE SET NULL,
+  progress_updated_at TEXT,
+  progress_updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP

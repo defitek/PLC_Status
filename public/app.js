@@ -579,6 +579,7 @@ function bindShell() {
   $('#audit-toggle').addEventListener('click', toggleAudit);
   $('#comment-add').addEventListener('click', addEntityComment);
   $('#logout').addEventListener('click', async () => { await api('/api/logout', { method: 'POST' }); location.href = '/login.html'; });
+  $('#brand-reload').addEventListener('click', () => location.reload());
   $('#project-switch').addEventListener('click', () => openProjectDialog(false));
   $('#project-close').addEventListener('click', () => { if (state.me.current_project) $('#project-dialog').close(); });
   $('#theme-switch').addEventListener('click', openThemeDialog);
@@ -3483,10 +3484,39 @@ function editStatusMatrixTextCell(item, column, anchor) {
   root.querySelector('input').focus(); root.querySelector('input').select();
 }
 
+function editStatusMatrixStatusCell(item, column, anchor) {
+  document.querySelectorAll('.inline-edit-popover').forEach(popover => popover.remove());
+  const current = item.matrix_values?.[column.id] ?? item.status ?? 'Ready to test';
+  const root = document.createElement('div');
+  root.className = 'inline-edit-popover matrix-status-popover';
+  root.innerHTML = `<header><strong>${escapeHtml(column.name)}</strong><button type="button" class="cancel" title="Anuluj">×</button></header><div class="matrix-status-options">${statusWorkflowOptions.map(option => `<button type="button" data-matrix-status-value="${escapeHtml(option.value)}" class="${option.value === current ? 'active' : ''}">${statusSymbol(option.value)}<span>${escapeHtml(option.label)}</span>${option.value === current ? '<b>Aktualny</b>' : ''}</button>`).join('')}</div>`;
+  document.body.append(root); positionInlinePopover(root, anchor);
+  let outside;
+  const close = () => { root.remove(); document.removeEventListener('pointerdown', outside, true); };
+  root.querySelector('.cancel').addEventListener('click', close);
+  root.querySelectorAll('[data-matrix-status-value]').forEach(button => button.addEventListener('click', async () => {
+    const value = button.dataset.matrixStatusValue;
+    if (value === current) return close();
+    root.querySelectorAll('button').forEach(control => { control.disabled = true; });
+    close();
+    const statusPayload = await statusChangePayload({ ...item, status: current }, value);
+    if (!statusPayload) return;
+    try {
+      const saved = await api(`/api/status/${item.id}/cells/${column.id}`, { method: 'PATCH', body: JSON.stringify({ value, updated_at: item.updated_at, ...statusPayload }) });
+      const index = state.status.findIndex(row => row.id === item.id); if (index >= 0) state.status[index] = saved;
+      drawStatusRows(); toast(`${column.name} — zapisano zmianę`);
+    } catch (error) { toast(error.message, true); }
+  }));
+  outside = event => { if (!root.contains(event.target) && !anchor.contains(event.target)) close(); };
+  setTimeout(() => document.addEventListener('pointerdown', outside, true), 0);
+  root.querySelector('[data-matrix-status-value].active')?.focus();
+}
+
 async function editStatusMatrixCell(item, column, anchor) {
   if (!item || !column) return;
   if (item.edit_locked && !item.can_override_edit_lock) return toast(`Edycja jest zablokowana przez ${item.edit_lock?.locked_by_name || 'managera'}.`, true);
   if (column.field_type === 'text' && anchor) return editStatusMatrixTextCell(item, column, anchor);
+  if (column.field_type === 'status' && anchor) return editStatusMatrixStatusCell(item, column, anchor);
   const current = item.matrix_values?.[column.id] ?? (column.field_type === 'status' ? item.status : '');
   const fields = column.field_type === 'status'
     ? [{ name: 'value', label: column.name, type: 'select', value: current, options: statusWorkflowOptions.map(option => ({ value: option.value, label: `${statusSymbolMap[option.value]?.[0] || ''} ${option.label}` })) }]
@@ -4040,21 +4070,54 @@ function statusMatrixConfig(canEdit) {
   return `<section class="config-panel-body status-matrix-config"><header class="status-config-intro"><div><h3>Układ tabel statusowych</h3><p class="sub">Kolumny podstawowe opisują element, np. typ i nazwę urządzenia. Import i eksport przenoszą wyłącznie układ — bez punktów, wartości, przypisań i historii.</p></div>${layoutActions}</header>${groups.map((group, groupIndex) => `<article class="status-config-group"><header>${canEdit ? orderControls('status_groups', groups, groupIndex) : ''}<span><b class="status-config-group-title">${escapeHtml(group.name)}</b>${group.description ? `<small>${escapeHtml(group.description)}</small>` : ''}</span>${canEdit ? `<button class="mini edit-status-group" data-id="${group.id}">Edytuj</button><button class="mini add-status-subgroup" data-group="${group.id}">+ Podgrupa</button>${addColumnButtons(group.id)}<button class="mini danger-outline delete-status-group" data-id="${group.id}">Usuń</button>` : ''}</header><section class="status-config-direct"><h4>Punkty bezpośrednio w grupie</h4>${columnRows(group, null, group.columns || [])}</section><div class="status-config-subgroups">${(group.subgroups || []).map((subgroup, subgroupIndex, subgroups) => `<section class="status-config-subgroup"><header>${canEdit ? orderControls('status_subgroups', subgroups, subgroupIndex) : ''}<span><b>${escapeHtml(subgroup.name)}</b>${subgroup.description ? `<small>${escapeHtml(subgroup.description)}</small>` : ''}</span>${canEdit ? `<button class="mini edit-status-subgroup" data-group="${group.id}" data-id="${subgroup.id}">Edytuj</button>${addColumnButtons(group.id, subgroup.id)}<button class="mini danger-outline delete-status-subgroup" data-group="${group.id}" data-id="${subgroup.id}">Usuń</button>` : ''}</header>${columnRows(group, subgroup, subgroup.columns || [])}</section>`).join('') || '<div class="empty compact-empty">Ta grupa nie ma podgrup. Punkty mogą znajdować się bezpośrednio w grupie.</div>'}</div></article>`).join('') || '<div class="empty">Nie skonfigurowano jeszcze tabel statusowych.</div>'}</section>`;
 }
 
-function statusLayoutPayload() {
+function statusLayoutScopeOptions(groups) {
+  return groups.flatMap((group, groupIndex) => [
+    { value: `group:${groupIndex}`, label: `Cała grupa — ${group.name || `Grupa ${groupIndex + 1}`}` },
+    ...(group.subgroups || []).map((subgroup, subgroupIndex) => ({ value: `subgroup:${groupIndex}:${subgroupIndex}`, label: `Tylko podgrupa — ${group.name || `Grupa ${groupIndex + 1}`} → ${subgroup.name || `Podgrupa ${subgroupIndex + 1}`}` }))
+  ]);
+}
+
+function selectedStatusLayout(groups, selectedScopes) {
+  const selected = new Set(selectedScopes || []);
+  return groups.map((group, groupIndex) => {
+    const wholeGroup = selected.has(`group:${groupIndex}`);
+    const subgroups = wholeGroup ? (group.subgroups || []) : (group.subgroups || []).filter((subgroup, subgroupIndex) => selected.has(`subgroup:${groupIndex}:${subgroupIndex}`));
+    return wholeGroup || subgroups.length ? { ...group, columns: wholeGroup ? (group.columns || []) : [], subgroups } : null;
+  }).filter(Boolean);
+}
+
+async function chooseStatusLayout(groups, mode) {
+  const options = statusLayoutScopeOptions(groups);
+  if (!options.length) return toast('Brak grup statusowych do wybrania', true), null;
+  const result = await uiForm({
+    title: mode === 'export' ? 'Wybierz zakres eksportu' : 'Wybierz zakres importu',
+    description: 'Zaznaczenie całej grupy obejmuje jej kolumny i wszystkie podgrupy. Możesz zamiast tego wybrać tylko konkretne podgrupy.',
+    submitLabel: mode === 'export' ? 'Eksportuj wybrane' : 'Importuj wybrane',
+    fields: [{ name: 'layout_scopes', label: 'Grupy i podgrupy', type: 'multiselect', value: groups.map((group, index) => `group:${index}`), options, full: true }]
+  });
+  if (!result) return null;
+  const selected = selectedStatusLayout(groups, result.layout_scopes || []);
+  if (!selected.length) { toast('Wybierz co najmniej jedną grupę lub podgrupę', true); return null; }
+  return selected;
+}
+
+function statusLayoutPayload(groups = statusGroups()) {
   const column = item => ({ name: item.name, column_role: statusColumnRole(item), field_type: item.field_type, include_in_progress: Number(item.include_in_progress || 0) });
   return {
     format: 'plc-status-layout', version: 1, exported_at: new Date().toISOString(),
-    groups: statusGroups().map(group => ({
+    groups: groups.map(group => ({
       name: group.name, description: group.description || '', columns: (group.columns || []).map(column),
       subgroups: (group.subgroups || []).map(subgroup => ({ name: subgroup.name, description: subgroup.description || '', columns: (subgroup.columns || []).map(column) }))
     }))
   };
 }
 
-function exportStatusLayout() {
+async function exportStatusLayout() {
+  const groups = await chooseStatusLayout(statusGroups(), 'export');
+  if (!groups) return;
   const code = state.me.current_project?.code || 'projekt';
-  downloadBlob(new Blob([JSON.stringify(statusLayoutPayload(), null, 2)], { type: 'application/json' }), `${code}-uklad-statusu.json`);
-  toast('Wyeksportowano układ tabel bez danych punktów');
+  downloadBlob(new Blob([JSON.stringify(statusLayoutPayload(groups), null, 2)], { type: 'application/json' }), `${code}-uklad-statusu.json`);
+  toast(`Wyeksportowano wybrany układ · ${groups.length} grup`);
 }
 
 async function importStatusLayoutFile(event) {
@@ -4062,8 +4125,10 @@ async function importStatusLayoutFile(event) {
   if (!file) return;
   try {
     const layout = JSON.parse(await file.text());
-    if (!await uiConfirm('Importuj układ tabel statusowych', 'Grupy, podgrupy i kolumny o tych samych nazwach zostaną zaktualizowane. Pozostałe elementy i wszystkie dane punktów pozostaną bez zmian.', 'Importuj układ')) return;
-    const result = await api('/api/status-layout/import', { method: 'POST', body: JSON.stringify(layout) });
+    if (!layout || layout.format !== 'plc-status-layout' || !Array.isArray(layout.groups)) throw new Error('Plik nie zawiera prawidłowego układu tabel statusowych');
+    const groups = await chooseStatusLayout(layout.groups, 'import');
+    if (!groups) return;
+    const result = await api('/api/status-layout/import', { method: 'POST', body: JSON.stringify({ ...layout, groups }) });
     toast(`Zaimportowano: ${result.groups} grup, ${result.subgroups} podgrup i ${result.columns} kolumn`);
     await loadData(true);
   } catch (error) { toast(error instanceof SyntaxError ? 'Plik nie zawiera poprawnego JSON' : error.message, true); }
@@ -4924,7 +4989,7 @@ async function addEntityComment() {
       const statusItem = state.status.find(item => Number(item.id) === Number(dialog.record.id));
       if (statusItem) {
         statusItem.updated_at = comment.entity_updated_at || statusItem.updated_at;
-        statusItem.progress_updated_at = comment.created_at;
+        statusItem.progress_updated_at = comment.progress_updated_at || comment.created_at;
         statusItem.progress_updated_by_name = comment.user_name || state.me.display_name;
         statusItem.comments ||= [];
         if (!statusItem.comments.some(item => Number(item.id) === Number(comment.id))) statusItem.comments.push(comment);

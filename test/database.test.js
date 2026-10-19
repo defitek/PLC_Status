@@ -280,6 +280,11 @@ test('configurable status matrices keep independent subgroup columns and symbol 
     assert.equal(done.status, 'Done');
     assert.ok(done.progress_updated_at);
     assert.equal(done.progress_updated_by_name, admin.display_name);
+    const comment = repository.addComment({ entity_type: 'status', entity_id: status.id, content: 'Potwierdzono postęp podczas testu' }, admin);
+    assert.ok(comment.progress_updated_at, 'a status comment should return the exact progress timestamp');
+    const commented = repository.status('all', admin).find(item => item.id === status.id);
+    assert.equal(commented.progress_updated_at, comment.progress_updated_at, 'the status list should refresh from the persisted progress timestamp');
+    assert.equal(commented.progress_updated_by_name, admin.display_name);
 
     const imported = repository.importStatusLayout({
       format: 'plc-status-layout', version: 1, groups: [{
@@ -304,6 +309,8 @@ test('configurable status matrices keep independent subgroup columns and symbol 
     repository = openDatabase(temporary.path);
     const reopened = repository.status('all', repository.me(admin.id)).find(item => item.id === status.id);
     assert.equal(reopened.matrix_values[textColumn.id], 'SINAMICS');
+    assert.equal(reopened.progress_updated_at, comment.progress_updated_at, 'the progress timestamp should survive reopening the database');
+    assert.equal(reopened.progress_updated_by_name, admin.display_name);
     assert.equal(repository.config().status_groups.find(item => item.id === group.id).subgroups[0].columns.length, 4);
   } finally {
     repository?.close();

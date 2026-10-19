@@ -14,7 +14,7 @@ const TABLES = {
   note: 'daily_notes',
   goal: 'goals'
 };
-const AUDIT_IGNORED = new Set(['updated_at']);
+const AUDIT_IGNORED = new Set(['updated_at', 'progress_updated_at', 'progress_updated_by']);
 
 const clean = value => typeof value === 'string' ? value.trim() : '';
 const normalizeStatusWorkflow = value => ({ 'Not started': 'Ready to test', 'NOK / Rework': 'NOK / Retest required', 'Retest required': 'NOK / Retest required' })[clean(value)] || clean(value);
@@ -118,6 +118,8 @@ function ensureColumn(db, table, name, definition) {
 function ensureStatusMatrixColumns(db) {
   ensureColumn(db, 'status_items', 'status_group_id', 'INTEGER');
   ensureColumn(db, 'status_items', 'status_subgroup_id', 'INTEGER');
+  ensureColumn(db, 'status_items', 'progress_updated_at', 'TEXT');
+  ensureColumn(db, 'status_items', 'progress_updated_by', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
   const hadColumnRole = columnNames(db, 'status_columns').has('column_role');
   ensureColumn(db, 'status_columns', 'column_role', "TEXT NOT NULL DEFAULT 'subpoint' CHECK(column_role IN ('basic','subpoint'))");
   if (!hadColumnRole) db.exec("UPDATE status_columns SET column_role=CASE WHEN field_type='text' THEN 'basic' ELSE 'subpoint' END");
@@ -1784,7 +1786,7 @@ function createRepository(db, defaultProjectId) {
     else if (!blockers.length && (dependencies.length || hadDependency) && row.status === 'Blocked') nextStatus = 'Ready to test';
     if (nextStatus === row.status) return false;
     const before = baseSnapshot('status', row.id);
-    db.prepare("UPDATE status_items SET status=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?").run(nextStatus, row.id, activeProjectId());
+    db.prepare("UPDATE status_items SET status=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now'),progress_updated_at=strftime('%Y-%m-%d %H:%M:%f','now'),progress_updated_by=? WHERE id=? AND project_id=?").run(nextStatus, currentUser?.id || null, row.id, activeProjectId());
     const after = baseSnapshot('status', row.id);
     writeAudit('status', row.id, 'update', currentUser, before, after);
     return true;
@@ -1873,8 +1875,8 @@ function createRepository(db, defaultProjectId) {
       WHERE sa.project_id=? AND sa.status_id=? ORDER BY u.sort_order,u.display_name`, activeProjectId(), row.id);
     const requirements = requirementRows('status', row.id);
     const statusColumnIds = new Set(applicableStatusColumns(row.status_group_id, row.status_subgroup_id).filter(item => item.field_type === 'status').map(item => String(item.id)));
-    let progressUpdate = null;
-    for (const audit of auditRowsForEntity('status', row.id)) {
+    let progressUpdate = row.progress_updated_at ? { at: row.progress_updated_at, by_name: userName(row.progress_updated_by) } : null;
+    for (const audit of progressUpdate ? [] : auditRowsForEntity('status', row.id)) {
       let changes = {};
       try { changes = JSON.parse(audit.changes_json || '{}'); } catch {}
       let affectsProgress = Boolean(changes.comment || changes.status);
@@ -3268,8 +3270,9 @@ function createRepository(db, defaultProjectId) {
     const snapshot = baseSnapshot(type, entityId);
     if (!snapshot) throw appError('Nie znaleziono komentowanego elementu', 404);
     const commentId = insertRecord('entity_comments', { project_id: activeProjectId(), entity_type: type, entity_id: entityId, content, user_id: currentUser.id });
-    db.prepare("UPDATE " + TABLES[type] + " SET updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?").run(entityId, activeProjectId());
-    const entityUpdatedAt = one(`SELECT updated_at FROM ${TABLES[type]} WHERE id=? AND project_id=?`, entityId, activeProjectId())?.updated_at || null;
+    if (type === 'status') db.prepare("UPDATE status_items SET updated_at=strftime('%Y-%m-%d %H:%M:%f','now'),progress_updated_at=strftime('%Y-%m-%d %H:%M:%f','now'),progress_updated_by=? WHERE id=? AND project_id=?").run(currentUser.id, entityId, activeProjectId());
+    else db.prepare("UPDATE " + TABLES[type] + " SET updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?").run(entityId, activeProjectId());
+    const entityState = one(`SELECT updated_at${type === 'status' ? ',progress_updated_at' : ''} FROM ${TABLES[type]} WHERE id=? AND project_id=?`, entityId, activeProjectId()) || {};
     db.prepare('INSERT INTO audit_log(project_id,entity_type,entity_id,action,user_id,changes_json,snapshot_json) VALUES(?,?,?,?,?,?,?)').run(
       activeProjectId(), type, entityId, 'update', currentUser.id, JSON.stringify({ comment: { from: null, to: content } }), JSON.stringify({ ...snapshot, updated_at: new Date().toISOString() })
     );
@@ -3283,7 +3286,7 @@ function createRepository(db, defaultProjectId) {
     recipients.delete(currentUser.id); recipients.delete(null); recipients.delete(undefined);
     const label = entityDisplayTitle(type, entityId);
     recipients.forEach(userId => createNotification(userId, 'comment', type, entityId, `Nowy komentarz: ${label}`, `${currentUser.display_name}: ${content.slice(0, 200)}`));
-    return { ...one(`SELECT ec.*,u.display_name user_name FROM entity_comments ec JOIN users u ON u.id=ec.user_id WHERE ec.id=?`, commentId), entity_updated_at: entityUpdatedAt };
+    return { ...one(`SELECT ec.*,u.display_name user_name FROM entity_comments ec JOIN users u ON u.id=ec.user_id WHERE ec.id=?`, commentId), entity_updated_at: entityState.updated_at || null, progress_updated_at: entityState.progress_updated_at || null };
   }
 
   function saveCompletionRequirement(id, input) {
@@ -4971,13 +4974,14 @@ function createRepository(db, defaultProjectId) {
       const requestedDependencies = Array.isArray(input.dependency_refs) ? input.dependency_refs : before.dependency_refs || [];
       if (Array.isArray(input.dependency_refs)) validateEntityDependencies('status', statusId, requestedDependencies);
       const previousValue = before.matrix_values?.[column.id] || (column.field_type === 'status' ? before.status : '');
-      const statusChanged = column.field_type === 'status' && value !== previousValue;
+      let statusChanged = false;
       let overrideFlag = Number(before.dependency_override || 0);
       let blockers = [];
       let dependencyOverride = false;
       let statusComment = '';
       if (column.field_type === 'status') {
         value = normalizeStatusWorkflow(value) || 'Ready to test';
+        statusChanged = value !== previousValue;
         if (!new Set(['Ready to test', 'In progress', 'Blocked', 'NOK / Retest required', 'Done', 'N/A']).has(value)) throw appError('Nieprawidłowy status punktu');
         blockers = unresolvedDependencies(requestedDependencies);
         statusComment = clean(input.status_change_comment);
@@ -5005,6 +5009,7 @@ function createRepository(db, defaultProjectId) {
       if (column.field_type === 'text') syncStatusIdentity(statusId);
       db.prepare(`UPDATE status_items SET status=?,dependency_override=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?`)
         .run(aggregate, overrideFlag, statusId, activeProjectId());
+      if (statusChanged) db.prepare("UPDATE status_items SET progress_updated_at=strftime('%Y-%m-%d %H:%M:%f','now'),progress_updated_by=? WHERE id=? AND project_id=?").run(currentUser.id, statusId, activeProjectId());
       if (Array.isArray(input.dependency_refs)) setEntityDependencies('status', statusId, requestedDependencies, currentUser);
       const after = baseSnapshot('status', statusId);
       writeAudit('status', statusId, 'update', currentUser, before, after);
@@ -5066,6 +5071,7 @@ function createRepository(db, defaultProjectId) {
         overrideFlag = 0;
         if (before?.status === 'Blocked' && !Number(before.dependency_override) && (before.dependency_refs || []).length && requestedStatus === 'Blocked') effectiveStatus = 'Ready to test';
       }
+      const effectiveStatusChanged = Boolean(before && effectiveStatus !== before.status);
       const values = {
         project_id: activeProjectId(),
         controller_id: selectedGroup ? selectedGroup.controller_id : selectedController.id,
@@ -5091,6 +5097,7 @@ function createRepository(db, defaultProjectId) {
         values.test_id = nextProjectIdentifier('status', 'ST', 'status_items', 'test_id');
         recordId = insertRecord('status_items', { ...values, created_by: currentUser.id });
       }
+      if (effectiveStatusChanged) db.prepare("UPDATE status_items SET progress_updated_at=strftime('%Y-%m-%d %H:%M:%f','now'),progress_updated_by=? WHERE id=? AND project_id=?").run(currentUser.id, recordId, activeProjectId());
       ensureStatusCells(recordId, matrixGroupId, matrixSubgroupId, effectiveStatus, currentUser.id);
       if (!id && input.matrix_values && typeof input.matrix_values === 'object' && matrixGroupId) {
         const columns = applicableStatusColumns(matrixGroupId, matrixSubgroupId);
@@ -5104,7 +5111,7 @@ function createRepository(db, defaultProjectId) {
           upsertCell.run(recordId, column.id, cellValue, currentUser.id);
         }
       }
-      if (statusChanged && matrixGroupId) db.prepare(`UPDATE status_cell_values SET value=?,updated_by=?,updated_at=CURRENT_TIMESTAMP
+      if (effectiveStatusChanged && matrixGroupId) db.prepare(`UPDATE status_cell_values SET value=?,updated_by=?,updated_at=CURRENT_TIMESTAMP
         WHERE status_item_id=? AND column_id IN (SELECT id FROM status_columns WHERE status_group_id=? AND active=1 AND field_type='status'
           AND ((status_subgroup_id IS NULL AND ? IS NULL) OR status_subgroup_id=?))`).run(effectiveStatus, currentUser.id, recordId, matrixGroupId, matrixSubgroupId, matrixSubgroupId);
       syncStatusIdentity(recordId);

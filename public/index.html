@@ -11,10 +11,10 @@
 <body class="sidebar-collapsed">
   <header class="topbar">
     <button id="mobile-menu" class="ghost mobile-menu" aria-label="Rozwiń menu" aria-controls="nav" aria-expanded="false" title="Rozwiń menu">☰</button>
-    <div class="logo logo-mark" aria-label="Commissioning Hub" title="Commissioning Hub">
-      <svg viewBox="0 0 48 48" aria-hidden="true"><path class="logo-track" d="M9 15h9l5 7h7l4-7h5M9 33h9l5-7h7l4 7h5"/><circle cx="9" cy="15" r="3"/><circle cx="39" cy="15" r="3"/><circle cx="9" cy="33" r="3"/><circle cx="39" cy="33" r="3"/><rect x="19" y="18" width="14" height="12" rx="3"/></svg>
-    </div>
-    <div class="brand"><strong>Commissioning Hub</strong><span>Multi-project status & team workspace</span></div>
+    <button type="button" id="brand-reload" class="brand-home" aria-label="Odśwież aplikację" title="Odśwież aplikację">
+      <span class="logo logo-mark"><svg viewBox="0 0 64 64" aria-hidden="true"><path class="logo-network" d="M8 14h11M45 14h11M8 27h11M45 27h11"/><circle class="logo-node" cx="6" cy="14" r="3"/><circle class="logo-node" cx="58" cy="14" r="3"/><circle class="logo-node" cx="6" cy="27" r="3"/><circle class="logo-node" cx="58" cy="27" r="3"/><rect class="logo-plc" x="19" y="6" width="26" height="28" rx="4"/><path class="logo-plc-lines" d="M28 7v26M36 7v26"/><circle class="logo-led" cx="23.5" cy="11" r="1.8"/><path class="logo-car" d="M13 49h4l5-9h20l5 9h4l4 4v5h-6l-3-3H18l-3 3H9v-5zM19 49h26l-5-6H24z"/></svg></span>
+      <span class="brand"><strong>Commissioning Hub</strong><span>Multi-project status & team workspace</span></span>
+    </button>
     <div id="top-news" class="top-news" aria-label="Najnowsze wiadomości projektu"></div>
     <div class="top-actions"><button id="notification-open" class="ghost notification-button" title="Powiadomienia" aria-label="Powiadomienia"><b id="notification-count">0</b></button><button id="daily-summary-open" class="ghost" title="Podsumowanie zmian">☀ Podsumowanie</button><button id="project-switch" class="ghost project-chip">Wybierz projekt</button><button id="theme-switch" class="ghost" title="Zmień wygląd">◐ Motyw</button><div class="userbox"><span id="me"></span><button id="security-manage" class="ghost" title="Bezpieczeństwo konta">Bezpieczeństwo</button><button id="password-change" class="ghost" title="Zmień hasło">Hasło</button><button id="logout" class="ghost">Wyloguj</button></div></div>
   </header>
@@ -42,7 +42,7 @@
         <button data-view="history"><span>↺</span><span>Historia</span></button>
         <button data-view="settings" id="settings-nav"><span>⚙</span><span>Konfiguracja</span></button>
       </nav>
-      <footer class="app-credit" title="Autor projektu: Marcin Defitowski @ AI"><span>Autor projektu</span><b>Marcin Defitowski <em>@ AI</em></b></footer>
+      <footer class="app-credit" title="Marcin Defitowski @ AI"><b>Marcin Defitowski <em>@ AI</em></b></footer>
     </aside>
     <main>
       <header class="pagehead">
