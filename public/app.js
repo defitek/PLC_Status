@@ -128,6 +128,52 @@ function taskHierarchyOptions() {
   state.controllers.filter(item => !item.group_id).forEach(item => values.push({ value: `controller:${item.code}`, label: `◇ ${item.display_name}` }));
   return values;
 }
+function hierarchyTargetLabel(value) {
+  if (String(value).startsWith('group:')) {
+    const group = state.controllerGroups.find(item => Number(item.id) === Number(String(value).slice(6)));
+    return group?.path_label || group?.name || 'Nieznany obszar';
+  }
+  const code = String(value).replace(/^controller:/, '');
+  const controller = state.controllers.find(item => item.code === code);
+  return controller?.hierarchy_label || controller?.display_name || code || 'Wybierz zakres';
+}
+function hierarchyTargetTreeHtml(selected, { fieldName = 'hierarchy_target', inputId = 'form-hierarchy-target' } = {}) {
+  const selectedValue = String(selected || '');
+  const children = new Map();
+  state.controllerGroups.forEach(group => {
+    const parentId = Number(group.parent_id) || 0;
+    if (!children.has(parentId)) children.set(parentId, []);
+    children.get(parentId).push(group);
+  });
+  const controllerNode = controller => {
+    const value = `controller:${controller.code}`;
+    return `<label class="ui-tree-node ui-tree-child hierarchy-target-node hierarchy-controller-node" data-hierarchy-node="${escapeHtml(value)}"><input type="radio" data-hierarchy-target-choice value="${escapeHtml(value)}" ${value === selectedValue ? 'checked' : ''}><span><b>◇ ${escapeHtml(controller.display_name || controller.code)}</b><small>Sterownik · ${escapeHtml(controller.hierarchy_label || controller.code)}</small></span></label>`;
+  };
+  const groupBranch = group => {
+    const value = `group:${group.id}`;
+    const directControllers = state.controllers.filter(item => Number(item.group_id) === Number(group.id));
+    const nested = (children.get(Number(group.id)) || []).map(groupBranch).join('');
+    const childHtml = [...directControllers.map(controllerNode), nested].join('');
+    return `<div class="ui-tree-branch hierarchy-target-branch ${value === selectedValue ? 'selected' : ''}"><label class="ui-tree-node ui-tree-group hierarchy-target-node" data-hierarchy-node="${escapeHtml(value)}"><input type="radio" data-hierarchy-target-choice value="${escapeHtml(value)}" ${value === selectedValue ? 'checked' : ''}><span><b>▰ ${escapeHtml(group.name)}</b><small>Obszar · ${escapeHtml(group.path_label || group.name)}</small></span></label>${childHtml ? `<div class="ui-tree-children">${childHtml}</div>` : ''}</div>`;
+  };
+  const roots = (children.get(0) || []).map(groupBranch).join('');
+  const ungrouped = state.controllers.filter(item => !item.group_id).map(controllerNode).join('');
+  return `<div class="hierarchy-target-picker" data-hierarchy-target-tree><input type="hidden" name="${escapeHtml(fieldName)}" id="${escapeHtml(inputId)}" value="${escapeHtml(selectedValue)}"><div class="hierarchy-target-summary"><small>Wybrany zakres</small><b data-hierarchy-target-summary>${escapeHtml(hierarchyTargetLabel(selectedValue))}</b></div><div class="ui-tree-select"><div class="ui-tree-branches">${roots}${ungrouped}</div></div></div>`;
+}
+function bindHierarchyTargetTrees(root = document) {
+  root.querySelectorAll('[data-hierarchy-target-tree]').forEach(tree => {
+    const hidden = tree.querySelector('input[type="hidden"]');
+    const summary = tree.querySelector('[data-hierarchy-target-summary]');
+    const sync = value => {
+      hidden.value = value;
+      tree.querySelectorAll('[data-hierarchy-target-choice]').forEach(control => { control.checked = control.value === value; });
+      tree.querySelectorAll('.hierarchy-target-branch').forEach(branch => branch.classList.toggle('selected', branch.querySelector(':scope > .hierarchy-target-node input')?.checked));
+      if (summary) summary.textContent = hierarchyTargetLabel(value);
+      hidden.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    tree.querySelectorAll('[data-hierarchy-target-choice]').forEach(control => control.addEventListener('change', () => { if (control.checked) sync(control.value); }));
+  });
+}
 function controllerHierarchyOrder(item) {
   if (item?.controller_group_id) {
     const group = state.controllerGroups.find(value => value.id === Number(item.controller_group_id));
@@ -3557,7 +3603,7 @@ function showStatusContext(event, item) {
       return;
     }
     const type = button.dataset.action === 'task' ? 'tasks' : button.dataset.action === 'point' ? 'points' : 'notes';
-    const prefill = { controller: item.controller, hierarchy_target: `controller:${item.controller}`, function_group_id: item.function_group_id, function_group_element_id: item.function_group_element_id, category: item.category, subcategory: item.subcategory, title: item.function_detail, content: `Aktualizacja statusu: ${item.function_detail}`, links: [{ entity_type: 'status', entity_id: item.id }] };
+    const prefill = { controller: item.controller, controller_group_id: item.controller_group_id || null, hierarchy_target: item.controller_group_id ? `group:${item.controller_group_id}` : `controller:${item.controller}`, function_group_id: item.function_group_id, function_group_element_id: item.function_group_element_id, category: item.category, subcategory: item.subcategory, title: item.function_detail, content: `Aktualizacja statusu: ${item.function_detail}`, links: [{ entity_type: 'status', entity_id: item.id }] };
     if (type === 'notes') openStatusTransferEditor(null, prefill); else openRecord(type, null, prefill);
   }));
 }
@@ -3588,7 +3634,7 @@ function renderQuickStatusRows() {
     .join(' ').toLowerCase().includes(query));
   $('#quick-status-count').textContent = `${rows.length} z ${state.quickStatusDraft.length} punktów`;
   $('#quick-status-body').innerHTML = rows.map(item => `<tr data-id="${item.id}">
-    <td><select data-field="controller" class="quick-controller">${selectOptions(state.controllers.map(controller => ({ value: controller.code, label: controller.display_name || controller.code })), item.controller)}</select></td>
+    <td><span class="quick-status-scope" title="${escapeHtml(item.scope_path || item.controller_path || controllerLabel(item))}">${escapeHtml(controllerLabel(item))}</span></td>
     <td><select data-field="status_group_id" class="quick-status-group">${selectOptions(statusGroups().map(group => ({ value: group.id, label: group.name })), item.status_group_id, 'Wybierz grupę')}</select></td>
     <td><select data-field="status_subgroup_id" class="quick-status-subgroup">${selectOptions(statusSubgroups(item.status_group_id).map(subgroup => ({ value: subgroup.id, label: subgroup.name })), item.status_subgroup_id, 'Bezpośrednio w grupie')}</select></td>
     <td><select data-field="criticality">${selectOptions(['Low', 'Medium', 'High', 'Critical'], item.criticality)}</select></td>
@@ -3610,7 +3656,7 @@ async function saveQuickStatus() {
   const button = $('#quick-status-save');
   button.disabled = true;
   try {
-    const fields = ['controller', 'status_group_id', 'status_subgroup_id', 'criticality', 'status', 'responsible_user_ids', 'current_note'];
+    const fields = ['status_group_id', 'status_subgroup_id', 'criticality', 'status', 'responsible_user_ids', 'current_note'];
     const changed = state.quickStatusDraft.filter(item => {
       const previous = state.status.find(row => row.id === item.id);
       return fields.some(field => JSON.stringify(item[field] ?? null) !== JSON.stringify(previous?.[field] ?? null));
@@ -3631,14 +3677,15 @@ async function saveQuickStatus() {
 }
 
 function openBulkStatus() {
-  const controller = defaultValue('controller');
+  const hierarchyTarget = defaultValue('hierarchy_target');
   const statusGroup = statusGroups()[0];
-  $('#bulk-status-fields').innerHTML = `<label class="field required-field"><span>Sterownik *</span><select name="controller" id="bulk-status-controller" required>${selectOptions(state.controllers.map(item => ({ value: item.code, label: item.display_name })), controller)}</select></label>
+  $('#bulk-status-fields').innerHTML = `<div class="field full hierarchy-target-field required-field"><label>Zakres w hierarchii projektu *</label>${hierarchyTargetTreeHtml(hierarchyTarget, { inputId: 'bulk-status-hierarchy-target' })}</div>
     <label class="field required-field"><span>Grupa statusu *</span><select name="status_group_id" id="bulk-status-matrix-group" required>${selectOptions(statusGroups().map(item => ({ value: item.id, label: item.name })), statusGroup?.id || '', 'Wybierz grupę')}</select></label>
     <label class="field"><span>Podgrupa</span><select name="status_subgroup_id" id="bulk-status-matrix-subgroup">${selectOptions((statusGroup?.subgroups || []).map(item => ({ value: item.id, label: item.name })), '', 'Bezpośrednio w grupie')}</select></label>
     <label class="field"><span>Krytyczność</span><select name="criticality">${selectOptions(['Low', 'Medium', 'High', 'Critical'], 'Medium', '')}</select></label>
     <label class="field"><span>Status początkowy</span><select name="status">${selectOptions(statusWorkflowOptions, 'Ready to test', '')}</select></label>
     <label class="field full required-field big"><span>Punkty do dodania *</span><textarea name="names" rows="14" required placeholder="Każdy wiersz to osobny punkt, np.&#10;Sprawdź sygnał QM1&#10;Sprawdź sygnał QM2&#10;Potwierdź blokadę osłony"></textarea><small class="sub">Maksymalnie 500 punktów w jednej operacji. Nazwy mogą się powtarzać.</small></label>${requirementsField({}, 'requirement_ids', 'Zapotrzebowanie')}`;
+  bindHierarchyTargetTrees($('#bulk-status-fields'));
   $('#bulk-status-matrix-group').addEventListener('change', event => { $('#bulk-status-matrix-subgroup').innerHTML = selectOptions(statusSubgroups(event.target.value).map(item => ({ value: item.id, label: item.name })), '', 'Bezpośrednio w grupie'); });
   $('#bulk-status-dialog').dataset.dirty = '';
   $('#bulk-status-dialog').showModal();
@@ -4833,7 +4880,7 @@ async function saveSetting(key, value) {
 
 const formDefinitions = {
   status: { endpoint: '/api/status', title: 'punkt statusu', fields: [
-    ['controller', 'Sterownik', 'controller'], ['status_group_id', 'Grupa tabeli statusowej', 'status-group'], ['status_subgroup_id', 'Podgrupa tabeli statusowej', 'status-subgroup'],
+    ['hierarchy_target', 'Zakres w hierarchii projektu', 'hierarchy-target'], ['status_group_id', 'Grupa tabeli statusowej', 'status-group'], ['status_subgroup_id', 'Podgrupa tabeli statusowej', 'status-subgroup'],
     ['matrix_values', 'Dane punktu statusowego', 'status-matrix'], ['function_group_id', 'Grupa funkcyjna', 'function-group'], ['function_group_subcategory_id', 'Podkategoria grupy funkcyjnej', 'function-subcategory'], ['function_group_element_id', 'Obiekt / element grupy', 'function-element'],
     ['criticality', 'Krytyczność', 'select', ['Low', 'Medium', 'High', 'Critical']], ['responsible_user_ids', 'Osoby odpowiedzialne', 'users'], ['dependency_refs', 'Zależności — elementy wymagane wcześniej', 'dependencies'],
     ['requirement_ids', 'Zapotrzebowanie', 'requirements'], ['current_note', 'Aktualna notatka', 'textarea'], ['evidence_link', 'Dodatkowe informacje / link'], ['links', 'Powiązane elementy', 'multi-links', ['task', 'point', 'note', 'goal']]
@@ -4847,7 +4894,7 @@ const formDefinitions = {
     ['links', 'Powiązane elementy', 'multi-links', ['status', 'point', 'note']]
   ] },
   points: { endpoint: '/api/open-points', title: 'otwarty punkt', fields: [
-    ['controller', 'Sterownik', 'controller'], ['title', 'Temat'], ['owner_user_id', 'Odpowiedzialny', 'user'],
+    ['hierarchy_target', 'Zakres w hierarchii projektu', 'hierarchy-target'], ['title', 'Temat'], ['owner_user_id', 'Odpowiedzialny', 'user'],
     ['status', 'Status', 'select', ['Open', 'Waiting', 'In progress', 'Closed']], ['priority', 'Priorytet', 'select', ['Low', 'Medium', 'High', 'Critical']], ['dependency_refs', 'Zależności — elementy wymagane wcześniej', 'dependencies'],
     ['start_date', 'Planowany start', 'date'], ['due_date', 'Deadline', 'date'], ['reminder_date', 'Przypomnienie', 'date'],
     ['category', 'Kategoria', 'category', 'status'], ['subcategory', 'Podkategoria', 'subcategory', 'status'], ['waiting_for', 'Oczekiwanie na', 'options', 'waiting_for'], ['requirement_ids', 'Zapotrzebowanie', 'requirements'],
@@ -4859,7 +4906,7 @@ const formDefinitions = {
     ['content', 'Treść', 'bigtextarea'], ['links', 'Powiązane elementy', 'multi-links', ['status', 'task', 'point']], ['mentioned_user_ids', 'Wspomniane osoby', 'mentions']
   ] },
   goals: { endpoint: '/api/goals', title: 'cel', fields: [
-    ['controller', 'Sterownik', 'controller'], ['title', 'Nazwa celu'], ['status', 'Status', 'select', ['Open', 'In progress', 'Done']], ['priority', 'Priorytet', 'select', ['Low', 'Medium', 'High', 'Critical']], ['due_date', 'Termin', 'date'], ['description', 'Opis', 'textarea'], ['goal_links', 'Powiązane elementy', 'goal-links']
+    ['hierarchy_target', 'Zakres w hierarchii projektu', 'hierarchy-target'], ['title', 'Nazwa celu'], ['status', 'Status', 'select', ['Open', 'In progress', 'Done']], ['priority', 'Priorytet', 'select', ['Low', 'Medium', 'High', 'Critical']], ['due_date', 'Termin', 'date'], ['description', 'Opis', 'textarea'], ['goal_links', 'Powiązane elementy', 'goal-links']
   ] },
   announcements: { endpoint: '/api/announcements', title: 'wiadomość', fields: [
     ['entry_type', 'Rodzaj wpisu', 'select', [{ value: 'message', label: 'Komunikat' }, { value: 'decision', label: 'Decyzja projektowa' }, { value: 'scope_change', label: 'Zmiana zakresu' }]], ['decision_status', 'Stan decyzji / zmiany', 'select', [{ value: 'draft', label: 'Szkic' }, { value: 'published', label: 'Opublikowana' }, { value: 'implemented', label: 'Wdrożona' }, { value: 'superseded', label: 'Zastąpiona' }]],
@@ -4913,7 +4960,7 @@ async function openRecord(type, record = null, prefill = null, duplicateSource =
   if (commentable) renderEntityComments(record.comments || []);
   resetSimilarKnowledge();
   const visibleFields = type === 'status' && record
-    ? definition.fields.filter(field => !['controller', 'status_group_id', 'status_subgroup_id'].includes(field[0]))
+    ? definition.fields.filter(field => !['hierarchy_target', 'status_group_id', 'status_subgroup_id'].includes(field[0]))
     : definition.fields;
   $('#fields').innerHTML = visibleFields.map(field => fieldHtml(field, source, type)).join('');
   if (type === 'users' && state.me.role !== 'system_admin') {
@@ -4937,7 +4984,7 @@ function renderRecordDialogHeader() {
   const statusScope = type === 'status' && record ? (() => {
     const group = statusGroups().find(item => Number(item.id) === Number(record.status_group_id));
     const subgroup = group?.subgroups?.find(item => Number(item.id) === Number(record.status_subgroup_id));
-    return `<div class="record-scope-summary"><span><small>Sterownik PLC</small><b>${escapeHtml(controllerLabel(record) || 'Bez sterownika')}</b></span><span><small>Grupa tabeli statusowej</small><b>${escapeHtml(record.status_group_name || group?.name || 'Nieprzypisana')}</b></span><span><small>Podgrupa tabeli statusowej</small><b>${escapeHtml(record.status_subgroup_name || subgroup?.name || 'Punkty bezpośrednio w grupie')}</b></span></div>`;
+    return `<div class="record-scope-summary"><span><small>Zakres hierarchii</small><b>${escapeHtml(controllerLabel(record) || 'Bez zakresu')}</b></span><span><small>Grupa tabeli statusowej</small><b>${escapeHtml(record.status_group_name || group?.name || 'Nieprzypisana')}</b></span><span><small>Podgrupa tabeli statusowej</small><b>${escapeHtml(record.status_subgroup_name || subgroup?.name || 'Punkty bezpośrednio w grupie')}</b></span></div>`;
   })() : '';
   $('#record-meta').innerHTML = record ? `${statusScope}<span>Utworzone przez: <b>${escapeHtml(record.created_by_name || record.author || 'dane historyczne')}</b></span><span>Data utworzenia: <b>${displayDateTime(record.created_at)}</b></span><span>Ostatnia aktualizacja: <b>${displayDateTime(record.updated_at)}</b></span>${lock ? `<span class="record-lock-banner">Zablokowany przed edycją przez: <b>${escapeHtml(lock.locked_by_name)}</b>; Powód: <b>${escapeHtml(lock.reason)}</b></span>` : ''}` : '<span>Autor zostanie przypisany automatycznie po zapisaniu.</span>';
 }
@@ -5095,8 +5142,8 @@ function defaultValue(name) {
 
 function requiredRecordField(formType, name, record) {
   const fields = {
-    status: ['controller', 'status_group_id'], tasks: ['hierarchy_target', 'title', 'status'],
-    points: ['controller', 'title', 'status'], goals: ['controller', 'title', 'status'], announcements: ['title', 'content'],
+    status: ['hierarchy_target', 'status_group_id'], tasks: ['hierarchy_target', 'title', 'status'],
+    points: ['hierarchy_target', 'title', 'status'], goals: ['hierarchy_target', 'title', 'status'], announcements: ['title', 'content'],
     users: ['username', 'display_name'], controllers: ['leaf_code']
   };
   return (fields[formType] || []).includes(name) || (formType === 'users' && name === 'password' && !record?.id);
@@ -5132,6 +5179,10 @@ function fieldHtml([name, label, type = 'text', extra], record, formType = '') {
   if (type === 'requirements') return requirementsField(record, name, label);
   if (type === 'dependencies') return dependenciesField(record, typeToEntity(formType));
   if (type === 'status-matrix') return statusMatrixEditorField(record);
+  if (type === 'hierarchy-target') {
+    const selected = record?.controller_group_id ? `group:${record.controller_group_id}` : record?.hierarchy_target || (record?.controller ? `controller:${record.controller}` : value);
+    return `<div class="field full hierarchy-target-field ${required ? 'required-field' : ''}"><label>${escapeHtml(label)}${required ? ' *' : ''}</label>${hierarchyTargetTreeHtml(selected)}</div>`;
+  }
   if (type === 'checklist') return checklistField(record);
   if (type === 'scope-checklist') return scopeChecklistField(record);
   if (type === 'goal-links') return goalLinksField();
@@ -5150,10 +5201,6 @@ function fieldHtml([name, label, type = 'text', extra], record, formType = '') {
   }
   let input;
   if (type === 'controller') input = `<select name="${name}" id="form-controller" ${required ? 'required' : ''}>${selectOptions(state.controllers.map(item => ({ value: item.code, label: item.display_name || item.code })), value)}</select>`;
-  else if (type === 'hierarchy-target') {
-    const selected = record?.controller_group_id ? `group:${record.controller_group_id}` : record?.controller ? `controller:${record.controller}` : value;
-    input = `<select name="${name}" id="form-hierarchy-target" ${required ? 'required' : ''}>${selectOptions(taskHierarchyOptions(), selected, 'Wybierz zakres')}</select>`;
-  }
   else if (type === 'note-hierarchy-target') {
     const selected = record?.controller_group_id ? `group:${record.controller_group_id}` : record?.controller ? `controller:${record.controller}` : (record?.hierarchy_target || (state.controller === 'all' ? 'all' : state.controller.startsWith('group:') ? state.controller : `controller:${state.controller}`));
     input = `<select name="${name}" id="form-note-hierarchy-target">${selectOptions([{ value: 'all', label: 'Cały projekt' }, ...taskHierarchyOptions()], selected, null)}</select>`;
@@ -5268,6 +5315,7 @@ function goalLinksField() {
 }
 
 function bindDynamicFields(type) {
+  bindHierarchyTargetTrees($('#fields'));
   const bindStatusMatrixSymbols = () => $$('[data-matrix-value][data-column-type="status"]').forEach(select => select.addEventListener('change', () => {
     const symbol = select.closest('.status-subpoint-field')?.querySelector('.status-symbol');
     if (symbol) symbol.outerHTML = statusSymbol(select.value);
@@ -5331,7 +5379,20 @@ function bindDynamicFields(type) {
       syncTaskObjectFields();
     });
     $('#fields [name="other_object"]')?.addEventListener('input', syncTaskObjectFields);
-    $('#form-hierarchy-target')?.addEventListener('change', syncTaskHierarchyTarget);
+    $('#form-hierarchy-target')?.addEventListener('change', event => {
+      const target = event.target.value;
+      const controllerCode = target.startsWith('controller:') ? target.slice(11) : '';
+      const areaSelected = target.startsWith('group:');
+      if ($('#form-function-group')) {
+        $('#form-function-group').innerHTML = selectOptions(functionGroups(controllerCode).map(item => ({ value: item.id, label: item.name })), '', 'Bez grupy funkcyjnej');
+        if (type === 'status') $('#form-function-group').disabled = areaSelected;
+      }
+      if ($('#form-function-element')) { $('#form-function-element').innerHTML = selectOptions([], '', 'Bez elementu'); if (type === 'status') $('#form-function-element').disabled = areaSelected; }
+      if ($('#form-function-subcategory')) { $('#form-function-subcategory').innerHTML = selectOptions([], '', 'Bez podkategorii grupy'); if (type === 'status') $('#form-function-subcategory').disabled = areaSelected; }
+      if (type === 'tasks') syncTaskHierarchyTarget();
+      else syncTaskObjectFields();
+    });
+    if (type === 'status' && $('#form-hierarchy-target')?.value.startsWith('group:')) $('#form-hierarchy-target').dispatchEvent(new Event('change', { bubbles: true }));
     if (type === 'tasks') syncTaskHierarchyTarget(false);
     syncTaskObjectFields();
   }

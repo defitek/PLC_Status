@@ -65,13 +65,17 @@ export function openDatabase(databasePath) {
   migrateStatusWorkflow(db);
   migrateEntityDependencies(db);
   ensureStatusMatrixColumns(db);
+  ensureEntityScopeColumns(db);
   const defaultProjectId = primaryProjectId(db);
   db.exec('CREATE INDEX IF NOT EXISTS idx_status_function_group ON status_items(function_group_id,function_group_check_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_status_project ON status_items(project_id,controller_id,status)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_status_scope_group ON status_items(project_id,controller_group_id,status)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_task_scope_group ON tasks(project_id,controller_group_id,status)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_task_scope_checklist ON task_scope_checklist(task_id,sort_order)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_points_project ON open_points(project_id,controller_id,status,due_date)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_points_scope_group ON open_points(project_id,controller_group_id,status,due_date)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_goals_project ON goals(project_id,controller_id,status,due_date)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_goals_scope_group ON goals(project_id,controller_group_id,status,due_date)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_notes_project_date ON daily_notes(project_id,note_date DESC,controller_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_audit_project_changed ON audit_log(project_id,changed_at DESC,id DESC)');
   seedConfiguration(db, defaultProjectId);
@@ -124,6 +128,12 @@ function ensureStatusMatrixColumns(db) {
   ensureColumn(db, 'status_columns', 'column_role', "TEXT NOT NULL DEFAULT 'subpoint' CHECK(column_role IN ('basic','subpoint'))");
   if (!hadColumnRole) db.exec("UPDATE status_columns SET column_role=CASE WHEN field_type='text' THEN 'basic' ELSE 'subpoint' END");
   db.exec('CREATE INDEX IF NOT EXISTS idx_status_items_matrix ON status_items(project_id,status_group_id,status_subgroup_id)');
+}
+
+function ensureEntityScopeColumns(db) {
+  for (const table of ['status_items', 'open_points', 'goals']) {
+    ensureColumn(db, table, 'controller_group_id', 'INTEGER REFERENCES controller_groups(id) ON DELETE SET NULL');
+  }
 }
 
 function migrateStatusMatrix(db, onlyProjectId = null) {
@@ -1412,8 +1422,27 @@ function createRepository(db, defaultProjectId) {
   }
 
   function attachControllerMeta(row) {
-    const item = hierarchyData().controllers.find(controller => controller.id === Number(row.controller_id));
-    return item ? { ...row, controller_label: item.display_name, controller_path: item.hierarchy_label, root_group_id: item.root_group_id } : row;
+    const hierarchy = hierarchyData();
+    const item = hierarchy.controllers.find(controller => controller.id === Number(row.controller_id));
+    const group = row.controller_group_id ? hierarchy.groupMap.get(Number(row.controller_group_id)) : null;
+    if (group) return {
+      ...row,
+      scope_is_group: true,
+      scope_label: group.path_label,
+      scope_path: group.path_label,
+      controller_label: group.path_label,
+      controller_path: group.path_label,
+      root_group_id: group.root_group_id
+    };
+    return item ? {
+      ...row,
+      scope_is_group: false,
+      scope_label: item.display_name,
+      scope_path: item.hierarchy_label,
+      controller_label: item.display_name,
+      controller_path: item.hierarchy_label,
+      root_group_id: item.root_group_id
+    } : row;
   }
 
   function groupDescendantIds(groupId) {
@@ -1458,13 +1487,6 @@ function createRepository(db, defaultProjectId) {
       ORDER BY c.sort_order,c.code`, groupId, projectId, projectId);
     }
     return [controller(code)];
-  }
-
-  function controllerFilter(code, alias) {
-    const projectId = activeProjectId();
-    const ids = controllersForScope(code).map(item => item.id);
-    if (!ids.length) return { sql: ' WHERE 1=0', params: [] };
-    return { sql: ` WHERE ${alias}.project_id=? AND ${alias}.controller_id IN (${ids.map(() => '?').join(',')})`, params: [projectId, ...ids] };
   }
 
   function insertRecord(table, values) {
@@ -1601,10 +1623,10 @@ function createRepository(db, defaultProjectId) {
     const source = baseSnapshot(type, asId(sourceId));
     if (!source) throw appError('Nie znaleziono elementu źródłowego do duplikacji', 404);
     const fields = {
-      status: ['controller_id', 'function_group_id', 'function_group_element_id', 'function_group_subcategory_id', 'status_group_id', 'status_subgroup_id', 'station', 'function_detail', 'category', 'subcategory', 'criticality', 'status', 'checked_by', 'checked_on', 'current_note', 'evidence_link', 'responsible_user_ids', 'dependency_refs', 'requirement_ids', 'links'],
+      status: ['controller_id', 'controller_group_id', 'function_group_id', 'function_group_element_id', 'function_group_subcategory_id', 'status_group_id', 'status_subgroup_id', 'station', 'function_detail', 'category', 'subcategory', 'criticality', 'status', 'checked_by', 'checked_on', 'current_note', 'evidence_link', 'responsible_user_ids', 'dependency_refs', 'requirement_ids', 'links'],
       task: ['controller_id', 'controller_group_id', 'title', 'description', 'station', 'function_group_id', 'function_group_element_id', 'other_object', 'priority', 'status', 'start_date', 'due_date', 'category', 'subcategory', 'info_link', 'direct_assignee_user_ids', 'checklist', 'scope_checklist', 'dependency_refs', 'requirement_ids', 'links'],
-      point: ['controller_id', 'title', 'description', 'impact', 'priority', 'owner_user_id', 'status', 'waiting_for', 'next_action', 'start_date', 'due_date', 'reminder_date', 'category', 'subcategory', 'info_link', 'dependency_refs', 'requirement_ids', 'links'],
-      goal: ['controller_id', 'title', 'description', 'status', 'priority', 'due_date', 'links']
+      point: ['controller_id', 'controller_group_id', 'title', 'description', 'impact', 'priority', 'owner_user_id', 'status', 'waiting_for', 'next_action', 'start_date', 'due_date', 'reminder_date', 'category', 'subcategory', 'info_link', 'dependency_refs', 'requirement_ids', 'links'],
+      goal: ['controller_id', 'controller_group_id', 'title', 'description', 'status', 'priority', 'due_date', 'links']
     }[type] || [];
     const normalize = (field, value) => {
       if (field === 'links') return normalizedLinks(value);
@@ -2038,6 +2060,52 @@ function createRepository(db, defaultProjectId) {
     return hierarchyData().controllers.filter(item => descendantIds.has(Number(item.group_id)));
   }
 
+  function resolveHierarchyTarget(input, before = null) {
+    const hierarchyTarget = clean(input.hierarchy_target);
+    const explicitTarget = Boolean(hierarchyTarget);
+    let groupId = hierarchyTarget.startsWith('group:')
+      ? asId(hierarchyTarget.slice(6))
+      : hierarchyTarget.startsWith('controller:')
+        ? null
+        : Object.hasOwn(input, 'controller_group_id')
+          ? asId(input.controller_group_id)
+          : asId(before?.controller_group_id);
+    if (groupId) {
+      if (!one('SELECT 1 FROM controller_groups WHERE id=? AND project_id=? AND active=1', groupId, activeProjectId())) throw appError('Wybrany obszar nie należy do projektu');
+      const targetController = controllersInGroup(groupId)[0];
+      if (!targetController) throw appError('Wybrany obszar nie zawiera żadnego sterownika końcowego');
+      return { controller: targetController, controller_group_id: groupId };
+    }
+    const fallbackCode = before?.controller_id ? one('SELECT code FROM controllers WHERE id=? AND project_id=?', before.controller_id, activeProjectId())?.code : '';
+    const controllerCode = hierarchyTarget.replace(/^controller:/, '') || clean(input.controller) || fallbackCode;
+    if (!controllerCode && !explicitTarget) throw appError('Wybierz obszar lub sterownik');
+    return { controller: controller(controllerCode), controller_group_id: null };
+  }
+
+  function matchesHierarchyScope(row, selectedControllerIds, groupCache = new Map()) {
+    if (!row.controller_group_id) return selectedControllerIds.has(Number(row.controller_id));
+    const groupId = Number(row.controller_group_id);
+    if (!groupCache.has(groupId)) groupCache.set(groupId, new Set(controllersInGroup(groupId).map(item => Number(item.id))));
+    return [...groupCache.get(groupId)].some(id => selectedControllerIds.has(id));
+  }
+
+  function scopedTableRows(table, controllerIds, columns = '*') {
+    const selected = new Set(controllerIds.map(Number));
+    if (!selected.size) return [];
+    const hierarchy = hierarchyData();
+    const selectedGroups = hierarchy.groups.filter(group => controllersInGroup(group.id).some(item => selected.has(Number(item.id)))).map(group => group.id);
+    const directPlaceholders = [...selected].map(() => '?').join(',');
+    const groupClause = selectedGroups.length ? ` OR controller_group_id IN (${selectedGroups.map(() => '?').join(',')})` : '';
+    return all(`SELECT ${columns} FROM ${table} WHERE project_id=? AND ((controller_group_id IS NULL AND controller_id IN (${directPlaceholders}))${groupClause})`, activeProjectId(), ...selected, ...selectedGroups);
+  }
+
+  function filterRowsByHierarchyScope(rows, code) {
+    if (!code || code === 'all') return rows;
+    const selected = new Set(controllersForScope(code).map(item => Number(item.id)));
+    const cache = new Map();
+    return rows.filter(row => matchesHierarchyScope(row, selected, cache));
+  }
+
   function saveTaskScopeChecklist(taskId, groupId, requested) {
     const existing = new Map(all('SELECT controller_id,done FROM task_scope_checklist WHERE task_id=?', taskId).map(item => [item.controller_id, Boolean(item.done)]));
     const submitted = Array.isArray(requested) ? new Map(requested.map(item => [asId(item.controller_id), Boolean(item.done)]).filter(([id]) => id)) : null;
@@ -2093,8 +2161,7 @@ function createRepository(db, defaultProjectId) {
   }
 
   function statusRows(code, currentUser) {
-    const filter = controllerFilter(code, 's');
-    return all(`SELECT s.*,c.code controller,c.sort_order controller_order,
+    return filterRowsByHierarchyScope(all(`SELECT s.*,c.code controller,c.sort_order controller_order,
       creator.display_name created_by_name,responsible.display_name responsible_name,
       fg.name function_group_name,COALESCE(fg.sort_order,9999) function_group_order,
       fge.name function_group_element_name,
@@ -2115,20 +2182,12 @@ function createRepository(db, defaultProjectId) {
       LEFT JOIN status_subgroups ssg ON ssg.id=s.status_subgroup_id
       LEFT JOIN categories cat ON cat.project_id=s.project_id AND cat.name=s.category
       LEFT JOIN subcategories sub ON sub.category_id=cat.id AND sub.name=s.subcategory
-      ${filter.sql}
-      ORDER BY status_group_order,status_subgroup_order,c.sort_order,function_group_order,category_order,function_check_order,subcategory_order,s.id`, ...filter.params).map(row => decorateStatus(attachControllerMeta(row), currentUser));
+      WHERE s.project_id=?
+      ORDER BY status_group_order,status_subgroup_order,c.sort_order,function_group_order,category_order,function_check_order,subcategory_order,s.id`, activeProjectId()), code).map(row => decorateStatus(attachControllerMeta(row), currentUser));
   }
 
   function taskRows(code, currentUser) {
-    const selectedControllerIds = new Set(controllersForScope(code).map(item => item.id));
-    const groupControllerCache = new Map();
-    const matchesScope = row => {
-      if (!code || code === 'all') return true;
-      if (!row.controller_group_id) return selectedControllerIds.has(Number(row.controller_id));
-      if (!groupControllerCache.has(row.controller_group_id)) groupControllerCache.set(row.controller_group_id, new Set(controllersInGroup(row.controller_group_id).map(item => item.id)));
-      return [...groupControllerCache.get(row.controller_group_id)].some(id => selectedControllerIds.has(id));
-    };
-    return all(`SELECT t.*,c.code controller,c.sort_order controller_order,
+    return filterRowsByHierarchyScope(all(`SELECT t.*,c.code controller,c.sort_order controller_order,
       creator.display_name created_by_name,owner.display_name owner_name,
       fg.name function_group_name,fge.name function_group_element_name,
       COALESCE(cat.sort_order,9999) category_order,COALESCE(sub.sort_order,9999) subcategory_order
@@ -2141,12 +2200,11 @@ function createRepository(db, defaultProjectId) {
       LEFT JOIN task_categories cat ON cat.project_id=t.project_id AND cat.name=t.category
       LEFT JOIN task_subcategories sub ON sub.category_id=cat.id AND sub.name=t.subcategory
       WHERE t.project_id=?
-      ORDER BY c.sort_order,t.created_at DESC,t.id DESC`, activeProjectId()).filter(matchesScope).map(row => decorateTask(attachControllerMeta(row), currentUser));
+      ORDER BY c.sort_order,t.created_at DESC,t.id DESC`, activeProjectId()), code).map(row => decorateTask(attachControllerMeta(row), currentUser));
   }
 
   function pointRows(code, currentUser) {
-    const filter = controllerFilter(code, 'p');
-    return all(`SELECT p.*,c.code controller,c.sort_order controller_order,
+    return filterRowsByHierarchyScope(all(`SELECT p.*,c.code controller,c.sort_order controller_order,
       creator.display_name created_by_name,owner.display_name owner_name,
       COALESCE(cat.sort_order,9999) category_order,COALESCE(sub.sort_order,9999) subcategory_order
       FROM open_points p
@@ -2155,8 +2213,8 @@ function createRepository(db, defaultProjectId) {
       LEFT JOIN users owner ON owner.id=p.owner_user_id
       LEFT JOIN categories cat ON cat.project_id=p.project_id AND cat.name=p.category
       LEFT JOIN subcategories sub ON sub.category_id=cat.id AND sub.name=p.subcategory
-      ${filter.sql}
-      ORDER BY c.sort_order,p.created_at DESC,p.id DESC`, ...filter.params).map(row => decoratePoint(attachControllerMeta(row), currentUser));
+      WHERE p.project_id=?
+      ORDER BY c.sort_order,p.created_at DESC,p.id DESC`, activeProjectId()), code).map(row => decoratePoint(attachControllerMeta(row), currentUser));
   }
 
   function noteRows(code, from, to, currentUser) {
@@ -2193,10 +2251,9 @@ function createRepository(db, defaultProjectId) {
   }
 
   function goalRows(code, currentUser) {
-    const filter = controllerFilter(code, 'g');
-    return all(`SELECT g.*,c.code controller,c.sort_order controller_order,creator.display_name created_by_name
+    return filterRowsByHierarchyScope(all(`SELECT g.*,c.code controller,c.sort_order controller_order,creator.display_name created_by_name
       FROM goals g LEFT JOIN controllers c ON c.id=g.controller_id LEFT JOIN users creator ON creator.id=g.created_by
-      ${filter.sql} ORDER BY g.due_date IS NULL,g.due_date,g.id DESC`, ...filter.params).map(goal => ({
+      WHERE g.project_id=? ORDER BY g.due_date IS NULL,g.due_date,g.id DESC`, activeProjectId()), code).map(goal => ({
         ...attachControllerMeta(goal),
         links: all('SELECT * FROM goal_links WHERE project_id=? AND goal_id=? ORDER BY entity_type,entity_id', activeProjectId(), goal.id),
         comments: commentRows('goal', goal.id),
@@ -2210,13 +2267,7 @@ function createRepository(db, defaultProjectId) {
   }
 
   function taskMetricRows(controllerIds) {
-    const selected = new Set(controllerIds.map(Number));
-    const groupCache = new Map();
-    return all('SELECT id,controller_id,controller_group_id,status,due_date,created_at FROM tasks WHERE project_id=?', activeProjectId()).filter(row => {
-      if (!row.controller_group_id) return selected.has(Number(row.controller_id));
-      if (!groupCache.has(row.controller_group_id)) groupCache.set(row.controller_group_id, controllersInGroup(row.controller_group_id).map(item => item.id));
-      return groupCache.get(row.controller_group_id).some(id => selected.has(Number(id)));
-    });
+    return scopedTableRows('tasks', controllerIds, 'id,controller_id,controller_group_id,status,due_date,created_at');
   }
 
   function taskMetrics(controllerIds) {
@@ -2240,11 +2291,30 @@ function createRepository(db, defaultProjectId) {
       points: { total: 0, open: 0, waiting: 0, closed: 0, blocked: 0, reminders_overdue: 0, progress: 0 },
       goals: { total: 0, done: 0, in_progress: 0, overdue: 0, blocked: 0, open: 0, closed: 0, progress: 0 }
     };
-    const placeholders = controllerIds.map(() => '?').join(',');
-    const status = one(`SELECT COUNT(*) total,SUM(status='Done') done,SUM(status='In progress') in_progress,SUM(status IN ('Blocked','NOK / Retest required')) blocked FROM status_items WHERE project_id=? AND controller_id IN (${placeholders})`, activeProjectId(), ...controllerIds);
+    const statusRowsForScope = scopedTableRows('status_items', controllerIds, 'id,controller_id,controller_group_id,status');
     const tasks = taskMetrics(controllerIds);
-    const points = one(`SELECT COUNT(*) total,SUM(status!='Closed') open,SUM(status='Waiting') waiting,SUM(status='Closed') closed,SUM(status!='Closed' AND reminder_date IS NOT NULL AND reminder_date<date('now')) reminders_overdue FROM open_points WHERE project_id=? AND controller_id IN (${placeholders})`, activeProjectId(), ...controllerIds);
-    const goals = one(`SELECT COUNT(*) total,SUM(status='Done') done,SUM(status='In progress') in_progress,SUM(status!='Done' AND due_date IS NOT NULL AND due_date<date('now')) overdue FROM goals WHERE project_id=? AND controller_id IN (${placeholders})`, activeProjectId(), ...controllerIds);
+    const pointRowsForScope = scopedTableRows('open_points', controllerIds, 'id,controller_id,controller_group_id,status,reminder_date');
+    const goalRowsForScope = scopedTableRows('goals', controllerIds, 'id,controller_id,controller_group_id,status,due_date');
+    const todayValue = new Date().toISOString().slice(0, 10);
+    const status = {
+      total: statusRowsForScope.length,
+      done: statusRowsForScope.filter(row => row.status === 'Done').length,
+      in_progress: statusRowsForScope.filter(row => row.status === 'In progress').length,
+      blocked: statusRowsForScope.filter(row => ['Blocked', 'NOK / Retest required'].includes(row.status)).length
+    };
+    const points = {
+      total: pointRowsForScope.length,
+      open: pointRowsForScope.filter(row => row.status !== 'Closed').length,
+      waiting: pointRowsForScope.filter(row => row.status === 'Waiting').length,
+      closed: pointRowsForScope.filter(row => row.status === 'Closed').length,
+      reminders_overdue: pointRowsForScope.filter(row => row.status !== 'Closed' && row.reminder_date && row.reminder_date < todayValue).length
+    };
+    const goals = {
+      total: goalRowsForScope.length,
+      done: goalRowsForScope.filter(row => row.status === 'Done').length,
+      in_progress: goalRowsForScope.filter(row => row.status === 'In progress').length,
+      overdue: goalRowsForScope.filter(row => row.status !== 'Done' && row.due_date && row.due_date < todayValue).length
+    };
     const normalize = object => Object.fromEntries(Object.entries(object).map(([key, value]) => [key, Number(value || 0)]));
     const result = { status: normalize(status), tasks: normalize(tasks), points: normalize(points), goals: normalize(goals) };
     result.status.open = result.status.total - result.status.done;
@@ -2264,12 +2334,11 @@ function createRepository(db, defaultProjectId) {
 
   function overviewTrends(controllerIds) {
     if (!controllerIds.length) return { day: [], week: [], month: [] };
-    const placeholders = controllerIds.map(() => '?').join(',');
     const entityData = {
-      status: all(`SELECT id,status,created_at FROM status_items WHERE project_id=? AND controller_id IN (${placeholders})`, activeProjectId(), ...controllerIds),
+      status: scopedTableRows('status_items', controllerIds, 'id,controller_id,controller_group_id,status,created_at'),
       task: taskMetricRows(controllerIds).map(({ id, status, created_at }) => ({ id, status, created_at })),
-      point: all(`SELECT id,status,created_at FROM open_points WHERE project_id=? AND controller_id IN (${placeholders})`, activeProjectId(), ...controllerIds),
-      goal: all(`SELECT id,status,created_at FROM goals WHERE project_id=? AND controller_id IN (${placeholders})`, activeProjectId(), ...controllerIds)
+      point: scopedTableRows('open_points', controllerIds, 'id,controller_id,controller_group_id,status,created_at'),
+      goal: scopedTableRows('goals', controllerIds, 'id,controller_id,controller_group_id,status,created_at')
     };
     const idsByType = Object.fromEntries(Object.entries(entityData).map(([type, rows]) => [type, new Set(rows.map(row => row.id))]));
     const audits = all(`SELECT entity_type,entity_id,changed_at,snapshot_json FROM audit_log
@@ -3044,8 +3113,9 @@ function createRepository(db, defaultProjectId) {
     const isMentioned = (type, id) => mentionIds(type, id).includes(currentUser.id);
     const events = [];
     const eventKeys = new Set();
+    const calendarGroupCache = new Map();
     const push = event => {
-      if (event.controller_id && !controllerIds.has(event.controller_id)) return;
+      if ((event.controller_id || event.controller_group_id) && !matchesHierarchyScope(event, controllerIds, calendarGroupCache)) return;
       if (category && !String(event.category || '').toLocaleLowerCase('pl').includes(category.toLocaleLowerCase('pl'))) return;
       if (priorities.size && ['task', 'point', 'status', 'goal'].includes(event.entity_type) && !priorities.has(event.priority || 'Medium')) return;
       if (onlyMine && !event.related_to_me) return;
@@ -3065,19 +3135,19 @@ function createRepository(db, defaultProjectId) {
       const end = row.due_date;
       if (end < range.from || start > range.to) continue;
       const ownSubtasks = row.checklist.filter(item => item.owner_user_id === currentUser.id);
-      push({ entity_type: 'task', entity_id: row.id, title: row.title, start_date: start, end_date: end, controller: row.controller, controller_label: row.controller_label, controller_id: row.controller_id, category: row.category, priority: row.priority, status: row.status, assigned_names: row.owner_name, due_date: row.due_date, color: row.status === 'Done' ? 'green' : row.due_date && row.due_date < new Date().toISOString().slice(0, 10) ? 'red' : 'blue', related_to_me: row.assignee_user_ids.includes(currentUser.id) || row.created_by === currentUser.id || isMentioned('task', row.id) || ownSubtasks.length > 0 });
+      push({ entity_type: 'task', entity_id: row.id, title: row.title, start_date: start, end_date: end, controller: row.controller, controller_label: row.controller_label, controller_id: row.controller_id, controller_group_id: row.controller_group_id, category: row.category, priority: row.priority, status: row.status, assigned_names: row.owner_name, due_date: row.due_date, color: row.status === 'Done' ? 'green' : row.due_date && row.due_date < new Date().toISOString().slice(0, 10) ? 'red' : 'blue', related_to_me: row.assignee_user_ids.includes(currentUser.id) || row.created_by === currentUser.id || isMentioned('task', row.id) || ownSubtasks.length > 0 });
     }
     if (types.has('point')) for (const row of pointList) {
       const mine = row.owner_user_id === currentUser.id || row.created_by === currentUser.id || isMentioned('point', row.id);
-      if (row.start_date && row.due_date && row.due_date >= range.from && row.start_date <= range.to) push({ entity_type: 'point', entity_id: row.id, title: row.title, start_date: row.start_date, end_date: row.due_date, controller: row.controller, controller_label: row.controller_label, controller_id: row.controller_id, category: row.category, priority: row.priority, status: row.status, assigned_names: row.owner_name, due_date: row.due_date, color: row.status === 'Closed' ? 'green' : row.due_date < new Date().toISOString().slice(0, 10) ? 'red' : 'amber', related_to_me: mine });
-      if (row.reminder_date && row.reminder_date >= range.from && row.reminder_date <= range.to) push({ entity_type: 'point', entity_id: row.id, title: `Przypomnienie · ${row.title}`, start_date: row.reminder_date, end_date: row.reminder_date, controller: row.controller, controller_label: row.controller_label, controller_id: row.controller_id, category: row.category, priority: row.priority, status: row.status, assigned_names: row.owner_name, due_date: row.due_date, color: row.status === 'Closed' ? 'green' : row.reminder_date < new Date().toISOString().slice(0, 10) ? 'red' : 'amber', related_to_me: mine });
+      if (row.start_date && row.due_date && row.due_date >= range.from && row.start_date <= range.to) push({ entity_type: 'point', entity_id: row.id, title: row.title, start_date: row.start_date, end_date: row.due_date, controller: row.controller, controller_label: row.controller_label, controller_id: row.controller_id, controller_group_id: row.controller_group_id, category: row.category, priority: row.priority, status: row.status, assigned_names: row.owner_name, due_date: row.due_date, color: row.status === 'Closed' ? 'green' : row.due_date < new Date().toISOString().slice(0, 10) ? 'red' : 'amber', related_to_me: mine });
+      if (row.reminder_date && row.reminder_date >= range.from && row.reminder_date <= range.to) push({ entity_type: 'point', entity_id: row.id, title: `Przypomnienie · ${row.title}`, start_date: row.reminder_date, end_date: row.reminder_date, controller: row.controller, controller_label: row.controller_label, controller_id: row.controller_id, controller_group_id: row.controller_group_id, category: row.category, priority: row.priority, status: row.status, assigned_names: row.owner_name, due_date: row.due_date, color: row.status === 'Closed' ? 'green' : row.reminder_date < new Date().toISOString().slice(0, 10) ? 'red' : 'amber', related_to_me: mine });
     }
     if (types.has('status')) for (const row of statusList) {
       const date = row.checked_on || String(row.created_at).slice(0, 10);
       if (date < range.from || date > range.to) continue;
-      push({ entity_type: 'status', entity_id: row.id, title: row.function_detail, start_date: date, end_date: date, controller: row.controller, controller_label: row.controller_label, controller_id: row.controller_id, category: row.category, priority: row.criticality, status: row.status, assigned_names: row.responsible_name, color: row.status === 'Done' ? 'green' : row.status === 'Blocked' ? 'red' : 'violet', related_to_me: row.responsible_user_ids.includes(currentUser.id) || row.created_by === currentUser.id });
+      push({ entity_type: 'status', entity_id: row.id, title: row.function_detail, start_date: date, end_date: date, controller: row.controller, controller_label: row.controller_label, controller_id: row.controller_id, controller_group_id: row.controller_group_id, category: row.category, priority: row.criticality, status: row.status, assigned_names: row.responsible_name, color: row.status === 'Done' ? 'green' : row.status === 'Blocked' ? 'red' : 'violet', related_to_me: row.responsible_user_ids.includes(currentUser.id) || row.created_by === currentUser.id });
     }
-    if (types.has('goal')) for (const row of goalList) if (row.due_date && row.due_date >= range.from && row.due_date <= range.to) push({ entity_type: 'goal', entity_id: row.id, title: row.title, start_date: row.due_date, end_date: row.due_date, controller: row.controller, controller_label: row.controller_label, controller_id: row.controller_id, category: 'Cel', priority: row.priority, status: row.status, assigned_names: row.created_by_name, due_date: row.due_date, color: row.status === 'Done' ? 'green' : 'blue', related_to_me: row.created_by === currentUser.id });
+    if (types.has('goal')) for (const row of goalList) if (row.due_date && row.due_date >= range.from && row.due_date <= range.to) push({ entity_type: 'goal', entity_id: row.id, title: row.title, start_date: row.due_date, end_date: row.due_date, controller: row.controller, controller_label: row.controller_label, controller_id: row.controller_id, controller_group_id: row.controller_group_id, category: 'Cel', priority: row.priority, status: row.status, assigned_names: row.created_by_name, due_date: row.due_date, color: row.status === 'Done' ? 'green' : 'blue', related_to_me: row.created_by === currentUser.id });
     if (types.has('note')) for (const row of noteList) if (row.note_date >= range.from && row.note_date <= range.to) push({ entity_type: 'note', entity_id: row.id, title: `${row.type} · ${row.content.slice(0, 70)}`, start_date: row.note_date, end_date: row.note_date, controller: row.controller, controller_label: row.controller_label, controller_id: row.controller_id, category: row.type, status: row.shift, assigned_names: row.created_by_name || row.author, color: 'gray', related_to_me: row.created_by === currentUser.id || isMentioned('note', row.id) });
     if (types.has('annotation')) for (const row of all(`SELECT ca.*,c.code controller,creator.display_name created_by_name,u.display_name assigned_user_name
       FROM calendar_annotations ca LEFT JOIN controllers c ON c.id=ca.controller_id LEFT JOIN users creator ON creator.id=ca.created_by LEFT JOIN users u ON u.id=ca.assigned_user_id
@@ -3090,7 +3160,7 @@ function createRepository(db, defaultProjectId) {
       if (!types.has(placement.entity_type)) continue;
       const row = maps[placement.entity_type]?.get(placement.entity_id);
       if (!row) continue;
-      const common = { entity_type: placement.entity_type, entity_id: row.id, start_date: placement.calendar_date, end_date: placement.calendar_date, controller: row.controller, controller_label: row.controller_label, controller_id: row.controller_id, category: row.category || row.type || (placement.entity_type === 'goal' ? 'Cel' : ''), priority: row.priority || row.criticality || 'Medium', status: row.status || row.shift, due_date: row.due_date, scheduled: true };
+      const common = { entity_type: placement.entity_type, entity_id: row.id, start_date: placement.calendar_date, end_date: placement.calendar_date, controller: row.controller, controller_label: row.controller_label, controller_id: row.controller_id, controller_group_id: row.controller_group_id, category: row.category || row.type || (placement.entity_type === 'goal' ? 'Cel' : ''), priority: row.priority || row.criticality || 'Medium', status: row.status || row.shift, due_date: row.due_date, scheduled: true };
       if (placement.entity_type === 'task' && row.start_date && row.due_date) push({ ...common, start_date: row.start_date, end_date: row.due_date, title: row.title, assigned_names: row.owner_name, color: 'blue', related_to_me: row.assignee_user_ids.includes(currentUser.id) || row.created_by === currentUser.id || isMentioned('task', row.id) });
       if (placement.entity_type === 'point') push({ ...common, title: row.title, assigned_names: row.owner_name, color: 'amber', related_to_me: row.owner_user_id === currentUser.id || row.created_by === currentUser.id || isMentioned('point', row.id) });
       if (placement.entity_type === 'status') push({ ...common, title: row.function_detail, assigned_names: row.responsible_name, color: 'violet', related_to_me: row.responsible_user_ids.includes(currentUser.id) || row.created_by === currentUser.id });
@@ -3321,8 +3391,10 @@ function createRepository(db, defaultProjectId) {
         try { snapshot = JSON.parse(row.snapshot_json || '{}'); } catch {}
         const label = snapshot.function_detail || snapshot.title || snapshot.content?.slice(0, 80) || ({ status: 'Punkt statusu', task: 'Zadanie', point: 'Otwarty punkt', note: 'Przekazanie statusu' })[row.entity_type] || 'Element';
         const exists = Boolean(one(`SELECT 1 FROM ${TABLES[row.entity_type]} WHERE id=? AND project_id=?`, row.entity_id, activeProjectId()));
-        const controllerItem = hierarchyData().controllers.find(item => item.id === Number(snapshot.controller_id));
-        return { ...row, changes, snapshot, label, exists, controller_id: snapshot.controller_id || null, controller_label: controllerItem?.display_name || '', controller_path: controllerItem?.hierarchy_label || '', root_group_id: controllerItem?.root_group_id || null };
+        const hierarchy = hierarchyData();
+        const controllerItem = hierarchy.controllers.find(item => item.id === Number(snapshot.controller_id));
+        const groupItem = snapshot.controller_group_id ? hierarchy.groupMap.get(Number(snapshot.controller_group_id)) : null;
+        return { ...row, changes, snapshot, label, exists, controller_id: snapshot.controller_id || null, controller_group_id: snapshot.controller_group_id || null, controller_label: groupItem?.path_label || controllerItem?.display_name || '', controller_path: groupItem?.path_label || controllerItem?.hierarchy_label || '', root_group_id: groupItem?.root_group_id || controllerItem?.root_group_id || null };
       });
   }
 
@@ -4944,12 +5016,25 @@ function createRepository(db, defaultProjectId) {
         }).filter(Boolean),
         ...controllers.map(controller => ({ scope: controller.code, id: controller.id, type: 'controller', parent_scope: controller.group_id ? `group:${controller.group_id}` : 'all', label: controller.display_name, path_label: controller.hierarchy_label, depth: (controller.group_depth || 0) + 1, metrics: controller.metrics, trends: controller.trends }))
       ];
-      const status_breakdown = ids.length ? all(`SELECT controller_id,category,subcategory,COUNT(*) total,SUM(status='Done') done
-        FROM status_items WHERE project_id=? AND controller_id IN (${ids.map(() => '?').join(',')})
-        GROUP BY controller_id,category,subcategory`, activeProjectId(), ...ids).map(row => {
-          const controllerItem = hierarchy.controllers.find(item => item.id === Number(row.controller_id));
-          return { ...row, total: Number(row.total || 0), done: Number(row.done || 0), progress: row.total ? Math.round(Number(row.done || 0) * 100 / Number(row.total)) : 0, controller_label: controllerItem?.display_name || '', controller_path: controllerItem?.hierarchy_label || '' };
-        }) : [];
+      const statusBreakdownMap = new Map();
+      for (const row of ids.length ? scopedTableRows('status_items', ids, 'controller_id,controller_group_id,category,subcategory,status') : []) {
+        const scopeKey = row.controller_group_id ? `group:${row.controller_group_id}` : `controller:${row.controller_id}`;
+        const key = `${scopeKey}\u0000${row.category}\u0000${row.subcategory}`;
+        const aggregate = statusBreakdownMap.get(key) || { controller_id: row.controller_id, controller_group_id: row.controller_group_id, category: row.category, subcategory: row.subcategory, total: 0, done: 0 };
+        aggregate.total += 1;
+        if (row.status === 'Done') aggregate.done += 1;
+        statusBreakdownMap.set(key, aggregate);
+      }
+      const status_breakdown = [...statusBreakdownMap.values()].map(row => {
+        const groupItem = row.controller_group_id ? hierarchy.groupMap.get(Number(row.controller_group_id)) : null;
+        const controllerItem = hierarchy.controllers.find(item => item.id === Number(row.controller_id));
+        return {
+          ...row,
+          progress: row.total ? Math.round(row.done * 100 / row.total) : 0,
+          controller_label: groupItem?.path_label || controllerItem?.display_name || '',
+          controller_path: groupItem?.path_label || controllerItem?.hierarchy_label || ''
+        };
+      });
       return {
         scope: clean(code) || 'all',
         overall: dashboardForControllers(ids),
@@ -5035,11 +5120,13 @@ function createRepository(db, defaultProjectId) {
         : asId(input.responsible_user_id) ? [asId(input.responsible_user_id)] : before?.responsible_user_ids || [];
       const ownerIds = [...new Set(requestedOwners.map(asId).filter(Boolean))];
       const ownerId = ownerIds[0] || null;
-      const selectedGroup = asId(input.function_group_id) ? functionGroup(input.function_group_id) : null;
-      const selectedController = selectedGroup || controller(input.controller);
-      const elementId = asId(input.function_group_element_id);
+      const hierarchyScope = resolveHierarchyTarget(input, before);
+      const scopeGroup = hierarchyScope.controller_group_id ? hierarchyData().groupMap.get(Number(hierarchyScope.controller_group_id)) : null;
+      const selectedGroup = !hierarchyScope.controller_group_id && asId(input.function_group_id) ? functionGroup(input.function_group_id) : null;
+      if (selectedGroup && Number(selectedGroup.controller_id) !== Number(hierarchyScope.controller.id)) throw appError('Wybrana grupa funkcyjna nie należy do wybranego sterownika');
+      const elementId = hierarchyScope.controller_group_id ? null : asId(input.function_group_element_id);
       if (elementId && (!selectedGroup || !one('SELECT 1 FROM function_group_elements WHERE id=? AND function_group_id=?', elementId, selectedGroup.id))) throw appError('Wybrany element nie należy do grupy funkcyjnej');
-      const groupSubcategoryId = asId(input.function_group_subcategory_id);
+      const groupSubcategoryId = hierarchyScope.controller_group_id ? null : asId(input.function_group_subcategory_id);
       if (groupSubcategoryId && (!selectedGroup || !one('SELECT 1 FROM function_group_subcategories WHERE id=? AND function_group_id=?', groupSubcategoryId, selectedGroup.id))) throw appError('Wybrana podkategoria nie należy do grupy funkcyjnej');
       const defaultFunction = clean(input.subcategory) ? one(`SELECT s.default_function FROM subcategories s JOIN categories c ON c.id=s.category_id
         WHERE c.project_id=? AND c.name=? COLLATE NOCASE AND s.name=? COLLATE NOCASE`, activeProjectId(), clean(input.category), clean(input.subcategory))?.default_function : '';
@@ -5074,13 +5161,14 @@ function createRepository(db, defaultProjectId) {
       const effectiveStatusChanged = Boolean(before && effectiveStatus !== before.status);
       const values = {
         project_id: activeProjectId(),
-        controller_id: selectedGroup ? selectedGroup.controller_id : selectedController.id,
+        controller_id: hierarchyScope.controller.id,
+        controller_group_id: hierarchyScope.controller_group_id,
         function_group_id: selectedGroup?.id || null,
         function_group_element_id: elementId,
         function_group_subcategory_id: groupSubcategoryId,
         status_group_id: matrixGroupId,
         status_subgroup_id: matrixSubgroupId,
-        station: selectedGroup?.name || clean(input.station), function_detail: defaultFunction || clean(input.function_detail) || before?.function_detail || matrixScope?.subgroup?.name || matrixScope?.group?.name || 'Element statusu',
+        station: scopeGroup?.path_label || selectedGroup?.name || clean(input.station), function_detail: defaultFunction || clean(input.function_detail) || before?.function_detail || matrixScope?.subgroup?.name || matrixScope?.group?.name || 'Element statusu',
         category: matrixScope?.group.name || clean(input.category) || before?.category || 'General', subcategory: matrixScope?.subgroup?.name || (Object.hasOwn(input, 'subcategory') ? clean(input.subcategory) : before?.subcategory || ''), milestone: '',
         criticality: clean(input.criticality) || 'Medium', responsible_user_id: ownerId, responsible: userName(ownerId),
         status: effectiveStatus, dependency_override: overrideFlag, checked_by: clean(input.checked_by), checked_on: nullableDate(input.checked_on),
@@ -5176,17 +5264,9 @@ function createRepository(db, defaultProjectId) {
         : Array.isArray(input.dependency_task_ids) ? input.dependency_task_ids.map(entity_id => ({ entity_type: 'task', entity_id }))
           : before?.dependency_refs || [];
       if (id) validateEntityDependencies('task', id, requestedDependencies);
-      const hierarchyTarget = clean(input.hierarchy_target);
-      const scopeGroupId = hierarchyTarget.startsWith('group:') ? asId(hierarchyTarget.slice(6)) : asId(input.controller_group_id ?? before?.controller_group_id);
-      let targetController;
-      if (scopeGroupId) {
-        if (!one('SELECT 1 FROM controller_groups WHERE id=? AND project_id=? AND active=1', scopeGroupId, activeProjectId())) throw appError('Wybrany obszar nie należy do projektu');
-        targetController = controllersInGroup(scopeGroupId)[0];
-        if (!targetController) throw appError('Wybrany obszar nie zawiera sterowników końcowych');
-      } else {
-        const controllerCode = hierarchyTarget.replace(/^controller:/, '') || clean(input.controller) || before?.controller_id && one('SELECT code FROM controllers WHERE id=?', before.controller_id)?.code;
-        targetController = controller(controllerCode);
-      }
+      const hierarchyScope = resolveHierarchyTarget(input, before);
+      const scopeGroupId = hierarchyScope.controller_group_id;
+      const targetController = hierarchyScope.controller;
       const requestedDirect = Array.isArray(input.direct_assignee_user_ids) ? input.direct_assignee_user_ids
         : Array.isArray(input.assignee_user_ids) ? input.assignee_user_ids
           : asId(input.owner_user_id) ? [asId(input.owner_user_id)] : before?.direct_assignee_user_ids || [];
@@ -5253,8 +5333,9 @@ function createRepository(db, defaultProjectId) {
       const defaultDays = Number.isFinite(configuredDefaultDays) ? Math.max(1, Math.min(3650, configuredDefaultDays)) : 14;
       const defaultReminder = new Date();
       defaultReminder.setUTCDate(defaultReminder.getUTCDate() + defaultDays);
+      const hierarchyScope = resolveHierarchyTarget(input, before);
       const values = {
-        project_id: activeProjectId(), controller_id: controller(input.controller).id, title: clean(input.title), description: clean(input.description),
+        project_id: activeProjectId(), controller_id: hierarchyScope.controller.id, controller_group_id: hierarchyScope.controller_group_id, title: clean(input.title), description: clean(input.description),
         impact: clean(input.impact), priority: clean(input.priority) || 'Medium', owner_user_id: ownerId, owner: userName(ownerId),
         status: clean(input.status) || 'Open', waiting_for: clean(input.waiting_for), next_action: clean(input.next_action),
         start_date: nullableDate(input.start_date), due_date: nullableDate(input.due_date),
@@ -5280,7 +5361,7 @@ function createRepository(db, defaultProjectId) {
       writeAudit('point', recordId, id ? 'update' : 'create', currentUser, before, after);
       refreshDependentStatusItems('point', recordId, currentUser);
       const row = one(`SELECT p.*,c.code controller,creator.display_name created_by_name,owner.display_name owner_name FROM open_points p JOIN controllers c ON c.id=p.controller_id LEFT JOIN users creator ON creator.id=p.created_by LEFT JOIN users owner ON owner.id=p.owner_user_id WHERE p.id=?`, recordId);
-      return decoratePoint(row, currentUser);
+      return decoratePoint(attachControllerMeta(row), currentUser);
     },
     deletePoint(id, currentUser) { removeWithAudit('point', id, currentUser); },
 
@@ -5341,7 +5422,8 @@ function createRepository(db, defaultProjectId) {
       if (id && !before) throw appError('Nie znaleziono celu', 404);
       assertEntityEditable('goal', id, currentUser);
       assertFresh('goal', id, input.updated_at);
-      const values = { project_id: activeProjectId(), controller_id: controller(input.controller).id, title: clean(input.title), description: clean(input.description), status: clean(input.status) || 'Open', priority: clean(input.priority) || 'Medium', due_date: nullableDate(input.due_date) };
+      const hierarchyScope = resolveHierarchyTarget(input, before);
+      const values = { project_id: activeProjectId(), controller_id: hierarchyScope.controller.id, controller_group_id: hierarchyScope.controller_group_id, title: clean(input.title), description: clean(input.description), status: clean(input.status) || 'Open', priority: clean(input.priority) || 'Medium', due_date: nullableDate(input.due_date) };
       if (!values.title) throw appError('Nazwa celu jest wymagana');
       ensureDuplicateChanged('goal', input.duplicate_source_id, { ...values, links: input.links || [] });
       let recordId = id;
@@ -5397,10 +5479,11 @@ function createRepository(db, defaultProjectId) {
           UNION ALL SELECT cg.id FROM controller_groups cg JOIN selected s ON cg.parent_id=s.id
         ) SELECT DISTINCT c.id FROM controllers c WHERE c.project_id=? AND c.group_id IN (SELECT id FROM selected)`, project.id, ...areaGroups, project.id).map(row => row.id) : [];
         const areaControllerSet = new Set(areaControllers);
-        const taskInAreas = row => row.controller_group_id ? controllersInGroup(row.controller_group_id).some(item => areaControllerSet.has(item.id)) : areaControllerSet.has(row.controller_id);
-        const areaUpcomingTasks = tasks.filter(row => { const date = row.start_date || row.due_date; return taskInAreas(row) && row.status !== 'Done' && date && date >= today && date <= upcomingDate; });
-        const areaUpcomingPoints = points.filter(row => { const date = row.start_date || row.due_date || row.reminder_date; return areaControllerSet.has(row.controller_id) && row.status !== 'Closed' && date && date >= today && date <= upcomingDate; });
-        const areaUpcomingStatuses = statuses.filter(row => areaControllerSet.has(row.controller_id) && row.status !== 'Done');
+        const areaScopeCache = new Map();
+        const itemInAreas = row => matchesHierarchyScope(row, areaControllerSet, areaScopeCache);
+        const areaUpcomingTasks = tasks.filter(row => { const date = row.start_date || row.due_date; return itemInAreas(row) && row.status !== 'Done' && date && date >= today && date <= upcomingDate; });
+        const areaUpcomingPoints = points.filter(row => { const date = row.start_date || row.due_date || row.reminder_date; return itemInAreas(row) && row.status !== 'Closed' && date && date >= today && date <= upcomingDate; });
+        const areaUpcomingStatuses = statuses.filter(row => itemInAreas(row) && row.status !== 'Done');
         const minePoints = points.filter(row => row.owner_user_id === currentUser.id || row.created_by === currentUser.id || mentioned('point', row.id));
         const mineNotes = notes.filter(row => row.created_by === currentUser.id || mentioned('note', row.id));
         const mineStatuses = statuses.filter(row => row.responsible_user_ids.includes(currentUser.id) || row.created_by === currentUser.id);

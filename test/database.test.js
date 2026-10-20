@@ -602,9 +602,44 @@ test('V7 supports canonical hierarchy IDs, area tasks, goal links and configurab
       assert.ok(repository.tasks(plcB.code, admin).some(item => item.id === areaTask.id));
       assert.equal(repository.overview(plcA.code).overall.tasks.total, repository.tasks(plcA.code, admin).length);
 
+      const today = new Date().toISOString().slice(0, 10);
+      const areaStatus = repository.saveStatus(null, {
+        hierarchy_target: `group:${root.id}`, function_detail: 'Status całego obszaru TEST V7', category: 'Hardware', status: 'In progress'
+      }, admin);
+      const areaPoint = repository.savePoint(null, {
+        hierarchy_target: `group:${root.id}`, title: 'Otwarty punkt całego obszaru TEST V7', status: 'Open', start_date: today, due_date: today
+      }, admin);
+      const areaGoal = repository.saveGoal(null, {
+        hierarchy_target: `group:${root.id}`, title: 'Cel całego obszaru TEST V7', status: 'Open', due_date: today, links: []
+      }, admin);
+      for (const item of [areaStatus, areaPoint, areaGoal]) {
+        assert.equal(item.controller_group_id, root.id);
+        assert.equal(item.scope_is_group, true);
+        assert.match(item.scope_label, /TEST V7/);
+      }
+      for (const scope of [plcA.code, plcB.code, `group:${areaA.id}`]) {
+        assert.ok(repository.status(scope, admin).some(item => item.id === areaStatus.id));
+        assert.ok(repository.points(scope, admin).some(item => item.id === areaPoint.id));
+        assert.ok(repository.goals(scope, admin).some(item => item.id === areaGoal.id));
+      }
+      const outsideController = repository.controllers().find(item => ![plcA.id, plcB.id].includes(item.id));
+      assert.ok(outsideController);
+      assert.equal(repository.status(outsideController.code, admin).some(item => item.id === areaStatus.id), false);
+      assert.equal(repository.points(outsideController.code, admin).some(item => item.id === areaPoint.id), false);
+      assert.equal(repository.goals(outsideController.code, admin).some(item => item.id === areaGoal.id), false);
+      const inheritedOverview = repository.overview(plcA.code);
+      assert.equal(inheritedOverview.overall.status.total, repository.status(plcA.code, admin).length);
+      assert.equal(inheritedOverview.overall.points.total, repository.points(plcA.code, admin).length);
+      assert.equal(inheritedOverview.overall.goals.total, repository.goals(plcA.code, admin).length);
+      assert.ok(inheritedOverview.status_breakdown.some(item => item.controller_group_id === root.id));
+      const inheritedCalendar = repository.calendar({ from: today, to: today, scope: plcA.code, types: ['point', 'goal'], only_mine: false }, admin);
+      assert.ok(inheritedCalendar.events.some(item => item.entity_type === 'point' && item.entity_id === areaPoint.id));
+      assert.ok(inheritedCalendar.events.some(item => item.entity_type === 'goal' && item.entity_id === areaGoal.id));
+
       const status = repository.saveStatus(null, {
         controller: plcA.code, function_detail: 'Status przypisany do celu', category: 'Hardware', status: 'In progress'
       }, admin);
+      assert.equal(status.controller_group_id, null);
       const goal = repository.saveGoal(null, { controller: plcA.code, title: 'Cel V7', status: 'Open', links: [] }, admin);
       const linkedStatus = repository.saveStatus(status.id, { ...status, controller: plcA.code, links: [{ entity_type: 'goal', entity_id: goal.id }] }, admin);
       assert.equal(linkedStatus.links.filter(link => link.entity_type === 'goal' && link.entity_id === goal.id).length, 1);
