@@ -234,6 +234,23 @@ CREATE TABLE IF NOT EXISTS status_columns (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS status_workflow_states (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  value TEXT NOT NULL,
+  label TEXT NOT NULL,
+  icon TEXT NOT NULL DEFAULT '○',
+  description TEXT NOT NULL DEFAULT '',
+  system_key TEXT,
+  included INTEGER NOT NULL DEFAULT 1,
+  counts_as_done INTEGER NOT NULL DEFAULT 0,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(project_id,value),
+  UNIQUE(project_id,system_key)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS status_items (
   id INTEGER PRIMARY KEY,
   project_id INTEGER NOT NULL DEFAULT 1 REFERENCES projects(id) ON DELETE CASCADE,
@@ -248,7 +265,7 @@ CREATE TABLE IF NOT EXISTS status_items (
   criticality TEXT NOT NULL DEFAULT 'Medium',
   responsible TEXT NOT NULL DEFAULT '',
   responsible_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  status TEXT NOT NULL DEFAULT 'Ready to test',
+  status TEXT NOT NULL DEFAULT 'Never checked',
   dependency_override INTEGER NOT NULL DEFAULT 0,
   checked_by TEXT NOT NULL DEFAULT '',
   checked_on TEXT,
@@ -886,6 +903,8 @@ CREATE TABLE IF NOT EXISTS project_meetings (
   id INTEGER PRIMARY KEY,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   meeting_date TEXT NOT NULL,
+  period_from TEXT,
+  period_to TEXT,
   title TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','closed')),
   summary TEXT NOT NULL DEFAULT '',
@@ -902,12 +921,28 @@ CREATE TABLE IF NOT EXISTS project_meeting_items (
   entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point','goal','note')),
   entity_id INTEGER NOT NULL,
   decision TEXT NOT NULL DEFAULT '',
+  objective TEXT NOT NULL DEFAULT 'Kontynuacja',
+  outcome_comment TEXT NOT NULL DEFAULT '',
+  target_status TEXT NOT NULL DEFAULT '',
+  baseline_json TEXT NOT NULL DEFAULT '{}',
   owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
   due_date TEXT,
   item_status TEXT NOT NULL DEFAULT 'open' CHECK(item_status IN ('open','decided','deferred')),
   sort_order INTEGER NOT NULL DEFAULT 0,
   UNIQUE(meeting_id,entity_type,entity_id)
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS project_meeting_item_assignees (
+  meeting_item_id INTEGER NOT NULL REFERENCES project_meeting_items(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY(meeting_item_id,user_id)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS project_meeting_item_workers (
+  meeting_item_id INTEGER NOT NULL REFERENCES project_meeting_items(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY(meeting_item_id,user_id)
+) STRICT, WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS external_dependencies (
   id INTEGER PRIMARY KEY,
@@ -922,23 +957,6 @@ CREATE TABLE IF NOT EXISTS external_dependencies (
   next_followup TEXT,
   owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
   note TEXT NOT NULL DEFAULT '',
-  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS knowledge_articles (
-  id INTEGER PRIMARY KEY,
-  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  title TEXT NOT NULL,
-  problem TEXT NOT NULL,
-  solution TEXT NOT NULL,
-  category TEXT NOT NULL DEFAULT '',
-  tags TEXT NOT NULL DEFAULT '',
-  source_entity_type TEXT NOT NULL DEFAULT '',
-  source_entity_id INTEGER,
-  status TEXT NOT NULL DEFAULT 'published' CHECK(status IN ('draft','published','archived')),
-  use_count INTEGER NOT NULL DEFAULT 0,
   created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -962,6 +980,7 @@ CREATE INDEX IF NOT EXISTS idx_function_checks_group ON function_group_checks(fu
 CREATE INDEX IF NOT EXISTS idx_status_groups_project ON status_groups(project_id,sort_order);
 CREATE INDEX IF NOT EXISTS idx_status_subgroups_group ON status_subgroups(status_group_id,sort_order);
 CREATE INDEX IF NOT EXISTS idx_status_columns_scope ON status_columns(status_group_id,status_subgroup_id,sort_order);
+CREATE INDEX IF NOT EXISTS idx_status_workflow_project ON status_workflow_states(project_id,included,sort_order);
 CREATE INDEX IF NOT EXISTS idx_tasks_controller_status ON tasks(controller_id,status);
 CREATE INDEX IF NOT EXISTS idx_points_controller_status ON open_points(controller_id,status);
 CREATE INDEX IF NOT EXISTS idx_notes_controller_date ON daily_notes(controller_id,note_date DESC);
@@ -1001,5 +1020,4 @@ CREATE INDEX IF NOT EXISTS idx_monthly_review_items_review ON monthly_employee_r
 CREATE INDEX IF NOT EXISTS idx_monthly_review_audit_review ON monthly_employee_review_audit(review_id,changed_at DESC,id DESC);
 CREATE INDEX IF NOT EXISTS idx_meetings_project ON project_meetings(project_id,meeting_date DESC);
 CREATE INDEX IF NOT EXISTS idx_external_dependencies_entity ON external_dependencies(project_id,entity_type,entity_id,dependency_status);
-CREATE INDEX IF NOT EXISTS idx_knowledge_project ON knowledge_articles(project_id,status,category);
 CREATE INDEX IF NOT EXISTS idx_entity_edit_locks_project ON entity_edit_locks(project_id,entity_type,entity_id);

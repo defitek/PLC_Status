@@ -66,6 +66,7 @@ export function openDatabase(databasePath) {
   migrateEntityDependencies(db);
   ensureStatusMatrixColumns(db);
   ensureEntityScopeColumns(db);
+  ensureProjectMeetingFeatures(db);
   const defaultProjectId = primaryProjectId(db);
   db.exec('CREATE INDEX IF NOT EXISTS idx_status_function_group ON status_items(function_group_id,function_group_check_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_status_project ON status_items(project_id,controller_id,status)');
@@ -79,6 +80,7 @@ export function openDatabase(databasePath) {
   db.exec('CREATE INDEX IF NOT EXISTS idx_notes_project_date ON daily_notes(project_id,note_date DESC,controller_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_audit_project_changed ON audit_log(project_id,changed_at DESC,id DESC)');
   seedConfiguration(db, defaultProjectId);
+  ensureStatusWorkflowStates(db);
   if (seedDemo) {
     if (defaultProjectId === 1) seedDemoData(db, hashPassword, process.env.DEMO_DATA_LIMIT || 100);
     seedControllerHierarchy(db, defaultProjectId);
@@ -96,6 +98,7 @@ export function openDatabase(databasePath) {
   migrateGlobalPlannerData(db);
   removeCommissioningModule(db);
   removeDefinitionOfDone(db);
+  removeKnowledgeBase(db);
   syncProjectMemberships(db);
   removeEmptyDuplicateControllerRoots(db);
   backfillV3(db);
@@ -115,8 +118,49 @@ function columnNames(db, table) {
   return new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(row => row.name));
 }
 
+function removeKnowledgeBase(db) {
+  db.exec('DROP TABLE IF EXISTS knowledge_articles');
+}
+
 function ensureColumn(db, table, name, definition) {
   if (!columnNames(db, table).has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+}
+
+function ensureProjectMeetingFeatures(db) {
+  ensureColumn(db, 'project_meetings', 'period_from', 'TEXT');
+  ensureColumn(db, 'project_meetings', 'period_to', 'TEXT');
+  ensureColumn(db, 'project_meeting_items', 'objective', "TEXT NOT NULL DEFAULT 'Kontynuacja'");
+  ensureColumn(db, 'project_meeting_items', 'outcome_comment', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, 'project_meeting_items', 'target_status', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, 'project_meeting_items', 'baseline_json', "TEXT NOT NULL DEFAULT '{}'");
+  db.exec(`CREATE TABLE IF NOT EXISTS project_meeting_item_assignees (
+    meeting_item_id INTEGER NOT NULL REFERENCES project_meeting_items(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    PRIMARY KEY(meeting_item_id,user_id)
+  ) STRICT, WITHOUT ROWID;
+  CREATE TABLE IF NOT EXISTS project_meeting_item_workers (
+    meeting_item_id INTEGER NOT NULL REFERENCES project_meeting_items(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    PRIMARY KEY(meeting_item_id,user_id)
+  ) STRICT, WITHOUT ROWID;`);
+  db.exec("UPDATE project_meetings SET period_from=COALESCE(period_from,meeting_date),period_to=COALESCE(period_to,meeting_date)");
+}
+
+const BASE_STATUS_WORKFLOW_STATES = [
+  ['never_checked', 'Never checked', 'Nigdy nie sprawdzone', '◎', 'Nikt jeszcze nie zweryfikował tego punktu.', 0],
+  ['ready', 'Ready to test', 'Gotowe do sprawdzenia', '○', 'Można rozpocząć lub kontynuować pracę.', 0],
+  ['progress', 'In progress', 'W trakcie', '◐', 'Praca nad punktem trwa.', 0],
+  ['blocked', 'Blocked', 'Zablokowany', '⊘', 'Praca oczekuje na zależność albo wskazaną przyczynę.', 0],
+  ['retest', 'NOK / Retest required', 'NOK / wymagany retest', '↻', 'Test trzeba powtórzyć po usunięciu przyczyny.', 0],
+  ['done', 'Done', 'Gotowe', '✓', 'Punkt został ukończony.', 1],
+  ['na', 'N/A', 'N/A', '—', 'Punkt nie jest już istotny.', 1]
+];
+
+function ensureStatusWorkflowStates(db, projectId = null) {
+  const projects = projectId ? [{ id: Number(projectId) }] : db.prepare('SELECT id FROM projects').all();
+  const insert = db.prepare(`INSERT OR IGNORE INTO status_workflow_states(project_id,value,label,icon,description,system_key,included,counts_as_done,sort_order)
+    VALUES(?,?,?,?,?,?,1,?,?)`);
+  for (const project of projects) BASE_STATUS_WORKFLOW_STATES.forEach(([key, value, label, icon, description, done], index) => insert.run(project.id, value, label, icon, description, key, done, index));
 }
 
 function ensureStatusMatrixColumns(db) {
@@ -771,6 +815,7 @@ function seedConfiguration(db, projectId = 1, variant = 'main') {
   ['Postęp', 'Problem', 'Decyzja', 'Plan'].forEach((value, index) => option.run(projectId, 'note_type', value, index));
   ['PLC', 'Robot', 'Electrical', 'Mechanical', 'Process', 'Production'].forEach((value, index) => option.run(projectId, 'waiting_for', value, index));
   ['Niska', 'Normalna', 'Wysoka', 'Krytyczna'].forEach((value, index) => option.run(projectId, 'announcement_importance', value, index));
+  ['Rozpoczęcie', 'Kontynuacja', 'Ukończenie'].forEach((value, index) => option.run(projectId, 'meeting_goal', value, index));
   db.prepare("INSERT OR IGNORE INTO settings(project_id,key,value) VALUES(?,'default_reminder_days','14')").run(projectId);
   db.prepare("INSERT OR IGNORE INTO settings(project_id,key,value) VALUES(?,'reminder_warning_days','7')").run(projectId);
   db.prepare("INSERT OR IGNORE INTO settings(project_id,key,value) VALUES(?,'my_summary_area_source','configuration')").run(projectId);
@@ -1358,11 +1403,23 @@ function createRepository(db, defaultProjectId) {
   function aggregateWorkflowValues(input, fallback = 'Ready to test') {
     const values = input.map(normalizeStatusWorkflow);
     if (!values.length) return fallback;
-    if (values.every(value => ['Done', 'N/A'].includes(value))) return values.every(value => value === 'N/A') ? 'N/A' : 'Done';
+    const doneValues = new Set(statusWorkflowRows().filter(item => item.counts_as_done).map(item => item.value));
+    if (values.every(value => doneValues.has(value))) return values.every(value => value === 'N/A') ? 'N/A' : values.find(value => value !== 'N/A') || 'Done';
     if (values.includes('Blocked')) return 'Blocked';
     if (values.includes('NOK / Retest required')) return 'NOK / Retest required';
     if (values.includes('In progress')) return 'In progress';
-    return 'Ready to test';
+    if (values.includes('Ready to test')) return 'Ready to test';
+    if (values.includes('Never checked')) return 'Never checked';
+    return values[0] || fallback;
+  }
+
+  function statusWorkflowRows() {
+    ensureStatusWorkflowStates(db, activeProjectId());
+    return all('SELECT * FROM status_workflow_states WHERE project_id=? ORDER BY sort_order,id', activeProjectId());
+  }
+
+  function statusWorkflowValueSet({ includedOnly = false } = {}) {
+    return new Set(statusWorkflowRows().filter(item => !includedOnly || Number(item.included)).map(item => item.value));
   }
 
   function aggregateMatrixStatus(statusId, fallback = 'Ready to test') {
@@ -1736,7 +1793,7 @@ function createRepository(db, defaultProjectId) {
   }
 
   function dependencyComplete(type, status) {
-    return type === 'task' ? status === 'Done' : type === 'status' ? ['Done', 'N/A'].includes(status) : type === 'point' ? status === 'Closed' : false;
+    return type === 'task' ? status === 'Done' : type === 'status' ? statusWorkflowRows().some(item => item.value === status && Number(item.counts_as_done)) : type === 'point' ? status === 'Closed' : false;
   }
 
   function normalizedDependencyRefs(requested) {
@@ -1800,7 +1857,7 @@ function createRepository(db, defaultProjectId) {
 
   function syncStatusDependencyState(id, currentUser, hadDependency = false) {
     const row = one('SELECT * FROM status_items WHERE id=? AND project_id=?', asId(id), activeProjectId());
-    if (!row || ['Done', 'N/A'].includes(row.status) || Number(row.dependency_override)) return false;
+    if (!row || dependencyComplete('status', row.status) || Number(row.dependency_override)) return false;
     const dependencies = dependencyRefs('status', row.id, 'prerequisites');
     const blockers = dependencies.filter(item => !item.is_complete);
     let nextStatus = row.status;
@@ -2296,9 +2353,10 @@ function createRepository(db, defaultProjectId) {
     const pointRowsForScope = scopedTableRows('open_points', controllerIds, 'id,controller_id,controller_group_id,status,reminder_date');
     const goalRowsForScope = scopedTableRows('goals', controllerIds, 'id,controller_id,controller_group_id,status,due_date');
     const todayValue = new Date().toISOString().slice(0, 10);
+    const completedStatusValues = new Set(statusWorkflowRows().filter(item => item.counts_as_done).map(item => item.value));
     const status = {
       total: statusRowsForScope.length,
-      done: statusRowsForScope.filter(row => row.status === 'Done').length,
+      done: statusRowsForScope.filter(row => completedStatusValues.has(row.status)).length,
       in_progress: statusRowsForScope.filter(row => row.status === 'In progress').length,
       blocked: statusRowsForScope.filter(row => ['Blocked', 'NOK / Retest required'].includes(row.status)).length
     };
@@ -2396,7 +2454,7 @@ function createRepository(db, defaultProjectId) {
     ['function_group_checks', 'function_group_id IN (SELECT id FROM function_groups WHERE project_id=?)'],
     ['function_group_check_subcategories', 'check_id IN (SELECT id FROM function_group_checks WHERE function_group_id IN (SELECT id FROM function_groups WHERE project_id=?))'],
     ['status_groups', 'project_id=?'], ['status_subgroups', 'status_group_id IN (SELECT id FROM status_groups WHERE project_id=?)'],
-    ['status_columns', 'status_group_id IN (SELECT id FROM status_groups WHERE project_id=?)'],
+    ['status_columns', 'status_group_id IN (SELECT id FROM status_groups WHERE project_id=?)'], ['status_workflow_states', 'project_id=?'],
     ['status_items', 'project_id=?'], ['status_cell_values', 'status_item_id IN (SELECT id FROM status_items WHERE project_id=?)'], ['status_assignees', 'project_id=?'], ['tasks', 'project_id=?'], ['task_dependencies', 'project_id=?'],
     ['task_checklist', 'task_id IN (SELECT id FROM tasks WHERE project_id=?)'],
     ['task_scope_checklist', 'task_id IN (SELECT id FROM tasks WHERE project_id=?)'],
@@ -2418,7 +2476,9 @@ function createRepository(db, defaultProjectId) {
     ['automation_rules', 'project_id=?'], ['automation_rule_hits', 'rule_id IN (SELECT id FROM automation_rules WHERE project_id=?)'],
     ['saved_views', 'project_id=?'],
     ['project_meetings', 'project_id=?'], ['project_meeting_items', 'meeting_id IN (SELECT id FROM project_meetings WHERE project_id=?)'],
-    ['external_dependencies', 'project_id=?'], ['knowledge_articles', 'project_id=?'],
+    ['project_meeting_item_assignees', 'meeting_item_id IN (SELECT pmi.id FROM project_meeting_items pmi JOIN project_meetings pm ON pm.id=pmi.meeting_id WHERE pm.project_id=?)'],
+    ['project_meeting_item_workers', 'meeting_item_id IN (SELECT pmi.id FROM project_meeting_items pmi JOIN project_meetings pm ON pm.id=pmi.meeting_id WHERE pm.project_id=?)'],
+    ['external_dependencies', 'project_id=?'],
     ['monthly_employee_reviews', 'project_id=?'], ['monthly_employee_review_items', 'project_id=?'],
     ['monthly_employee_review_audit', 'review_id IN (SELECT id FROM monthly_employee_reviews WHERE project_id=?)'],
     ['audit_log', 'project_id=?'], ['export_templates', 'project_id=?'], ['project_sequences', 'project_id=?']
@@ -2427,12 +2487,12 @@ function createRepository(db, defaultProjectId) {
   const projectRestoreOrder = [
     'controller_groups', 'controllers', 'categories', 'subcategories', 'task_categories', 'task_subcategories',
     'options', 'settings', 'completion_requirements', 'function_groups', 'function_group_elements', 'function_group_subcategories', 'function_group_checks',
-    'function_group_check_subcategories', 'status_groups', 'status_subgroups', 'status_columns', 'status_items', 'status_cell_values', 'status_assignees', 'tasks', 'task_dependencies', 'task_checklist', 'task_scope_checklist', 'task_assignees', 'open_points', 'entity_dependencies',
+    'function_group_check_subcategories', 'status_groups', 'status_subgroups', 'status_columns', 'status_workflow_states', 'status_items', 'status_cell_values', 'status_assignees', 'tasks', 'task_dependencies', 'task_checklist', 'task_scope_checklist', 'task_assignees', 'open_points', 'entity_dependencies',
     'daily_notes', 'daily_note_sections', 'daily_note_section_scopes', 'daily_note_section_links', 'goals', 'goal_links', 'entity_mentions', 'entity_links', 'entity_requirements', 'entity_edit_locks', 'entity_comments', 'notifications', 'audit_log',
     'export_templates', 'project_sequences', 'project_user_areas', 'planner_entries', 'planner_requirements', 'planner_holidays', 'planner_absences', 'planner_time_adjustments',
     'announcements', 'announcement_labels', 'announcement_scopes', 'announcement_users', 'announcement_links', 'announcement_label_links', 'announcement_reads', 'calendar_annotations', 'calendar_item_dates',
     'shift_handovers', 'shift_handover_items', 'automation_rules', 'automation_rule_hits', 'saved_views',
-    'project_meetings', 'project_meeting_items', 'external_dependencies', 'knowledge_articles',
+    'project_meetings', 'project_meeting_items', 'project_meeting_item_assignees', 'project_meeting_item_workers', 'external_dependencies',
     'monthly_employee_reviews', 'monthly_employee_review_items', 'monthly_employee_review_audit'
   ];
 
@@ -3493,7 +3553,7 @@ function createRepository(db, defaultProjectId) {
   }
 
   function isClosedEntity(type, row) {
-    if (type === 'status') return ['Done', 'N/A'].includes(row.status);
+    if (type === 'status') return dependencyComplete('status', row.status);
     if (type === 'point') return row.status === 'Closed';
     return row.status === 'Done';
   }
@@ -3671,6 +3731,8 @@ function createRepository(db, defaultProjectId) {
       entity_type: type, entity_id: row.id, title: operationTitle(type, row) || row.content || 'Element projektu',
       status: row.status || row.type || '', priority: row.priority || row.criticality || '', scope_label: operationScope(row),
       due_date: row.due_date || null, owner_name: row.owner_name || row.responsible_name || '',
+      controller: row.controller || '', controller_id: row.controller_id || null, controller_group_id: row.controller_group_id || null,
+      assignee_user_ids: type === 'task' ? (row.direct_assignee_user_ids || []) : type === 'status' ? (row.responsible_user_ids || []) : type === 'point' && row.owner_user_id ? [row.owner_user_id] : [],
       search_text: [row.title, row.function_detail, row.description, row.current_note, row.impact, row.next_action, row.category, row.subcategory, row.content].filter(Boolean).join(' ')
     };
   }
@@ -3679,17 +3741,100 @@ function createRepository(db, defaultProjectId) {
     return all(`SELECT pm.*,creator.display_name created_by_name,closer.display_name closed_by_name FROM project_meetings pm
       LEFT JOIN users creator ON creator.id=pm.created_by LEFT JOIN users closer ON closer.id=pm.closed_by
       WHERE pm.project_id=? ORDER BY pm.meeting_date DESC,pm.id DESC`, activeProjectId()).map(meeting => ({
-        ...meeting,
-        items: all(`SELECT pmi.*,u.display_name owner_name FROM project_meeting_items pmi LEFT JOIN users u ON u.id=pmi.owner_user_id WHERE pmi.meeting_id=? ORDER BY pmi.sort_order,pmi.id`, meeting.id).map(item => ({ ...item, entity: operationEntity(item.entity_type, item.entity_id, currentUser) }))
+        ...meeting, period_from: meeting.period_from || meeting.meeting_date, period_to: meeting.period_to || meeting.meeting_date,
+        items: all(`SELECT pmi.*,u.display_name owner_name FROM project_meeting_items pmi LEFT JOIN users u ON u.id=pmi.owner_user_id WHERE pmi.meeting_id=? ORDER BY pmi.sort_order,pmi.id`, meeting.id).map(item => {
+          const entity = operationEntity(item.entity_type, item.entity_id, currentUser);
+          const audit = auditRowsForEntity(item.entity_type, item.entity_id).filter(row => String(row.changed_at) >= String(meeting.created_at)).map(row => {
+            let changes = {}; try { changes = JSON.parse(row.changes_json || '{}'); } catch {}
+            return { changed_at: row.changed_at, user_name: row.user_name, changes };
+          });
+          const assignees = all(`SELECT pmia.user_id,u.display_name FROM project_meeting_item_assignees pmia JOIN users u ON u.id=pmia.user_id WHERE pmia.meeting_item_id=? ORDER BY u.display_name`, item.id);
+          const workers = all(`SELECT pmiw.user_id,u.display_name FROM project_meeting_item_workers pmiw JOIN users u ON u.id=pmiw.user_id WHERE pmiw.meeting_item_id=? ORDER BY u.display_name`, item.id);
+          return { ...item, entity, assignee_user_ids: assignees.map(row => row.user_id), assignee_names: assignees.map(row => row.display_name), worker_user_ids: workers.map(row => row.user_id), worker_names: workers.map(row => row.display_name), changes: audit };
+        })
       }));
+  }
+
+  function meetingCandidateRows(from, to, currentUser) {
+    const end = nullableDate(to) || nullableDate(from) || new Date().toISOString().slice(0, 10);
+    const dueLimit = new Date(`${end}T12:00:00Z`); dueLimit.setUTCDate(dueLimit.getUTCDate() + 7);
+    const dueUntil = dueLimit.toISOString().slice(0, 10);
+    const completedStatusValues = new Set(statusWorkflowRows().filter(item => item.counts_as_done).map(item => item.value));
+    const groups = {
+      status: statusRows('all', currentUser).filter(item => !completedStatusValues.has(item.status)),
+      task: taskRows('all', currentUser).filter(item => item.status !== 'Done'),
+      point: pointRows('all', currentUser).filter(item => item.status !== 'Closed'),
+      goal: goalRows('all', currentUser).filter(item => item.status !== 'Done')
+    };
+    const shape = (entityType, item) => ({ entity_type: entityType, entity_id: item.id, title: operationTitle(entityType, item), status: item.status, priority: item.priority || item.criticality || '', due_date: item.due_date || null, owner_name: item.owner_name || item.responsible_name || '', controller_id: item.controller_id, controller_group_id: item.controller_group_id, controller: item.controller, scope_label: item.scope_label || item.controller_label || '' });
+    const result = Object.fromEntries(Object.entries(groups).map(([type, rows]) => [type, rows.map(item => shape(type, item))]));
+    result.due = ['task', 'point', 'goal'].flatMap(type => result[type]).filter(item => item.due_date && item.due_date <= dueUntil).sort((a, b) => a.due_date.localeCompare(b.due_date));
+    return result;
+  }
+
+  function meetingSummaryRows(currentUser) {
+    return all(`SELECT pm.id,pm.title,COALESCE(pm.period_from,pm.meeting_date) period_from,
+      COALESCE(pm.period_to,pm.meeting_date) period_to,pm.status,pm.summary,pm.created_at,pm.closed_at,
+      creator.display_name created_by_name,closer.display_name closed_by_name,
+      COUNT(pmi.id) item_count,
+      COALESCE(SUM(pmi.item_status='open'),0) open_count,
+      COALESCE(SUM(pmi.item_status='deferred'),0) deferred_count,
+      COALESCE(SUM(pmi.item_status='decided'),0) closed_count
+      FROM project_meetings pm
+      LEFT JOIN users creator ON creator.id=pm.created_by
+      LEFT JOIN users closer ON closer.id=pm.closed_by
+      LEFT JOIN project_meeting_items pmi ON pmi.meeting_id=pm.id
+      WHERE pm.project_id=? GROUP BY pm.id ORDER BY pm.meeting_date DESC,pm.id DESC`, activeProjectId());
+  }
+
+  function setMeetingUsers(table, meetingItemId, userIds) {
+    db.prepare(`DELETE FROM ${table} WHERE meeting_item_id=?`).run(meetingItemId);
+    const allowed = new Set(all('SELECT user_id FROM project_memberships WHERE project_id=? AND active=1', activeProjectId()).map(row => Number(row.user_id)));
+    const insert = db.prepare(`INSERT OR IGNORE INTO ${table}(meeting_item_id,user_id) VALUES(?,?)`);
+    [...new Set((Array.isArray(userIds) ? userIds : []).map(Number).filter(id => allowed.has(id)))].forEach(userId => insert.run(meetingItemId, userId));
+  }
+
+  function applyMeetingDecision(item, previous, meeting, currentUser, closing) {
+    const entity = operationEntity(item.entity_type, item.entity_id, currentUser); if (!entity) return;
+    const allowedUsers = new Set(all('SELECT user_id FROM project_memberships WHERE project_id=? AND active=1', activeProjectId()).map(row => Number(row.user_id)));
+    const assigneeIds = (Array.isArray(item.assignee_user_ids) ? item.assignee_user_ids.map(Number).filter(Boolean) : (item.owner_user_id ? [Number(item.owner_user_id)] : [])).filter(userId => allowedUsers.has(userId));
+    const primary = assigneeIds[0] || null;
+    const userLabel = primary ? userName(primary) : '';
+    const before = baseSnapshot(item.entity_type, item.entity_id);
+    if (item.entity_type === 'task') {
+      saveTaskAssignees(item.entity_id, assigneeIds, before?.checklist || []);
+      db.prepare("UPDATE tasks SET owner_user_id=?,owner=?,due_date=COALESCE(?,due_date),updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?").run(primary, userLabel, nullableDate(item.due_date), item.entity_id, activeProjectId());
+    } else if (item.entity_type === 'status') {
+      db.prepare('DELETE FROM status_assignees WHERE project_id=? AND status_id=?').run(activeProjectId(), item.entity_id);
+      const insert = db.prepare('INSERT OR IGNORE INTO status_assignees(project_id,status_id,user_id) VALUES(?,?,?)'); assigneeIds.forEach(userId => insert.run(activeProjectId(), item.entity_id, userId));
+      db.prepare("UPDATE status_items SET responsible_user_id=?,responsible=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now'),progress_updated_at=strftime('%Y-%m-%d %H:%M:%f','now'),progress_updated_by=? WHERE id=? AND project_id=?").run(primary, userLabel, currentUser.id, item.entity_id, activeProjectId());
+    } else if (item.entity_type === 'point') db.prepare("UPDATE open_points SET owner_user_id=?,owner=?,due_date=COALESCE(?,due_date),updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?").run(primary, userLabel, nullableDate(item.due_date), item.entity_id, activeProjectId());
+    else if (item.entity_type === 'goal') db.prepare("UPDATE goals SET due_date=COALESCE(?,due_date),updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?").run(nullableDate(item.due_date), item.entity_id, activeProjectId());
+    if (clean(item.target_status)) {
+      const allowed = item.entity_type === 'status' ? statusWorkflowValueSet() : item.entity_type === 'task' ? new Set(['To do', 'In progress', 'Blocked', 'Done']) : item.entity_type === 'point' ? new Set(['Open', 'Waiting', 'In progress', 'Closed']) : new Set(['Open', 'In progress', 'Done']);
+      if (allowed.has(clean(item.target_status))) db.prepare(`UPDATE ${TABLES[item.entity_type]} SET status=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?`).run(clean(item.target_status), item.entity_id, activeProjectId());
+    }
+    const after = baseSnapshot(item.entity_type, item.entity_id);
+    if (JSON.stringify(before) !== JSON.stringify(after)) writeAudit(item.entity_type, item.entity_id, 'update', currentUser, before, after);
+    const decisionChanged = clean(item.decision) && clean(item.decision) !== clean(previous?.decision);
+    const outcomeChanged = clean(item.outcome_comment) && clean(item.outcome_comment) !== clean(previous?.outcome_comment);
+    if (decisionChanged || (closing && outcomeChanged)) {
+      const workers = all(`SELECT u.display_name FROM project_meeting_item_workers pmiw JOIN users u ON u.id=pmiw.user_id WHERE pmiw.meeting_item_id=? ORDER BY u.display_name`, item.id).map(row => row.display_name);
+      const lines = [`Komentarz z odprawy „${meeting.title}” (${meeting.period_from}–${meeting.period_to}).`, `Decyzję podjął(a): ${currentUser.display_name}.`, `Osoby faktycznie realizujące: ${workers.join(', ') || assigneeIds.map(userName).filter(Boolean).join(', ') || 'nie wskazano'}.`];
+      if (decisionChanged) lines.push(`Ustalenie: ${clean(item.decision)}`);
+      if (outcomeChanged) lines.push(`Podsumowanie: ${clean(item.outcome_comment)}`);
+      addComment({ entity_type: item.entity_type, entity_id: item.entity_id, content: lines.join('\n') }, currentUser);
+    }
   }
 
   function saveProjectMeeting(id, input, currentUser) {
     const title = clean(input.title); if (!title) throw appError('Tytuł odprawy jest wymagany');
-    const values = { project_id: activeProjectId(), meeting_date: nullableDate(input.meeting_date) || new Date().toISOString().slice(0, 10), title, summary: clean(input.summary), status: clean(input.status) === 'closed' ? 'closed' : 'open' };
+    const periodFrom = nullableDate(input.period_from || input.meeting_date) || new Date().toISOString().slice(0, 10);
+    const periodTo = nullableDate(input.period_to) || periodFrom;
+    if (periodTo < periodFrom) throw appError('Koniec zakresu odprawy nie może być wcześniejszy niż początek');
+    const values = { project_id: activeProjectId(), meeting_date: periodFrom, period_from: periodFrom, period_to: periodTo, title, summary: clean(input.summary), status: clean(input.status) === 'closed' ? 'closed' : 'open' };
     let recordId = asId(id);
-    if (recordId) updateRecord('project_meetings', recordId, values, Object.keys(values));
-    else recordId = insertRecord('project_meetings', { ...values, created_by: currentUser.id });
+    if (recordId && !one('SELECT 1 FROM project_meetings WHERE id=? AND project_id=?', recordId, activeProjectId())) throw appError('Nie znaleziono rekordu odprawy', 404);
     const scope = clean(input.scope) || 'all';
     const scoped = operationCollections(currentUser, scope);
     const scopedIds = new Map(Object.entries(scoped).map(([type, rows]) => [type, new Set(rows.map(row => Number(row.id)))]));
@@ -3700,13 +3845,40 @@ function createRepository(db, defaultProjectId) {
         .filter(item => !inScope(item.entity_type, item.entity_id));
       requested = [...requested, ...hiddenExisting];
     }
-    if (requested.length || !id) {
-      const items = requested.length ? requested : triageRows(currentUser, 7, scope).slice(0, 20).map(item => ({ entity_type: item.entity_type, entity_id: item.entity_id }));
-      db.prepare('DELETE FROM project_meeting_items WHERE meeting_id=?').run(recordId);
-      const insert = db.prepare('INSERT OR IGNORE INTO project_meeting_items(meeting_id,entity_type,entity_id,decision,owner_user_id,due_date,item_status,sort_order) VALUES(?,?,?,?,?,?,?,?)');
-      items.forEach((item, index) => { if (operationEntity(item.entity_type, item.entity_id, currentUser)) insert.run(recordId, item.entity_type, asId(item.entity_id), clean(item.decision), asId(item.owner_user_id), nullableDate(item.due_date), ['open', 'decided', 'deferred'].includes(item.item_status) ? item.item_status : 'open', index); });
+    if (!id) {
+      const carryover = all(`SELECT pmi.* FROM project_meeting_items pmi JOIN project_meetings pm ON pm.id=pmi.meeting_id
+        WHERE pm.project_id=? AND pmi.item_status IN ('open','deferred') ORDER BY pm.id DESC,pmi.sort_order`, activeProjectId()).filter(item => operationEntity(item.entity_type, item.entity_id, currentUser));
+      const seen = new Set(requested.map(item => `${item.entity_type}:${item.entity_id}`));
+      for (const item of carryover) if (!seen.has(`${item.entity_type}:${item.entity_id}`)) { requested.push({ ...item, id: null }); seen.add(`${item.entity_type}:${item.entity_id}`); }
     }
-    if (values.status === 'closed') db.prepare('UPDATE project_meetings SET closed_by=?,closed_at=COALESCE(closed_at,CURRENT_TIMESTAMP) WHERE id=?').run(currentUser.id, recordId);
+    const prepared = requested.map(item => ({ item, entity: operationEntity(item.entity_type, item.entity_id, currentUser) })).filter(row => row.entity);
+    if (values.status === 'closed') for (const { item, entity } of prepared) {
+      const itemStatus = ['open', 'decided', 'deferred'].includes(item.item_status) ? item.item_status : 'open';
+      if (values.status === 'closed' && ['open', 'deferred'].includes(itemStatus) && !clean(item.outcome_comment)) throw appError(`Dodaj uzasadnienie dla pozycji „${entity.title}” pozostawionej jako otwarta lub odłożona`);
+    }
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      if (recordId) updateRecord('project_meetings', recordId, values, Object.keys(values));
+      else recordId = insertRecord('project_meetings', { ...values, created_by: currentUser.id });
+      const existing = new Map(all('SELECT * FROM project_meeting_items WHERE meeting_id=?', recordId).map(item => [`${item.entity_type}:${item.entity_id}`, item]));
+      const requestedKeys = new Set();
+      const upsert = db.prepare(`INSERT INTO project_meeting_items(meeting_id,entity_type,entity_id,decision,objective,outcome_comment,target_status,baseline_json,owner_user_id,due_date,item_status,sort_order)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(meeting_id,entity_type,entity_id) DO UPDATE SET decision=excluded.decision,objective=excluded.objective,outcome_comment=excluded.outcome_comment,target_status=excluded.target_status,owner_user_id=excluded.owner_user_id,due_date=excluded.due_date,item_status=excluded.item_status,sort_order=excluded.sort_order`);
+      prepared.forEach(({ item, entity }, index) => {
+        const key = `${item.entity_type}:${Number(item.entity_id)}`; requestedKeys.add(key);
+        const itemStatus = ['open', 'decided', 'deferred'].includes(item.item_status) ? item.item_status : 'open';
+        const assignmentIds = Array.isArray(item.assignee_user_ids) ? item.assignee_user_ids : (item.owner_user_id ? [item.owner_user_id] : entity.assignee_user_ids || []);
+        upsert.run(recordId, item.entity_type, asId(item.entity_id), clean(item.decision), clean(item.objective) || 'Kontynuacja', clean(item.outcome_comment), clean(item.target_status), JSON.stringify(entity), asId(item.owner_user_id || assignmentIds[0]), nullableDate(item.due_date), itemStatus, index);
+        const savedItem = one('SELECT * FROM project_meeting_items WHERE meeting_id=? AND entity_type=? AND entity_id=?', recordId, item.entity_type, asId(item.entity_id));
+        setMeetingUsers('project_meeting_item_assignees', savedItem.id, assignmentIds);
+        setMeetingUsers('project_meeting_item_workers', savedItem.id, item.worker_user_ids || []);
+        applyMeetingDecision({ ...item, id: savedItem.id, assignee_user_ids: assignmentIds }, existing.get(key), values, currentUser, values.status === 'closed');
+      });
+      for (const [key, item] of existing) if (!requestedKeys.has(key) && (scope === 'all' || inScope(item.entity_type, item.entity_id))) db.prepare('DELETE FROM project_meeting_items WHERE id=?').run(item.id);
+      if (values.status === 'closed') db.prepare('UPDATE project_meetings SET closed_by=?,closed_at=COALESCE(closed_at,CURRENT_TIMESTAMP) WHERE id=?').run(currentUser.id, recordId);
+      else db.prepare('UPDATE project_meetings SET closed_by=NULL,closed_at=NULL WHERE id=?').run(recordId);
+      db.exec('COMMIT');
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
     const saved = projectMeetingRows(currentUser).find(item => item.id === recordId);
     return scope === 'all' ? saved : { ...saved, items: saved.items.filter(item => inScope(item.entity_type, item.entity_id)) };
   }
@@ -3738,36 +3910,20 @@ function createRepository(db, defaultProjectId) {
     if (!result.changes) throw appError('Nie znaleziono zależności', 404);
   }
 
-  function knowledgeRows() {
-    return all(`SELECT ka.*,u.display_name created_by_name FROM knowledge_articles ka LEFT JOIN users u ON u.id=ka.created_by
-      WHERE ka.project_id=? ORDER BY ka.status='archived',ka.use_count DESC,ka.updated_at DESC`, activeProjectId());
-  }
-
-  function saveKnowledgeArticle(id, input, currentUser) {
-    const title = clean(input.title); const problem = clean(input.problem); const solution = clean(input.solution);
-    if (!title || !problem || !solution) throw appError('Tytuł, opis problemu i rozwiązanie są wymagane');
-    const values = { project_id: activeProjectId(), title, problem, solution, category: clean(input.category), tags: clean(input.tags), source_entity_type: clean(input.source_entity_type), source_entity_id: asId(input.source_entity_id), status: ['draft', 'published', 'archived'].includes(clean(input.status)) ? clean(input.status) : 'published' };
-    let recordId = asId(id);
-    if (recordId) updateRecord('knowledge_articles', recordId, values, Object.keys(values));
-    else recordId = insertRecord('knowledge_articles', { ...values, created_by: currentUser.id });
-    return knowledgeRows().find(item => item.id === recordId);
-  }
-
-  function deleteKnowledgeArticle(id) {
-    const result = db.prepare('DELETE FROM knowledge_articles WHERE id=? AND project_id=?').run(asId(id), activeProjectId());
-    if (!result.changes) throw appError('Nie znaleziono rozwiązania', 404);
-  }
-
-  function similarKnowledge(type, id, currentUser) {
-    const entity = operationEntity(type, id, currentUser); if (!entity) throw appError('Nie znaleziono elementu', 404);
-    const source = `${entity.title} ${entity.status} ${entity.scope_label} ${entity.search_text || ''}`.toLocaleLowerCase('pl-PL');
-    const sourceTokens = new Set(source.match(/[\p{L}\p{N}_-]{4,}/gu) || []);
-    return knowledgeRows().filter(item => item.status === 'published').map(item => {
-      const tokens = new Set(`${item.title} ${item.problem} ${item.category} ${item.tags}`.toLocaleLowerCase('pl-PL').match(/[\p{L}\p{N}_-]{4,}/gu) || []);
+  function similarHistory(type, query, currentUser) {
+    const sourceTokens = new Set(clean(query).toLocaleLowerCase('pl-PL').match(/[\p{L}\p{N}_-]{3,}/gu) || []);
+    if (!['task', 'point'].includes(type) || !sourceTokens.size) return [];
+    const rows = [
+      ...taskRows('all', currentUser).filter(item => item.status === 'Done').map(item => ({ ...item, entity_type: 'task', outcome: item.description || '' })),
+      ...pointRows('all', currentUser).filter(item => item.status === 'Closed').map(item => ({ ...item, entity_type: 'point', outcome: [item.next_action, item.impact, item.description].filter(Boolean).join(' · ') }))
+    ];
+    return rows.map(item => {
+      const text = [item.title, item.description, item.impact, item.next_action, item.category, item.subcategory, item.scope_label].filter(Boolean).join(' ').toLocaleLowerCase('pl-PL');
+      const tokens = new Set(text.match(/[\p{L}\p{N}_-]{3,}/gu) || []);
       const overlap = [...sourceTokens].filter(token => tokens.has(token)).length;
-      const score = sourceTokens.size ? Math.round(overlap * 100 / Math.max(1, Math.min(sourceTokens.size, tokens.size))) : 0;
-      return { ...item, similarity: score };
-    }).filter(item => item.similarity > 0).sort((a, b) => b.similarity - a.similarity || b.use_count - a.use_count).slice(0, 8);
+      const similarity = Math.min(100, Math.round(overlap * 100 / Math.max(1, sourceTokens.size)) + (item.entity_type === type ? 5 : 0));
+      return { entity_type: item.entity_type, entity_id: item.id, title: item.title, status: item.status, scope_label: item.scope_label || item.controller_label || '', category: item.category || '', outcome: item.outcome || '', updated_at: item.updated_at, similarity };
+    }).filter(item => item.similarity > 0).sort((a, b) => b.similarity - a.similarity || String(b.updated_at).localeCompare(String(a.updated_at))).slice(0, 8);
   }
 
   function riskRadarRows(currentUser, code = 'all') {
@@ -3792,7 +3948,6 @@ function createRepository(db, defaultProjectId) {
     const meetings = projectMeetingRows(currentUser).map(meeting => code === 'all' ? meeting : ({ ...meeting, items: meeting.items.filter(item => inScope(item.entity_type, item.entity_id)) }))
       .filter(meeting => code === 'all' || meeting.items.length);
     const externalDependencies = externalDependencyRows(currentUser).filter(item => code === 'all' || inScope(item.entity_type, item.entity_id));
-    const knowledge = knowledgeRows().filter(item => code === 'all' || !item.source_entity_type || !item.source_entity_id || inScope(item.source_entity_type, item.source_entity_id));
     return {
       scope: code,
       triage,
@@ -3803,7 +3958,6 @@ function createRepository(db, defaultProjectId) {
       risk_radar: riskRadarRows(currentUser, code),
       meetings,
       external_dependencies: externalDependencies,
-      knowledge,
       automation_rules: automationRuleRows(),
       can_coordinate: ['system_admin', 'project_admin', 'moderator'].includes(currentUser.role)
     };
@@ -4272,6 +4426,7 @@ function createRepository(db, defaultProjectId) {
       try {
         const projectId = insertRecord('projects', { ...values, sort_order: nextOrder });
         seedConfiguration(db, projectId);
+        ensureStatusWorkflowStates(db, projectId);
         const statusGroupId = Number(db.prepare("INSERT INTO status_groups(project_id,name,sort_order) VALUES(?,'Ogólne',0)").run(projectId).lastInsertRowid);
         db.prepare("INSERT INTO status_columns(status_group_id,name,field_type,include_in_progress,sort_order) VALUES(?,'Status','status',1,0)").run(statusGroupId);
         syncProjectMemberships(db);
@@ -4643,7 +4798,7 @@ function createRepository(db, defaultProjectId) {
               if (Object.keys(changesBetween(before, after)).length) writeAudit('status', status.id, 'update', currentUser, before, after);
             } else {
               const statusId = insertRecord('status_items', {
-                ...statusValues, test_id: nextProjectIdentifier('status', 'ST', 'status_items', 'test_id'), status: 'Ready to test', environment: 'Factory', created_by: currentUser.id
+                ...statusValues, test_id: nextProjectIdentifier('status', 'ST', 'status_items', 'test_id'), status: 'Never checked', environment: 'Factory', created_by: currentUser.id
               });
               writeAudit('status', statusId, 'create', currentUser, null, baseSnapshot('status', statusId));
             }
@@ -4754,7 +4909,8 @@ function createRepository(db, defaultProjectId) {
       if (!previous || previous.field_type !== fieldType) {
         const upsert = db.prepare(`INSERT INTO status_cell_values(status_item_id,column_id,value,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP)
           ON CONFLICT(status_item_id,column_id) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP`);
-        for (const item of scopedItems) upsert.run(item.id, id, fieldType === 'status' ? (new Set(['Ready to test', 'In progress', 'Blocked', 'NOK / Retest required', 'Done', 'N/A']).has(item.status) ? item.status : 'Ready to test') : '');
+        const workflowValues = statusWorkflowValueSet();
+        for (const item of scopedItems) upsert.run(item.id, id, fieldType === 'status' ? (workflowValues.has(item.status) ? item.status : 'Never checked') : '');
       }
       if (fieldType === 'status' || previous?.field_type === 'status') for (const item of scopedItems) db.prepare('UPDATE status_items SET status=?,updated_at=strftime(\'%Y-%m-%d %H:%M:%f\',\'now\') WHERE id=?').run(aggregateMatrixStatus(item.id, item.status), item.id);
       if (columnRole === 'basic' || previous?.column_role === 'basic') for (const item of scopedItems) syncStatusIdentity(item.id);
@@ -4771,6 +4927,7 @@ function createRepository(db, defaultProjectId) {
       for (const item of items) db.prepare('UPDATE status_items SET status=?,updated_at=strftime(\'%Y-%m-%d %H:%M:%f\',\'now\') WHERE id=?').run(aggregateMatrixStatus(item.id, item.status), item.id);
     },
     config() {
+      ensureStatusWorkflowStates(db, activeProjectId());
       return {
         categories: all('SELECT * FROM categories WHERE project_id=? AND active=1 ORDER BY sort_order,name', activeProjectId()).map(category => ({ ...category, subcategories: all('SELECT * FROM subcategories WHERE category_id=? AND active=1 ORDER BY sort_order,name', category.id) })),
         task_categories: all('SELECT * FROM task_categories WHERE project_id=? AND active=1 ORDER BY sort_order,name', activeProjectId()).map(category => ({ ...category, subcategories: all('SELECT * FROM task_subcategories WHERE category_id=? AND active=1 ORDER BY sort_order,name', category.id) })),
@@ -4788,6 +4945,7 @@ function createRepository(db, defaultProjectId) {
             }))
           })),
         status_groups: statusStructureRows(),
+        status_workflow_states: all('SELECT * FROM status_workflow_states WHERE project_id=? ORDER BY sort_order,id', activeProjectId()),
         options: all('SELECT * FROM options WHERE project_id=? AND active=1 ORDER BY kind,sort_order,value', activeProjectId()),
         announcement_labels: all('SELECT * FROM announcement_labels WHERE project_id=? AND active=1 ORDER BY sort_order,name', activeProjectId()),
         planner_holidays: all('SELECT * FROM system_holidays ORDER BY holiday_date'),
@@ -4844,7 +5002,7 @@ function createRepository(db, defaultProjectId) {
       const value = clean(input.value);
       const kind = clean(input.kind);
       if (!value || value.length > 100) throw appError('Wartość słownika musi mieć od 1 do 100 znaków');
-      if (!['shift', 'note_type', 'waiting_for', 'announcement_importance'].includes(kind)) throw appError('Nieznany typ słownika');
+      if (!['shift', 'note_type', 'waiting_for', 'announcement_importance', 'meeting_goal'].includes(kind)) throw appError('Nieznany typ słownika');
       if (id) {
         const previous = one('SELECT * FROM options WHERE id=? AND project_id=?', id, activeProjectId());
         if (!previous) throw appError('Nie znaleziono pozycji słownika', 404);
@@ -4860,6 +5018,42 @@ function createRepository(db, defaultProjectId) {
       const nextOrder = one('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM options WHERE project_id=? AND kind=?', activeProjectId(), kind).value;
       const optionId = insertRecord('options', { project_id: activeProjectId(), kind, value, sort_order: nextOrder, active: 1 });
       return one('SELECT * FROM options WHERE id=?', optionId);
+    },
+    saveStatusWorkflowState(id, input) {
+      ensureStatusWorkflowStates(db, activeProjectId());
+      const label = clean(input.label); const icon = clean(input.icon) || '○'; const description = clean(input.description);
+      if (!label || label.length > 80) throw appError('Nazwa stanu musi mieć od 1 do 80 znaków');
+      if (!['○', '◐', '⊘', '↻', '✓', '—', '◎', '◉', '◆', '▲', '!', '?', '★', '⚙'].includes(icon)) throw appError('Wybierz ikonę z dostępnej listy');
+      const included = Number(input.included ?? 1) ? 1 : 0; const countsAsDone = Number(input.counts_as_done) ? 1 : 0;
+      if (id) {
+        const previous = one('SELECT * FROM status_workflow_states WHERE id=? AND project_id=?', asId(id), activeProjectId());
+        if (!previous) throw appError('Nie znaleziono stanu statusu', 404);
+        const value = previous.system_key ? previous.value : label;
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          if (previous.value !== value) {
+            db.prepare('UPDATE status_items SET status=? WHERE project_id=? AND status=?').run(value, activeProjectId(), previous.value);
+            db.prepare(`UPDATE status_cell_values SET value=?,updated_at=CURRENT_TIMESTAMP WHERE value=? AND status_item_id IN
+              (SELECT id FROM status_items WHERE project_id=?)`).run(value, previous.value, activeProjectId());
+          }
+          db.prepare('UPDATE status_workflow_states SET value=?,label=?,icon=?,description=?,included=?,counts_as_done=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(value, label, icon, description, included, countsAsDone, previous.id);
+          db.exec('COMMIT');
+        } catch (error) { db.exec('ROLLBACK'); throw error; }
+        return one('SELECT * FROM status_workflow_states WHERE id=?', previous.id);
+      }
+      const nextOrder = one('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM status_workflow_states WHERE project_id=?', activeProjectId()).value;
+      const stateId = insertRecord('status_workflow_states', { project_id: activeProjectId(), value: label, label, icon, description, system_key: null, included, counts_as_done: countsAsDone, sort_order: nextOrder });
+      return one('SELECT * FROM status_workflow_states WHERE id=?', stateId);
+    },
+    deleteStatusWorkflowState(id) {
+      const item = one('SELECT * FROM status_workflow_states WHERE id=? AND project_id=?', asId(id), activeProjectId());
+      if (!item) throw appError('Nie znaleziono stanu statusu', 404);
+      if (item.system_key) throw appError('Bazowego stanu nie można usunąć; można wyłączyć go na listach');
+      const used = one(`SELECT
+        (SELECT COUNT(*) FROM status_items WHERE project_id=? AND status=?) +
+        (SELECT COUNT(*) FROM status_cell_values WHERE value=? AND status_item_id IN (SELECT id FROM status_items WHERE project_id=?)) count`, activeProjectId(), item.value, item.value, activeProjectId()).count;
+      if (used) throw appError('Stan jest używany. Wyłącz go na listach zamiast usuwać');
+      db.prepare('DELETE FROM status_workflow_states WHERE id=?').run(item.id);
     },
     saveAnnouncementLabel(id, input) {
       const name = clean(input.name);
@@ -4907,7 +5101,7 @@ function createRepository(db, defaultProjectId) {
       else db.prepare('INSERT INTO settings(project_id,key,value) VALUES(?,?,?) ON CONFLICT(project_id,key) DO UPDATE SET value=excluded.value').run(activeProjectId(), key, normalizedValue);
     },
     reorder(kind, ids) {
-      const map = { controllers: 'controllers', controller_groups: 'controller_groups', users: 'users', categories: 'categories', subcategories: 'subcategories', task_categories: 'task_categories', task_subcategories: 'task_subcategories', options: 'options', announcement_labels: 'announcement_labels', completion_requirements: 'completion_requirements', function_groups: 'function_groups', function_group_elements: 'function_group_elements', function_group_subcategories: 'function_group_subcategories', status_groups: 'status_groups', status_subgroups: 'status_subgroups', status_columns: 'status_columns', export_templates: 'export_templates' };
+      const map = { controllers: 'controllers', controller_groups: 'controller_groups', users: 'users', categories: 'categories', subcategories: 'subcategories', task_categories: 'task_categories', task_subcategories: 'task_subcategories', options: 'options', status_workflow_states: 'status_workflow_states', announcement_labels: 'announcement_labels', completion_requirements: 'completion_requirements', function_groups: 'function_groups', function_group_elements: 'function_group_elements', function_group_subcategories: 'function_group_subcategories', status_groups: 'status_groups', status_subgroups: 'status_subgroups', status_columns: 'status_columns', export_templates: 'export_templates' };
       const table = map[kind];
       if (!table || !Array.isArray(ids)) throw appError('Nieprawidłowa lista kolejności');
       const scopeSql = kind === 'users' ? ''
@@ -4986,12 +5180,12 @@ function createRepository(db, defaultProjectId) {
     triageBatch(input, currentUser) { return triageBatch(input, currentUser); },
     deleteOrphanLink(id) { return deleteOrphanLink(id); },
     saveProjectMeeting(id, input, currentUser) { return saveProjectMeeting(id, input, currentUser); },
+    meetingCandidates(from, to, currentUser) { return meetingCandidateRows(from, to, currentUser); },
+    meetingSummaries(currentUser) { return meetingSummaryRows(currentUser); },
     deleteProjectMeeting(id) { return deleteProjectMeeting(id); },
     saveExternalDependency(id, input, currentUser) { return saveExternalDependency(id, input, currentUser); },
     deleteExternalDependency(id) { return deleteExternalDependency(id); },
-    saveKnowledgeArticle(id, input, currentUser) { return saveKnowledgeArticle(id, input, currentUser); },
-    deleteKnowledgeArticle(id) { return deleteKnowledgeArticle(id); },
-    similarKnowledge(type, id, currentUser) { return similarKnowledge(type, id, currentUser); },
+    similarHistory(type, query, currentUser) { return similarHistory(type, query, currentUser); },
     handovers(currentUser) { return handoverRows(currentUser); },
     saveHandover(id, input, currentUser) { return saveHandover(id, input, currentUser); },
     acceptHandover(id, currentUser) { return acceptHandover(id, currentUser); },
@@ -5065,9 +5259,9 @@ function createRepository(db, defaultProjectId) {
       let dependencyOverride = false;
       let statusComment = '';
       if (column.field_type === 'status') {
-        value = normalizeStatusWorkflow(value) || 'Ready to test';
+        value = normalizeStatusWorkflow(value) || 'Never checked';
         statusChanged = value !== previousValue;
-        if (!new Set(['Ready to test', 'In progress', 'Blocked', 'NOK / Retest required', 'Done', 'N/A']).has(value)) throw appError('Nieprawidłowy status punktu');
+        if (!statusWorkflowValueSet().has(value)) throw appError('Nieprawidłowy status punktu');
         blockers = unresolvedDependencies(requestedDependencies);
         statusComment = clean(input.status_change_comment);
         if (statusComment.length > 3000) throw appError('Komentarz zmiany statusu może mieć maksymalnie 3000 znaków');
@@ -5135,8 +5329,8 @@ function createRepository(db, defaultProjectId) {
       if (!matrixGroupId && !id) matrixGroupId = asId(one('SELECT id FROM status_groups WHERE project_id=? AND name=? COLLATE NOCASE AND active=1', activeProjectId(), clean(input.category) || 'General')?.id);
       const matrixScope = matrixGroupId ? statusMatrixScope(matrixGroupId, matrixSubgroupId) : null;
       if (!matrixGroupId) matrixSubgroupId = null;
-      const requestedStatus = normalizeStatusWorkflow(input.status) || 'Ready to test';
-      const allowedStatuses = new Set(['Ready to test', 'In progress', 'Blocked', 'NOK / Retest required', 'Done', 'N/A']);
+      const requestedStatus = normalizeStatusWorkflow(input.status) || 'Never checked';
+      const allowedStatuses = statusWorkflowValueSet();
       if (!allowedStatuses.has(requestedStatus)) throw appError('Nieprawidłowy status punktu');
       const statusChanged = Boolean(before && requestedStatus !== before.status);
       const blockers = unresolvedDependencies(requestedDependencies);
@@ -5194,7 +5388,7 @@ function createRepository(db, defaultProjectId) {
         for (const column of columns) {
           if (!Object.hasOwn(input.matrix_values, column.id)) continue;
           let cellValue = clean(input.matrix_values[column.id]);
-          if (column.field_type === 'status') cellValue = new Set(['Ready to test', 'In progress', 'Blocked', 'NOK / Retest required', 'Done', 'N/A']).has(cellValue) ? cellValue : effectiveStatus;
+          if (column.field_type === 'status') cellValue = allowedStatuses.has(cellValue) ? cellValue : effectiveStatus;
           else cellValue = cellValue.slice(0, 4000);
           upsertCell.run(recordId, column.id, cellValue, currentUser.id);
         }

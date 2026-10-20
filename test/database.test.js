@@ -1041,7 +1041,7 @@ test('dependency queue spans tasks, status and open points and rejects cross-mod
   }
 });
 
-test('status handovers support meetings, risk and knowledge', () => {
+test('status handovers support meetings, risk and historical suggestions', () => {
   const temporary = temporaryDatabase();
   const repository = openDatabase(temporary.path);
   try {
@@ -1053,6 +1053,13 @@ test('status handovers support meetings, risk and knowledge', () => {
       const manager = repository.me(managerRecord.id);
       const controller = repository.controllers()[0];
       const root = repository.controllerGroups().find(item => !item.parent_id);
+
+      const customStatus = repository.saveStatusWorkflowState(null, {
+        label: 'Warunkowo', icon: '◆', description: 'Stan zdefiniowany dla tego projektu.', included: 1, counts_as_done: 0
+      });
+      assert.equal(repository.config().status_workflow_states.some(item => item.id === customStatus.id && item.icon === '◆'), true);
+      const hiddenCustomStatus = repository.saveStatusWorkflowState(customStatus.id, { ...customStatus, included: 0 });
+      assert.equal(hiddenCustomStatus.included, 0);
 
       const requirement = repository.saveCompletionRequirement(null, { name: 'Wsparcie sieci V13', description: 'Informacyjne zapotrzebowanie bez workflow DoD.' });
 
@@ -1081,23 +1088,47 @@ test('status handovers support meetings, risk and knowledge', () => {
         status: 'Open', priority: 'Critical', owner_user_id: workerRecord.id, due_date: '2020-01-01'
       }, admin);
 
-      const meeting = repository.saveProjectMeeting(null, {
-        meeting_date: '2026-10-09', title: 'V13 Odprawa projektowa', summary: 'Ustalono kolejność retestów.',
-        items: [{ entity_type: 'task', entity_id: task.id, decision: 'Zweryfikować dowód', owner_user_id: workerRecord.id, due_date: '2026-10-10' }]
-      }, admin);
+      let meeting = repository.saveProjectMeeting(null, {
+        period_from: '2026-10-09', period_to: '2026-10-15', title: 'V13 Odprawa projektowa', summary: 'Ustalono kolejność retestów.',
+        items: [{ entity_type: 'point', entity_id: riskPoint.id, objective: 'Kontynuacja', decision: 'Zweryfikować komunikację', assignee_user_ids: [workerRecord.id], due_date: '2026-10-10' }]
+      }, manager);
       assert.equal(meeting.items.length, 1);
-      assert.equal(meeting.items[0].entity.entity_id, task.id);
+      assert.equal(meeting.period_from, '2026-10-09');
+      assert.equal(meeting.period_to, '2026-10-15');
+      assert.equal(meeting.items[0].entity.entity_id, riskPoint.id);
+      assert.deepEqual(meeting.items[0].assignee_user_ids, [workerRecord.id]);
+      assert.equal(repository.meetingCandidates('2026-10-09', '2026-10-15', manager).point.some(item => item.entity_id === riskPoint.id), true);
+
+      assert.throws(() => repository.saveProjectMeeting(meeting.id, {
+        ...meeting, status: 'closed', items: [{ ...meeting.items[0], item_status: 'deferred', outcome_comment: '' }]
+      }, manager), /uzasadnienie/i);
+      assert.equal(repository.operations(manager).meetings.find(item => item.id === meeting.id).status, 'open');
+
+      meeting = repository.saveProjectMeeting(meeting.id, {
+        ...meeting, status: 'closed', items: [{ ...meeting.items[0], item_status: 'deferred', target_status: 'Waiting', due_date: '2026-10-20',
+          outcome_comment: 'Oczekujemy na ponowną próbę komunikacji.', assignee_user_ids: [workerRecord.id], worker_user_ids: [workerRecord.id] }]
+      }, manager);
+      assert.equal(meeting.status, 'closed');
+      assert.equal(meeting.items[0].item_status, 'deferred');
+      assert.deepEqual(meeting.items[0].worker_user_ids, [workerRecord.id]);
+      const meetingSummary = repository.meetingSummaries(manager).find(item => item.id === meeting.id);
+      assert.equal(meetingSummary.item_count, 1);
+      assert.equal(meetingSummary.deferred_count, 1);
+      const pointAfterMeeting = repository.points('all', manager).find(item => item.id === riskPoint.id);
+      assert.equal(pointAfterMeeting.status, 'Waiting');
+      assert.match(pointAfterMeeting.comments.at(-1).content, /V13 Odprawa projektowa/);
+
+      const followupMeeting = repository.saveProjectMeeting(null, {
+        period_from: '2026-10-16', period_to: '2026-10-22', title: 'V13 Kolejna odprawa', summary: '', items: []
+      }, manager);
+      assert.equal(followupMeeting.items.some(item => item.entity_type === 'point' && item.entity_id === riskPoint.id && item.item_status === 'deferred'), true);
 
       const dependency = repository.saveExternalDependency(null, {
         entity_type: 'task', entity_id: task.id, party: 'Dostawca sieci', dependency_status: 'waiting', expected_date: '2026-10-10', next_followup: '2026-10-09', owner_user_id: workerRecord.id
       }, admin);
       assert.equal(dependency.entity.entity_id, task.id);
 
-      const article = repository.saveKnowledgeArticle(null, {
-        title: 'Diagnostyka Profinet', problem: 'Problem komunikacji Profinet na stacji', solution: 'Sprawdzić nazwę urządzenia i topologię.', category: 'Sieć', tags: 'Profinet diagnostyka', status: 'published', source_entity_type: 'task', source_entity_id: task.id
-      }, admin);
-      assert.ok(article.id);
-      assert.ok(repository.similarKnowledge('task', task.id, admin).some(item => item.id === article.id && item.similarity > 0));
+      assert.ok(repository.similarHistory('task', 'Diagnostyka komunikacji Profinet', admin).some(item => item.entity_id === task.id && item.similarity > 0));
       assert.ok(repository.operations(admin).risk_radar.some(item => item.entity_type === 'point' && item.entity_id === riskPoint.id));
 
       repository.savePlannerDay({ user_id: workerRecord.id, plan_date: '2026-10-12', absence_type: 'vacation', absence_note: 'Urlop V13' }, admin);
@@ -1107,13 +1138,13 @@ test('status handovers support meetings, risk and knowledge', () => {
 
       const backup = repository.projectBackup();
       assert.equal(backup.version, 1);
-      for (const table of ['daily_note_sections', 'project_meetings', 'external_dependencies', 'knowledge_articles']) assert.ok(Array.isArray(backup.tables[table]));
+      for (const table of ['daily_note_sections', 'project_meetings', 'project_meeting_item_assignees', 'external_dependencies', 'status_workflow_states']) assert.ok(Array.isArray(backup.tables[table]));
       const taskCount = repository.tasks('all', admin).length;
       repository.saveTask(null, { controller: controller.code, title: 'Tymczasowy rekord V13' }, admin);
       repository.restoreProjectBackup(backup);
       assert.equal(repository.tasks('all', admin).length, taskCount);
       assert.equal(repository.operations(admin).meetings.some(item => item.id === meeting.id), true);
-      assert.equal(repository.similarKnowledge('task', task.id, admin).some(item => item.id === article.id), true);
+      assert.equal(repository.similarHistory('task', 'Diagnostyka komunikacji Profinet', admin).some(item => item.entity_id === task.id), true);
     });
   } finally {
     repository.close();

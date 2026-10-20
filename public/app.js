@@ -1,7 +1,7 @@
 const state = {
   view: 'mine', controller: 'all', me: null, projects: [], controllerGroups: [], controllers: [], users: [],
   config: { categories: [], task_categories: [], function_groups: [], status_groups: [], options: [], announcement_labels: [], requirements: [], settings: {} },
-  overview: null, announcements: [], notifications: [], navigationCounts: {}, mine: null, dashboard: {}, status: [], tasks: [], points: [], notes: [], goals: [], planner: null, calendar: null, history: [], savedViews: [], operations: null, employeeReviews: [], securityEvents: [], reviewPeriod: new Date().toISOString().slice(0, 7), loadSequence: 0,
+  overview: null, announcements: [], meetingSummaries: [], notifications: [], navigationCounts: {}, mine: null, dashboard: {}, status: [], tasks: [], points: [], notes: [], goals: [], planner: null, calendar: null, history: [], savedViews: [], operations: null, employeeReviews: [], securityEvents: [], reviewPeriod: new Date().toISOString().slice(0, 7), loadSequence: 0,
   dialog: null, dialogInitial: '', dirtyCloseAttempt: new WeakSet(), goalDraftLinks: [], goalPickerCollections: null, linkDraft: [], statusMode: 'list', taskMode: 'board', taskShowCompleted: false, pointMode: 'list', trendPeriod: 'week',
   functionGroupController: '', functionPointGroup: null, functionPointDraft: [], quickStatusDraft: [],
   notesFrom: '', notesTo: '', notesWeek: '', draggingTask: false, plannerFrom: '', plannerDays: 14, plannerShowHours: false,
@@ -9,7 +9,7 @@ const state = {
   plannerRequirementEdit: false, requirementProjectId: null, requirementLevel: 'areas', requirementFrom: '', requirementDays: 14, requirementData: null, requirementDraft: new Map(), requirementBaseline: new Map(), requirementDirty: new Set(), requirementSelection: null, requirementCollapsedGroups: new Set(), requirementGridAbort: null, requirementPointerSelecting: false, requirementFill: null,
   kpiModules: ['status', 'tasks', 'points', 'goals'], globalTrendMode: 'combined', overviewDetailed: false, detailedKpiMode: 'combined', detailedKpiPeriod: 'week', linkPickerAllowed: [], linkPickerDraft: [], linkPickerCollections: null, actionResolve: null, actionDialogGeneration: 0, actionClosingGeneration: 0, configPanel: null, configScroll: 0, hierarchySelection: null, dailySummaryOpening: false,
   selectionContext: null, selectionDraft: [], selectionCollections: null, duplicateSource: null, checklistTask: null, notificationSeen: new Set(),
-  announcementLabelFilter: '', announcementImportanceFilter: '', liveSource: null, liveRefreshTimer: null,
+  announcementLabelFilter: '', announcementImportanceFilter: '', announcementTab: 'news', liveSource: null, liveRefreshTimer: null,
   categorySelection: { status: null, task: null },
   functionListManager: null, bulkChoice: null,
   operationsTab: 'triage', triageSelection: new Set(), savedViewApplying: false, activeSavedView: {}, taskDependencyOptions: [], dependencyOptions: null, dependencyOptionsAll: false,
@@ -51,39 +51,39 @@ const pageCopy = {
 
 const badgeMap = {
   Done: ['Gotowe', 'green'], 'In progress': ['W trakcie', 'blue'], 'Ready to test': ['Gotowe do sprawdzenia', 'amber'],
+  'Never checked': ['Nigdy nie sprawdzone', 'gray'],
   Blocked: ['Zablokowany', 'red'], 'NOK / Retest required': ['NOK / wymagany retest', 'red'], 'NOK / Rework': ['NOK / wymagany retest', 'red'], 'Retest required': ['NOK / wymagany retest', 'red'],
   'Not started': ['Nie rozpoczęto', 'gray'], 'N/A': ['N/A', 'gray'], 'To do': ['Do zrobienia', 'gray'],
   Open: ['Otwarte', 'red'], Waiting: ['Oczekiwanie', 'amber'], Closed: ['Zamknięte', 'green'],
   Critical: ['Krytyczny', 'red'], High: ['Wysoki', 'amber'], Medium: ['Średni', 'blue'], Low: ['Niski', 'green']
 };
-const statusWorkflowOptions = [
-  { value: 'Ready to test', label: 'Gotowe do sprawdzenia' }, { value: 'In progress', label: 'W trakcie' },
-  { value: 'Blocked', label: 'Zablokowany' }, { value: 'NOK / Retest required', label: 'NOK / wymagany retest' },
-  { value: 'Done', label: 'Gotowe' }, { value: 'N/A', label: 'N/A' }
+const fallbackStatusWorkflowStates = [
+  { value: 'Never checked', label: 'Nigdy nie sprawdzone', icon: '◎', description: 'Nikt jeszcze nie zweryfikował tego punktu.', system_key: 'never_checked', included: 1 },
+  { value: 'Ready to test', label: 'Gotowe do sprawdzenia', icon: '○', description: 'Można rozpocząć lub kontynuować pracę.', system_key: 'ready', included: 1 },
+  { value: 'In progress', label: 'W trakcie', icon: '◐', description: 'Praca nad punktem trwa.', system_key: 'progress', included: 1 },
+  { value: 'Blocked', label: 'Zablokowany', icon: '⊘', description: 'Praca oczekuje na zależność albo wskazaną przyczynę.', system_key: 'blocked', included: 1 },
+  { value: 'NOK / Retest required', label: 'NOK / wymagany retest', icon: '↻', description: 'Test trzeba powtórzyć po usunięciu przyczyny.', system_key: 'retest', included: 1 },
+  { value: 'Done', label: 'Gotowe', icon: '✓', description: 'Punkt został ukończony.', system_key: 'done', included: 1 },
+  { value: 'N/A', label: 'N/A', icon: '—', description: 'Punkt nie jest już istotny.', system_key: 'na', included: 1 }
 ];
-const statusWorkflowValues = statusWorkflowOptions.map(item => item.value);
-const statusWorkflowLegend = [
-  ['Gotowe do sprawdzenia', 'można rozpocząć lub kontynuować pracę'],
-  ['W trakcie', 'praca trwa'],
-  ['Zablokowany', 'praca oczekuje na zależność albo wskazaną przyczynę'],
-  ['NOK / wymagany retest', 'test trzeba powtórzyć po usunięciu przyczyny'],
-  ['N/A', 'punkt nie jest już istotny'],
-  ['Gotowe', 'punkt ukończony']
-];
-const statusSymbolMap = {
-  'Ready to test': ['○', 'Gotowe do sprawdzenia', 'ready'],
-  'In progress': ['◐', 'W trakcie', 'progress'],
-  Blocked: ['⊘', 'Zablokowany', 'blocked'],
-  'NOK / Retest required': ['↻', 'NOK / wymagany retest', 'retest'],
-  Done: ['✓', 'Gotowe', 'done'],
-  'N/A': ['—', 'N/A', 'na']
-};
+function allStatusWorkflowStates() { return state.config?.status_workflow_states?.length ? state.config.status_workflow_states : fallbackStatusWorkflowStates; }
+function statusWorkflowOptions(currentValue = '') {
+  return allStatusWorkflowStates()
+    .filter(item => Number(item.included) !== 0 || (currentValue && item.value === currentValue))
+    .map(item => ({ value: item.value, label: item.label + (Number(item.included) === 0 ? ' (wyłączony)' : '') }));
+}
+function statusWorkflowValues() { return statusWorkflowOptions().map(item => item.value); }
+function statusSymbolDetails(value) {
+  const item = allStatusWorkflowStates().find(stateItem => stateItem.value === value);
+  const tone = item?.system_key === 'progress' ? 'progress' : item?.system_key === 'blocked' ? 'blocked' : item?.system_key === 'retest' ? 'retest' : item?.system_key === 'done' ? 'done' : item?.system_key === 'na' ? 'na' : item?.system_key === 'never_checked' ? 'unchecked' : 'ready';
+  return item ? [item.icon, item.label, tone] : ['?', value || 'Brak statusu', 'unknown'];
+}
 function statusSymbol(value, interactive = false) {
-  const [symbol, label, tone] = statusSymbolMap[value] || ['?', value || 'Brak statusu', 'unknown'];
+  const [symbol, label, tone] = statusSymbolDetails(value);
   return `<span class="status-symbol ${tone} ${interactive ? 'interactive' : ''}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${symbol}</span>`;
 }
 function statusSymbolLegend() {
-  return `<div class="status-symbol-legend" aria-label="Legenda statusów"><b>Legenda</b>${statusWorkflowOptions.map(item => `<span>${statusSymbol(item.value)}<small>${escapeHtml(item.label)}</small></span>`).join('')}</div>`;
+  return `<div class="status-symbol-legend" aria-label="Legenda statusów"><b>Legenda</b>${statusWorkflowOptions().map(item => `<span>${statusSymbol(item.value)}<small>${escapeHtml(item.label)}</small></span>`).join('')}</div>`;
 }
 const statusColumnRole = column => column?.column_role || (column?.field_type === 'text' ? 'basic' : 'subpoint');
 const badge = value => { const item = badgeMap[value] || [value || '—', 'gray']; return `<span class="badge ${item[1]}">${escapeHtml(item[0])}</span>`; };
@@ -131,11 +131,11 @@ function taskHierarchyOptions() {
 function hierarchyTargetLabel(value) {
   if (String(value).startsWith('group:')) {
     const group = state.controllerGroups.find(item => Number(item.id) === Number(String(value).slice(6)));
-    return group?.path_label || group?.name || 'Nieznany obszar';
+    return group?.name || 'Nieznany obszar';
   }
   const code = String(value).replace(/^controller:/, '');
   const controller = state.controllers.find(item => item.code === code);
-  return controller?.hierarchy_label || controller?.display_name || code || 'Wybierz zakres';
+  return controller?.display_name || controller?.leaf_code || controller?.code || code || 'Wybierz zakres';
 }
 function hierarchyTargetTreeHtml(selected, { fieldName = 'hierarchy_target', inputId = 'form-hierarchy-target' } = {}) {
   const selectedValue = String(selected || '');
@@ -145,20 +145,20 @@ function hierarchyTargetTreeHtml(selected, { fieldName = 'hierarchy_target', inp
     if (!children.has(parentId)) children.set(parentId, []);
     children.get(parentId).push(group);
   });
-  const controllerNode = controller => {
+  const controllerNode = (controller, depth = 0) => {
     const value = `controller:${controller.code}`;
-    return `<label class="ui-tree-node ui-tree-child hierarchy-target-node hierarchy-controller-node" data-hierarchy-node="${escapeHtml(value)}"><input type="radio" data-hierarchy-target-choice value="${escapeHtml(value)}" ${value === selectedValue ? 'checked' : ''}><span><b>◇ ${escapeHtml(controller.display_name || controller.code)}</b><small>Sterownik · ${escapeHtml(controller.hierarchy_label || controller.code)}</small></span></label>`;
+    return `<label class="hierarchy-target-option hierarchy-controller-node" style="--hierarchy-depth:${depth}" data-hierarchy-node="${escapeHtml(value)}"><input type="radio" data-hierarchy-target-choice value="${escapeHtml(value)}" ${value === selectedValue ? 'checked' : ''}><span>${escapeHtml(controller.display_name || controller.leaf_code || controller.code)}</span></label>`;
   };
-  const groupBranch = group => {
+  const groupBranch = (group, depth = 0) => {
     const value = `group:${group.id}`;
     const directControllers = state.controllers.filter(item => Number(item.group_id) === Number(group.id));
-    const nested = (children.get(Number(group.id)) || []).map(groupBranch).join('');
-    const childHtml = [...directControllers.map(controllerNode), nested].join('');
-    return `<div class="ui-tree-branch hierarchy-target-branch ${value === selectedValue ? 'selected' : ''}"><label class="ui-tree-node ui-tree-group hierarchy-target-node" data-hierarchy-node="${escapeHtml(value)}"><input type="radio" data-hierarchy-target-choice value="${escapeHtml(value)}" ${value === selectedValue ? 'checked' : ''}><span><b>▰ ${escapeHtml(group.name)}</b><small>Obszar · ${escapeHtml(group.path_label || group.name)}</small></span></label>${childHtml ? `<div class="ui-tree-children">${childHtml}</div>` : ''}</div>`;
+    const nested = (children.get(Number(group.id)) || []).map(item => groupBranch(item, depth + 1)).join('');
+    const childHtml = [...directControllers.map(item => controllerNode(item, depth + 1)), nested].join('');
+    return `<div class="hierarchy-target-branch ${value === selectedValue ? 'selected' : ''}"><label class="hierarchy-target-option hierarchy-group-node" style="--hierarchy-depth:${depth}" data-hierarchy-node="${escapeHtml(value)}"><input type="radio" data-hierarchy-target-choice value="${escapeHtml(value)}" ${value === selectedValue ? 'checked' : ''}><span>${escapeHtml(group.name)}</span></label>${childHtml}</div>`;
   };
   const roots = (children.get(0) || []).map(groupBranch).join('');
-  const ungrouped = state.controllers.filter(item => !item.group_id).map(controllerNode).join('');
-  return `<div class="hierarchy-target-picker" data-hierarchy-target-tree><input type="hidden" name="${escapeHtml(fieldName)}" id="${escapeHtml(inputId)}" value="${escapeHtml(selectedValue)}"><div class="hierarchy-target-summary"><small>Wybrany zakres</small><b data-hierarchy-target-summary>${escapeHtml(hierarchyTargetLabel(selectedValue))}</b></div><div class="ui-tree-select"><div class="ui-tree-branches">${roots}${ungrouped}</div></div></div>`;
+  const ungrouped = state.controllers.filter(item => !item.group_id).map(item => controllerNode(item)).join('');
+  return `<div class="hierarchy-target-picker" data-hierarchy-target-tree><input type="hidden" name="${escapeHtml(fieldName)}" id="${escapeHtml(inputId)}" value="${escapeHtml(selectedValue)}"><details class="hierarchy-target-dropdown"><summary data-hierarchy-target-summary>${escapeHtml(hierarchyTargetLabel(selectedValue))}</summary><div class="hierarchy-target-menu">${roots}${ungrouped}</div></details></div>`;
 }
 function bindHierarchyTargetTrees(root = document) {
   root.querySelectorAll('[data-hierarchy-target-tree]').forEach(tree => {
@@ -167,12 +167,28 @@ function bindHierarchyTargetTrees(root = document) {
     const sync = value => {
       hidden.value = value;
       tree.querySelectorAll('[data-hierarchy-target-choice]').forEach(control => { control.checked = control.value === value; });
-      tree.querySelectorAll('.hierarchy-target-branch').forEach(branch => branch.classList.toggle('selected', branch.querySelector(':scope > .hierarchy-target-node input')?.checked));
+      tree.querySelectorAll('.hierarchy-target-branch').forEach(branch => branch.classList.toggle('selected', branch.querySelector(':scope > .hierarchy-target-option input')?.checked));
       if (summary) summary.textContent = hierarchyTargetLabel(value);
       hidden.dispatchEvent(new Event('change', { bubbles: true }));
+      const dropdown = tree.querySelector('details.hierarchy-target-dropdown');
+      if (dropdown) dropdown.open = false;
     };
     tree.querySelectorAll('[data-hierarchy-target-choice]').forEach(control => control.addEventListener('change', () => { if (control.checked) sync(control.value); }));
   });
+}
+function hierarchyMultiDropdownHtml(selected = []) {
+  const picked = new Set((selected || []).map(String));
+  const children = parentId => state.controllerGroups.filter(group => Number(group.parent_id || 0) === Number(parentId || 0));
+  const controllerRow = (controller, depth) => `<label class="hierarchy-target-option" style="--hierarchy-depth:${depth}"><input type="checkbox" data-hierarchy-multi-choice value="controller:${escapeHtml(controller.code)}" ${picked.has(`controller:${controller.code}`) ? 'checked' : ''}><span>${escapeHtml(controller.display_name || controller.leaf_code || controller.code)}</span></label>`;
+  const branch = (group, depth = 0) => `<div class="hierarchy-target-branch"><label class="hierarchy-target-option" style="--hierarchy-depth:${depth}"><input type="checkbox" data-hierarchy-multi-choice value="group:${group.id}" ${picked.has(`group:${group.id}`) ? 'checked' : ''}><span>${escapeHtml(group.name)}</span></label>${state.controllers.filter(item => Number(item.group_id) === Number(group.id)).map(item => controllerRow(item, depth + 1)).join('')}${children(group.id).map(item => branch(item, depth + 1)).join('')}</div>`;
+  return `<details class="hierarchy-multi-dropdown"><summary data-hierarchy-multi-summary>${picked.size ? `Zakresy · ${picked.size}` : 'Wszystkie obszary'}</summary><div class="hierarchy-target-menu">${children(0).map(item => branch(item)).join('')}${state.controllers.filter(item => !item.group_id).map(item => controllerRow(item, 0)).join('')}</div></details>`;
+}
+function bindHierarchyMultiDropdown(root = document, onChange = null) {
+  root.querySelectorAll('.hierarchy-multi-dropdown').forEach(dropdown => dropdown.querySelectorAll('[data-hierarchy-multi-choice]').forEach(input => input.addEventListener('change', () => {
+    const selected = [...dropdown.querySelectorAll('[data-hierarchy-multi-choice]:checked')].map(control => control.value);
+    dropdown.querySelector('[data-hierarchy-multi-summary]').textContent = selected.length ? `Zakresy · ${selected.length}` : 'Wszystkie obszary';
+    onChange?.(selected);
+  })));
 }
 function controllerHierarchyOrder(item) {
   if (item?.controller_group_id) {
@@ -743,7 +759,7 @@ function bindShell() {
 }
 
 function installDropdownLayers() {
-  const selector = 'details.table-filter-menu,details.multi-user-select,details.transfer-scope-picker';
+  const selector = 'details.table-filter-menu,details.multi-user-select,details.transfer-scope-picker,details.hierarchy-target-dropdown,details.hierarchy-multi-dropdown';
   const closeMenus = () => document.querySelectorAll(`${selector.split(',').map(part => `${part}[open]`).join(',')}`).forEach(menu => { menu.open = false; });
   document.addEventListener('toggle', event => {
     const menu = event.target;
@@ -864,7 +880,7 @@ function updateExportFields() {
   $$('.export-status-field').forEach(field => field.hidden = type !== 'status');
   $$('.export-filter-field').forEach(field => field.hidden = type === 'project');
   $('#export-scope').closest('.field').hidden = type === 'project';
-  const statuses = type === 'points' ? ['Open', 'Waiting', 'In progress', 'Closed'] : statusWorkflowOptions;
+  const statuses = type === 'points' ? ['Open', 'Waiting', 'In progress', 'Closed'] : statusWorkflowOptions();
   $('#export-status-filter').innerHTML = selectOptions(statuses, '', 'Wszystkie');
 }
 async function runExport(event) {
@@ -975,7 +991,7 @@ async function loadData(silent = false) {
   state.calendarPriorities.forEach(priority => calendarParams.append('priority', priority));
   const requests = {
     controllerGroups: api('/api/controller-groups'), controllers: api('/api/controllers'), users: api('/api/users'), config: api('/api/config'),
-    announcements: api('/api/announcements'), notifications: api('/api/notifications'), navigationCounts: api('/api/navigation-counts'), savedViews: api('/api/saved-views')
+    announcements: api('/api/announcements'), meetingSummaries: api('/api/meeting-summaries'), notifications: api('/api/notifications'), navigationCounts: api('/api/navigation-counts'), savedViews: api('/api/saved-views')
   };
   const addWorkCollections = (includeGoals = false, includeNotes = false) => {
     requests.status = api('/api/status' + query); requests.tasks = api('/api/tasks' + query); requests.points = api('/api/open-points' + query);
@@ -1267,9 +1283,21 @@ function openAnnouncementDetails(item) {
 
 function renderAnnouncements() {
   $('#add').hidden = !canManageAnnouncements();
+  const tabs = `<nav class="announcement-tabs"><button type="button" data-announcement-tab="news" class="${state.announcementTab === 'news' ? 'active' : ''}">Informacje <b>${state.announcements.length}</b></button><button type="button" data-announcement-tab="meetings" class="${state.announcementTab === 'meetings' ? 'active' : ''}">Podsumowania odpraw <b>${state.meetingSummaries.length}</b></button></nav>`;
+  if (state.announcementTab === 'meetings') {
+    $('#content').innerHTML = `${tabs}<section class="announcements-feed meeting-summary-feed">${state.meetingSummaries.map(item => `<article class="announcement-card meeting-summary-card" data-meeting-summary="${item.id}"><header><span><b>${escapeHtml(item.title)}</b><small>${displayDate(item.period_from)}–${displayDate(item.period_to)} · ${escapeHtml(item.created_by_name || 'System')}</small></span>${badge(item.status === 'closed' ? 'Closed' : 'In progress')}</header><p>${escapeHtml(item.summary || 'Brak opisu podsumowania.')}</p><footer><span>${item.item_count} elementów</span><span>${item.closed_count} zamkniętych · ${item.open_count} otwartych · ${item.deferred_count} odłożonych</span></footer></article>`).join('') || '<div class="empty">Nie utworzono jeszcze żadnej odprawy.</div>'}</section>`;
+    $$('[data-announcement-tab]').forEach(button => button.addEventListener('click', () => { state.announcementTab = button.dataset.announcementTab; renderAnnouncements(); }));
+    $$('[data-meeting-summary]').forEach(card => card.addEventListener('click', () => {
+      const item = state.meetingSummaries.find(row => Number(row.id) === Number(card.dataset.meetingSummary));
+      $('#insight-title').textContent = item.title; $('#insight-description').textContent = `${displayDate(item.period_from)}–${displayDate(item.period_to)} · ${item.status === 'closed' ? 'zakończona' : 'w trakcie'}`;
+      $('#insight-content').innerHTML = `<article class="announcement-detail"><p>${escapeHtml(item.summary || 'Brak opisu podsumowania.').replace(/\n/g, '<br>')}</p><div class="signal-strip"><span><b>${item.item_count}</b>Wszystkie</span><span><b>${item.closed_count}</b>Zamknięte</span><span><b>${item.open_count}</b>Otwarte</span><span><b>${item.deferred_count}</b>Odłożone</span></div></article>`;
+      $('#insight-dialog').showModal();
+    }));
+    return;
+  }
   const importanceOptions = options('announcement_importance');
   const filtered = state.announcements.filter(item => (!state.announcementLabelFilter || (item.label_ids || []).includes(Number(state.announcementLabelFilter))) && (!state.announcementImportanceFilter || item.importance === state.announcementImportanceFilter));
-  $('#content').innerHTML = `<section class="panel announcement-filters"><div class="toolbar"><strong>Wszystkie wiadomości</strong><label>Etykieta <select id="announcement-label-filter">${selectOptions((state.config.announcement_labels || []).map(item => ({ value: item.id, label: item.name })), state.announcementLabelFilter, 'Wszystkie')}</select></label><label>Ważność <select id="announcement-importance-filter">${selectOptions(importanceOptions, state.announcementImportanceFilter, 'Wszystkie')}</select></label><button class="mini" id="announcement-clear-filters">Wyczyść</button></div></section><section class="announcements-feed">${filtered.map(item => {
+  $('#content').innerHTML = `${tabs}<section class="panel announcement-filters"><div class="toolbar"><strong>Wszystkie wiadomości</strong><label>Etykieta <select id="announcement-label-filter">${selectOptions((state.config.announcement_labels || []).map(item => ({ value: item.id, label: item.name })), state.announcementLabelFilter, 'Wszystkie')}</select></label><label>Ważność <select id="announcement-importance-filter">${selectOptions(importanceOptions, state.announcementImportanceFilter, 'Wszystkie')}</select></label><button class="mini" id="announcement-clear-filters">Wyczyść</button></div></section><section class="announcements-feed">${filtered.map(item => {
     const href = safeExternalLink(item.info_link);
     const entryLabel = ({ message: 'Komunikat', decision: 'Decyzja', scope_change: 'Zmiana zakresu' })[item.entry_type] || 'Komunikat';
     return `<article class="announcement-card ${item.accepted_by_me ? 'read' : 'unread'}" data-announcement-id="${item.id}"><header><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.created_by_name || 'System')} · ${displayDateTime(item.created_at)}</small></span><span class="badge blue">${escapeHtml(announcementAudience(item))}</span></header><div class="announcement-tags"><span class="decision-type ${escapeHtml(item.entry_type || 'message')}">${entryLabel}</span><span class="importance importance-${escapeHtml(String(item.importance || 'normalna').toLowerCase())}">${escapeHtml(item.importance || 'Normalna')}</span>${(item.labels || []).map(label => `<span class="announcement-label ${escapeHtml(label.color)}">${escapeHtml(label.name)}</span>`).join('')}</div><p>${escapeHtml(item.content)}</p><footer><span>${(item.recipient_names || []).length ? `Osoby: ${escapeHtml(item.recipient_names.join(', '))}` : 'Wiadomość ogólna'}</span><span>${item.requires_ack ? (item.accepted_by_me ? '✓ przeczytane' : 'wymaga potwierdzenia') : 'informacyjna'}${canManageAnnouncements() ? ` · ${item.accepted_count || 0}/${item.audience_count || 0} potwierdzeń` : ''}</span></footer></article>`;
@@ -1277,6 +1305,7 @@ function renderAnnouncements() {
   $('#announcement-label-filter').addEventListener('change', event => { state.announcementLabelFilter = event.target.value; renderAnnouncements(); });
   $('#announcement-importance-filter').addEventListener('change', event => { state.announcementImportanceFilter = event.target.value; renderAnnouncements(); });
   $('#announcement-clear-filters').addEventListener('click', () => { state.announcementLabelFilter = ''; state.announcementImportanceFilter = ''; renderAnnouncements(); });
+  $$('[data-announcement-tab]').forEach(button => button.addEventListener('click', () => { state.announcementTab = button.dataset.announcementTab; renderAnnouncements(); }));
   $$('.announcement-card').forEach(card => card.addEventListener('click', event => {
     if (event.target.closest('a,button')) return;
     const item = state.announcements.find(value => value.id === Number(card.dataset.announcementId));
@@ -1532,7 +1561,7 @@ function renderOperations() {
     ['triage', 'Triage', data.triage?.length || 0], ['quality', 'Jakość danych', data.quality?.length || 0],
     ['risk', 'Radar ryzyka', data.risk_radar?.filter(item => item.risk_score >= 40).length || 0], ['dependencies', 'Zależności zadań', data.dependencies?.blocked_tasks?.length || 0],
     ['external', 'Zależności zewnętrzne', data.external_dependencies?.filter(item => item.dependency_status !== 'resolved').length || 0],
-    ['meetings', 'Odprawa projektowa', data.meetings?.filter(item => item.status === 'open').length || 0], ['knowledge', 'Baza rozwiązań', data.knowledge?.filter(item => item.status === 'published').length || 0],
+    ['meetings', 'Odprawa projektowa', data.meetings?.filter(item => item.status === 'open').length || 0],
     ['automations', 'Automatyzacje', data.automation_rules?.filter(item => item.active).length || 0],
     ['reviews', 'Oceny miesięczne', (state.employeeReviews || []).filter(item => item.review_id).length]
   ];
@@ -1540,7 +1569,7 @@ function renderOperations() {
   $('#content').innerHTML = `${savedViewsToolbar('operations')}<section class="operations-shell"><nav class="operations-tabs">${tabs.map(([key, label, count]) => `<button type="button" data-operations-tab="${key}" class="${state.operationsTab === key ? 'active' : ''}"><span>${escapeHtml(label)}</span><b>${count}</b></button>`).join('')}</nav><div id="operations-content"></div></section>`;
   $$('[data-operations-tab]').forEach(button => button.addEventListener('click', () => { state.operationsTab = button.dataset.operationsTab; renderOperations(); }));
   bindSavedViews('operations', '.operations-shell', renderOperations);
-  ({ triage: renderTriage, quality: renderDataQuality, risk: renderRiskRadar, dependencies: renderDependencies, external: renderExternalDependencies, meetings: renderProjectMeetings, knowledge: renderKnowledgeBase, automations: renderAutomations, reviews: () => renderEmployeeReviews('#operations-content') })[state.operationsTab]?.();
+  ({ triage: renderTriage, quality: renderDataQuality, risk: renderRiskRadar, dependencies: renderDependencies, external: renderExternalDependencies, meetings: renderProjectMeetings, automations: renderAutomations, reviews: () => renderEmployeeReviews('#operations-content') })[state.operationsTab]?.();
 }
 
 function renderTriage() {
@@ -1614,52 +1643,86 @@ async function openExternalDependencyEditor(existing = null) {
 
 function renderProjectMeetings() {
   const rows = state.operations.meetings || [];
-  $('#operations-content').innerHTML = `<section class="operation-view"><header class="operation-head"><div><h2>Tryb odprawy projektowej</h2><p>Skupiony widok tematów wymagających decyzji, właściciela i terminu.</p></div><button type="button" class="primary" id="meeting-add">+ Rozpocznij odprawę</button></header><div class="meeting-list">${rows.map(item => `<button type="button" class="meeting-card ${item.status}" data-meeting-open="${item.id}"><span><b>${escapeHtml(item.title)}</b><small>${displayDate(item.meeting_date)} · ${escapeHtml(item.created_by_name || '')}</small></span><span><b>${item.items.length}</b><small>tematów</small></span>${badge(item.status === 'closed' ? 'Closed' : 'Open')}</button>`).join('') || '<div class="empty">Brak zapisanych odpraw.</div>'}</div></section>`;
+  $('#operations-content').innerHTML = `<section class="operation-view"><header class="operation-head"><div><h2>Odprawy projektowe</h2><p>Plan działania na wybrany okres, zespół, terminy, cele i pełne podsumowanie realizacji.</p></div><button type="button" class="primary" id="meeting-add">+ Rozpocznij odprawę</button></header><div class="meeting-list">${rows.map(item => `<button type="button" class="meeting-card ${item.status}" data-meeting-open="${item.id}"><span><b>${escapeHtml(item.title)}</b><small>${displayDate(item.period_from || item.meeting_date)}–${displayDate(item.period_to || item.meeting_date)} · ${escapeHtml(item.created_by_name || '')}</small></span><span><b>${item.items.length}</b><small>tematów</small></span>${badge(item.status === 'closed' ? 'Closed' : 'In progress')}</button>`).join('') || '<div class="empty">Brak zapisanych odpraw.</div>'}</div></section>`;
   $('#meeting-add').addEventListener('click', () => createProjectMeeting());
   $$('[data-meeting-open]').forEach(button => button.addEventListener('click', () => openProjectMeeting(rows.find(item => item.id === Number(button.dataset.meetingOpen)))));
 }
 
 async function createProjectMeeting() {
-  const result = await uiForm({ title: 'Nowa odprawa projektowa', description: 'System automatycznie dołączy najwyżej ocenione pozycje z Triage.', submitLabel: 'Rozpocznij odprawę', fields: [{ name: 'meeting_date', label: 'Data', type: 'date', value: today(), required: true }, { name: 'title', label: 'Tytuł odprawy', value: `Odprawa · ${displayDate(today())}`, required: true }, { name: 'summary', label: 'Cel / agenda', type: 'textarea', full: true, rows: 3 }] });
+  const from = today(); const to = addDays(from, 6);
+  const result = await uiForm({ title: 'Nowa odprawa projektowa', description: 'Zakres określa okres planu. Nowa odprawa zaczyna się pustą listą i automatycznie przejmuje nadal otwarte lub odłożone tematy z poprzednich odpraw.', submitLabel: 'Utwórz odprawę', fields: [
+    { name: 'period_from', label: 'Plan od', type: 'date', value: from, required: true }, { name: 'period_to', label: 'Plan do', type: 'date', value: to, required: true },
+    { name: 'title', label: 'Tytuł odprawy', value: `Plan działania · ${displayDate(from)}`, required: true, full: true },
+    { name: 'summary', label: 'Cel / agenda', type: 'textarea', full: true, rows: 3 }
+  ] });
   if (!result) return;
-  try { const meeting = await api('/api/project-meetings', { method: 'POST', body: JSON.stringify({ ...result, scope: state.controller }) }); await reloadOperations(); openProjectMeeting(meeting); } catch (error) { toast(error.message, true); }
+  try { const meeting = await api('/api/project-meetings', { method: 'POST', body: JSON.stringify({ ...result, status: 'open', items: [], scope: 'all' }) }); await loadData(true); if (!state.operations) await reloadOperations(); openProjectMeeting(meeting); } catch (error) { toast(error.message, true); }
+}
+
+function meetingUsersHtml(attribute, selectedIds = [], emptyLabel = 'Wybierz osoby') {
+  const selected = new Set((selectedIds || []).map(Number));
+  const users = assignableUsers([...selected]);
+  const names = users.filter(user => selected.has(Number(user.id))).map(user => user.display_name);
+  return `<details class="multi-user-select meeting-user-select"><summary>${names.length ? `${names.length} · ${escapeHtml(names.join(', '))}` : emptyLabel}</summary><div class="mentions assignee-grid"><input class="multi-choice-search" type="search" placeholder="Szukaj osoby…">${users.map(user => `<label><input type="checkbox" ${attribute} value="${user.id}" ${selected.has(Number(user.id)) ? 'checked' : ''}><span>${escapeHtml(user.display_name)}</span></label>`).join('')}</div></details>`;
+}
+
+function meetingTargetStatuses(type, current = '') {
+  const values = type === 'status' ? statusWorkflowOptions(current) : type === 'task' ? ['To do', 'In progress', 'Blocked', 'Done'] : type === 'point' ? ['Open', 'Waiting', 'In progress', 'Closed'] : ['Open', 'In progress', 'Done'];
+  return selectOptions(values, current, 'Nie zmieniaj statusu');
+}
+
+function meetingItemPayload(item) {
+  return { entity_type: item.entity_type, entity_id: item.entity_id, decision: item.decision || '', objective: item.objective || 'Kontynuacja', outcome_comment: item.outcome_comment || '', target_status: item.target_status || '', assignee_user_ids: item.assignee_user_ids || (item.owner_user_id ? [item.owner_user_id] : []), worker_user_ids: item.worker_user_ids || [], owner_user_id: item.owner_user_id || null, due_date: item.due_date || '', item_status: item.item_status || 'open' };
+}
+
+async function addMeetingItems(meeting) {
+  openEntitySelection({ meeting: true, allowed: ['status', 'task', 'point', 'goal'], from: meeting.period_from || meeting.meeting_date, to: meeting.period_to || meeting.meeting_date, initial: meeting.items.map(item => ({ entity_type: item.entity_type, entity_id: item.entity_id })), onApply: async links => {
+    const existing = new Map(meeting.items.map(item => [`${item.entity_type}:${item.entity_id}`, meetingItemPayload(item)]));
+    const items = links.map(link => existing.get(`${link.entity_type}:${link.entity_id}`) || { ...link, objective: options('meeting_goal')[0] || 'Rozpoczęcie', item_status: 'open' });
+    const updated = await api(`/api/project-meetings/${meeting.id}`, { method: 'PATCH', body: JSON.stringify({ ...meeting, status: 'open', items, scope: 'all' }) });
+    toast('Lista odprawy została uzupełniona'); await reloadOperations(); openProjectMeeting(updated);
+  } });
 }
 
 function openProjectMeeting(meeting) {
   if (!meeting) return;
   $('#insight-title').textContent = meeting.title;
-  $('#insight-description').textContent = `${displayDate(meeting.meeting_date)} · ${meeting.items.length} tematów · ${meeting.status === 'closed' ? 'odprawa zamknięta' : 'odprawa aktywna'}`;
-  $('#insight-content').innerHTML = `<div class="meeting-mode"><label class="field full"><span>Podsumowanie odprawy</span><textarea id="meeting-summary" rows="3">${escapeHtml(meeting.summary || '')}</textarea></label><div class="meeting-items">${meeting.items.map((item, index) => `<article data-meeting-item="${index}"><button type="button" data-operation-jump="${item.entity_type}:${item.entity_id}"><span class="type-dot ${item.entity_type}"></span><span><b>${escapeHtml(item.entity?.scope_label || 'Projekt')} · ${escapeHtml(item.entity?.title || 'Element niedostępny')}</b><small>${escapeHtml(item.entity?.status || '')}</small></span></button><textarea data-meeting-decision rows="2" placeholder="Decyzja / następny krok">${escapeHtml(item.decision || '')}</textarea><select data-meeting-owner>${selectOptions([{ value: '', label: 'Bez właściciela' }, ...assignableUsers().map(user => ({ value: user.id, label: user.display_name }))], item.owner_user_id, null)}</select><input data-meeting-due type="date" value="${escapeHtml(item.due_date || '')}"><select data-meeting-status>${selectOptions([{ value: 'open', label: 'Otwarte' }, { value: 'decided', label: 'Decyzja' }, { value: 'deferred', label: 'Odłożone' }], item.item_status, null)}</select></article>`).join('') || '<div class="empty">Brak tematów.</div>'}</div><footer class="meeting-actions"><button type="button" class="danger" id="meeting-delete">Usuń odprawę</button><span></span><button type="button" class="secondary" id="meeting-save">Zapisz ustalenia</button>${meeting.status === 'open' ? '<button type="button" class="primary" id="meeting-close">Zapisz i zamknij odprawę</button>' : '<button type="button" class="primary" id="meeting-reopen">Otwórz ponownie</button>'}</footer></div>`;
+  $('#insight-description').textContent = `${displayDate(meeting.period_from || meeting.meeting_date)}–${displayDate(meeting.period_to || meeting.meeting_date)} · ${meeting.items.length} tematów · ${meeting.status === 'closed' ? 'odprawa podsumowana' : 'w trakcie'}`;
+  const meetingGoals = options('meeting_goal').length ? options('meeting_goal') : ['Rozpoczęcie', 'Kontynuacja', 'Ukończenie'];
+  $('#insight-content').innerHTML = `<div class="meeting-mode"><header class="meeting-plan-head"><label class="field"><span>Plan od</span><input id="meeting-period-from" type="date" value="${escapeHtml(meeting.period_from || meeting.meeting_date)}"></label><label class="field"><span>Plan do</span><input id="meeting-period-to" type="date" value="${escapeHtml(meeting.period_to || meeting.meeting_date)}"></label><label class="field full"><span>Podsumowanie / agenda</span><textarea id="meeting-summary" rows="3">${escapeHtml(meeting.summary || '')}</textarea></label><button type="button" class="secondary" id="meeting-add-items">+ Dodaj tematy z list</button></header><div class="meeting-items">${meeting.items.map((item, index) => `<article class="meeting-plan-item" data-meeting-item="${index}"><header><button type="button" data-operation-jump="${item.entity_type}:${item.entity_id}"><span class="type-dot ${item.entity_type}"></span><span><b>${escapeHtml(item.entity?.scope_label || 'Projekt')} · ${escapeHtml(item.entity?.title || 'Element niedostępny')}</b><small>${escapeHtml(operationTypeNames[item.entity_type] || item.entity_type)} · ${escapeHtml(item.entity?.status || '')}</small></span></button><button type="button" class="mini danger-text" data-meeting-remove="${index}">Usuń z odprawy</button></header><div class="meeting-plan-fields"><label><span>Cel na okres</span><select data-meeting-objective>${selectOptions(meetingGoals, item.objective || 'Kontynuacja', null)}</select></label><label><span>Zespół odpowiedzialny</span>${meetingUsersHtml('data-meeting-assignee', item.assignee_user_ids || (item.owner_user_id ? [item.owner_user_id] : []), 'Bez przypisania')}</label><label><span>Nowy termin</span><input data-meeting-due type="date" value="${escapeHtml(item.due_date || item.entity?.due_date || '')}"></label><label class="meeting-decision"><span>Co jest do zrobienia</span><textarea data-meeting-decision rows="2" placeholder="Ustalenie / następny krok">${escapeHtml(item.decision || '')}</textarea></label></div><details class="meeting-review" ${meeting.status === 'closed' ? 'open' : ''}><summary>Podsumowanie elementu i zmiany od rozpoczęcia odprawy · ${(item.changes || []).length}</summary><div class="meeting-change-log">${(item.changes || []).map(change => `<article><b>${escapeHtml(change.user_name || 'System')} · ${displayDateTime(change.changed_at)}</b>${Object.entries(change.changes || {}).map(([field, value]) => auditChangeHtml(field, value)).join('') || '<small>Zmiana bez szczegółów</small>'}</article>`).join('') || '<div class="empty compact-empty">Brak zmian od rozpoczęcia odprawy.</div>'}</div><div class="meeting-review-fields"><label><span>Faktycznie zajmowali się</span>${meetingUsersHtml('data-meeting-worker', item.worker_user_ids || [], 'Nie wskazano')}</label><label><span>Wynik</span><select data-meeting-status>${selectOptions([{ value: 'decided', label: 'Zamknięty' }, { value: 'open', label: 'Nadal otwarty' }, { value: 'deferred', label: 'Odłożony' }], item.item_status, null)}</select></label><label><span>Stan elementu po odprawie</span><select data-meeting-target-status>${meetingTargetStatuses(item.entity_type, item.target_status)}</select></label><label class="meeting-outcome"><span>Uzasadnienie / podsumowanie</span><textarea data-meeting-outcome rows="2" placeholder="Wymagane dla otwartego lub odłożonego elementu">${escapeHtml(item.outcome_comment || '')}</textarea></label><div class="meeting-followup-actions"><button type="button" class="mini" data-meeting-create="task" data-index="${index}">+ Dodaj powiązane zadanie</button><button type="button" class="mini" data-meeting-create="point" data-index="${index}">+ Dodaj powiązany punkt otwarty</button></div></div></details></article>`).join('') || '<div class="empty">Lista jest pusta. Użyj „Dodaj tematy z list”, aby wybrać terminy, statusy, zadania, punkty lub cele.</div>'}</div><footer class="meeting-actions"><button type="button" class="danger" id="meeting-delete">Usuń odprawę</button><span></span><button type="button" class="secondary" id="meeting-save">Zapisz plan</button>${meeting.status === 'open' ? '<button type="button" class="primary" id="meeting-close">Podsumuj i zamknij odprawę</button>' : '<button type="button" class="primary" id="meeting-reopen">Otwórz ponownie</button>'}</footer></div>`;
+  const collectItems = () => $$('#insight-content [data-meeting-item]').map((root, index) => ({ entity_type: meeting.items[index].entity_type, entity_id: meeting.items[index].entity_id, objective: root.querySelector('[data-meeting-objective]').value, decision: root.querySelector('[data-meeting-decision]').value, assignee_user_ids: [...root.querySelectorAll('[data-meeting-assignee]:checked')].map(input => Number(input.value)), worker_user_ids: [...root.querySelectorAll('[data-meeting-worker]:checked')].map(input => Number(input.value)), due_date: root.querySelector('[data-meeting-due]').value, item_status: root.querySelector('[data-meeting-status]').value, target_status: root.querySelector('[data-meeting-target-status]').value, outcome_comment: root.querySelector('[data-meeting-outcome]').value }));
   const save = async status => {
-    const items = $$('#insight-content [data-meeting-item]').map((root, index) => ({ entity_type: meeting.items[index].entity_type, entity_id: meeting.items[index].entity_id, decision: root.querySelector('[data-meeting-decision]').value, owner_user_id: Number(root.querySelector('[data-meeting-owner]').value) || null, due_date: root.querySelector('[data-meeting-due]').value, item_status: root.querySelector('[data-meeting-status]').value }));
-    const updated = await api(`/api/project-meetings/${meeting.id}`, { method: 'PATCH', body: JSON.stringify({ ...meeting, summary: $('#meeting-summary').value, status, items, scope: state.controller }) }); toast('Ustalenia odprawy zostały zapisane'); await reloadOperations(); openProjectMeeting(updated);
+    const items = collectItems();
+    if (status === 'closed') {
+      $$('.meeting-review').forEach(details => { details.open = true; });
+      for (const item of items.filter(row => ['open', 'deferred'].includes(row.item_status))) {
+        const source = meeting.items.find(row => row.entity_type === item.entity_type && Number(row.entity_id) === Number(item.entity_id));
+        const statusValues = item.entity_type === 'status' ? statusWorkflowOptions() : item.entity_type === 'task' ? ['To do', 'In progress', 'Blocked', 'Done'] : item.entity_type === 'point' ? ['Open', 'Waiting', 'In progress', 'Closed'] : ['Open', 'In progress', 'Done'];
+        const decision = await uiForm({ title: `${item.item_status === 'deferred' ? 'Odłóż' : 'Pozostaw otwarty'} · ${source?.entity?.title || 'element'}`, description: 'Ustal nowy termin, odpowiedzialnych i stan elementu. Uzasadnienie zostanie dopisane do komentarzy wraz z danymi odprawy i managera.', submitLabel: 'Zapisz decyzję', fields: [
+          { name: 'due_date', label: 'Nowy termin', type: 'date', value: item.due_date || '', required: true },
+          { name: 'target_status', label: 'Stan po odprawie', type: 'select', value: item.target_status || '', options: statusValues },
+          { name: 'assignee_user_ids', label: 'Odpowiedzialni', type: 'multiselect', value: item.assignee_user_ids || [], options: assignableUsers(item.assignee_user_ids).map(user => ({ value: user.id, label: user.display_name })), full: true },
+          { name: 'outcome_comment', label: 'Dlaczego element pozostaje otwarty / odłożony', type: 'textarea', rows: 3, value: item.outcome_comment || '', required: true, full: true }
+        ] });
+        if (!decision) return;
+        if (!decision.assignee_user_ids?.length) { toast('Wskaż co najmniej jedną osobę odpowiedzialną', true); return; }
+        Object.assign(item, { due_date: decision.due_date, target_status: decision.target_status, assignee_user_ids: decision.assignee_user_ids.map(Number), outcome_comment: decision.outcome_comment });
+      }
+    }
+    const updated = await api(`/api/project-meetings/${meeting.id}`, { method: 'PATCH', body: JSON.stringify({ ...meeting, period_from: $('#meeting-period-from').value, period_to: $('#meeting-period-to').value, summary: $('#meeting-summary').value, status, items, scope: 'all' }) });
+    toast(status === 'closed' ? 'Odprawa została podsumowana' : 'Plan odprawy został zapisany'); await loadData(true); if (!state.operations) await reloadOperations(); else await reloadOperations(); openProjectMeeting(updated);
   };
+  $('#meeting-add-items').addEventListener('click', () => addMeetingItems({ ...meeting, items: collectItems() }));
+  $$('.multi-choice-search').forEach(search => search.addEventListener('input', () => { const term = search.value.trim().toLocaleLowerCase('pl'); search.parentElement.querySelectorAll(':scope > label').forEach(label => { label.hidden = Boolean(term) && !label.textContent.toLocaleLowerCase('pl').includes(term); }); }));
+  $$('.meeting-user-select input[type="checkbox"]').forEach(input => input.addEventListener('change', () => { const details = input.closest('details'); const names = [...details.querySelectorAll('input[type="checkbox"]:checked')].map(control => control.closest('label').textContent.trim()); details.querySelector('summary').textContent = names.length ? `${names.length} · ${names.join(', ')}` : 'Bez przypisania'; }));
+  $$('[data-meeting-remove]').forEach(button => button.addEventListener('click', async () => { meeting.items.splice(Number(button.dataset.meetingRemove), 1); try { const updated = await api(`/api/project-meetings/${meeting.id}`, { method: 'PATCH', body: JSON.stringify({ ...meeting, items: meeting.items.map(meetingItemPayload), scope: 'all' }) }); await reloadOperations(); openProjectMeeting(updated); } catch (error) { toast(error.message, true); } }));
+  $$('[data-meeting-create]').forEach(button => button.addEventListener('click', () => { const source = meeting.items[Number(button.dataset.index)]; $('#insight-dialog').close(); const links = [{ entity_type: source.entity_type, entity_id: source.entity_id }]; if (button.dataset.meetingCreate === 'task') openRecord('tasks', null, { title: `Działanie po odprawie: ${source.entity?.title || ''}`, description: source.decision || '', hierarchy_target: source.entity?.controller_group_id ? `group:${source.entity.controller_group_id}` : `controller:${source.entity?.controller || ''}`, links }); else openRecord('points', null, { title: `Punkt po odprawie: ${source.entity?.title || ''}`, description: source.decision || '', hierarchy_target: source.entity?.controller_group_id ? `group:${source.entity.controller_group_id}` : `controller:${source.entity?.controller || ''}`, links }); }));
   $('#meeting-save').addEventListener('click', () => save(meeting.status).catch(error => toast(error.message, true)));
   $('#meeting-close')?.addEventListener('click', () => save('closed').catch(error => toast(error.message, true)));
   $('#meeting-reopen')?.addEventListener('click', () => save('open').catch(error => toast(error.message, true)));
-  $('#meeting-delete').addEventListener('click', async () => { if (!await uiConfirm('Usuń odprawę', 'Ustalenia zapisane wyłącznie w tej odprawie zostaną usunięte.', 'Usuń', true)) return; try { await api(`/api/project-meetings/${meeting.id}`, { method: 'DELETE' }); $('#insight-dialog').close(); await reloadOperations(); } catch (error) { toast(error.message, true); } });
+  $('#meeting-delete').addEventListener('click', async () => { if (!await uiConfirm('Usuń odprawę', 'Ustalenia zapisane w elementach i ich historia pozostaną bez zmian.', 'Usuń', true)) return; try { await api(`/api/project-meetings/${meeting.id}`, { method: 'DELETE' }); $('#insight-dialog').close(); await reloadOperations(); } catch (error) { toast(error.message, true); } });
   $$('[data-operation-jump]').forEach(button => button.addEventListener('click', () => { const [type, id] = button.dataset.operationJump.split(':'); operationJump(type, Number(id)); }));
   $('#insight-dialog').classList.add('kpi-expanded'); if (!$('#insight-dialog').open) $('#insight-dialog').showModal();
-}
-
-function renderKnowledgeBase() {
-  const rows = state.operations.knowledge || [];
-  $('#operations-content').innerHTML = `<section class="operation-view"><header class="operation-head"><div><h2>Baza rozwiązań</h2><p>Sprawdzone rozwiązania powtarzalnych problemów, gotowe do wyszukania i ponownego użycia.</p></div><button type="button" class="primary" id="knowledge-add">+ Dodaj rozwiązanie</button></header><div class="knowledge-grid">${rows.map(item => `<article class="knowledge-card ${item.status}"><header><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.category || 'Bez kategorii')} · użyto ${item.use_count || 0}×</small></span>${badge(item.status === 'published' ? 'Done' : item.status === 'draft' ? 'To do' : 'N/A')}</header><p><b>Problem:</b> ${escapeHtml(item.problem)}</p><details><summary>Pokaż rozwiązanie</summary><p>${escapeHtml(item.solution).replace(/\n/g, '<br>')}</p></details><footer><span>${escapeHtml(item.tags || '')}</span><button class="mini" data-knowledge-edit="${item.id}">Edytuj</button><button class="mini danger-text" data-knowledge-delete="${item.id}">Usuń</button></footer></article>`).join('') || '<div class="empty">Baza nie zawiera jeszcze rozwiązań.</div>'}</div></section>`;
-  $('#knowledge-add').addEventListener('click', () => openKnowledgeEditor());
-  $$('[data-knowledge-edit]').forEach(button => button.addEventListener('click', () => openKnowledgeEditor(rows.find(item => item.id === Number(button.dataset.knowledgeEdit)))));
-  $$('[data-knowledge-delete]').forEach(button => button.addEventListener('click', async () => { if (!await uiConfirm('Usuń rozwiązanie', 'Wpis zostanie usunięty z bazy wiedzy.', 'Usuń', true)) return; try { await api(`/api/knowledge/${button.dataset.knowledgeDelete}`, { method: 'DELETE' }); await reloadOperations(); } catch (error) { toast(error.message, true); } }));
-}
-
-async function openKnowledgeEditor(existing = null) {
-  const result = await uiForm({ title: existing ? 'Edytuj rozwiązanie' : 'Nowe rozwiązanie', submitLabel: 'Zapisz w bazie', fields: [
-    { name: 'title', label: 'Tytuł', value: existing?.title || '', required: true, full: true }, { name: 'category', label: 'Kategoria', value: existing?.category || '' },
-    { name: 'status', label: 'Status', type: 'select', value: existing?.status || 'published', options: [{ value: 'draft', label: 'Szkic' }, { value: 'published', label: 'Opublikowane' }, { value: 'archived', label: 'Archiwum' }] },
-    { name: 'problem', label: 'Objawy / problem', type: 'textarea', value: existing?.problem || '', required: true, full: true, rows: 4 },
-    { name: 'solution', label: 'Rozwiązanie krok po kroku', type: 'textarea', value: existing?.solution || '', required: true, full: true, rows: 6 },
-    { name: 'tags', label: 'Tagi (po przecinku)', value: existing?.tags || '', full: true }
-  ] });
-  if (!result) return;
-  try { await api(existing ? `/api/knowledge/${existing.id}` : '/api/knowledge', { method: existing ? 'PATCH' : 'POST', body: JSON.stringify(result) }); toast('Baza rozwiązań została zaktualizowana'); await reloadOperations(); } catch (error) { toast(error.message, true); }
 }
 
 function renderDependencies() {
@@ -3026,7 +3089,7 @@ function orderedGroups(module, grouping, rows) {
   else if (module === 'status' && grouping === 'subcategory') order = state.config.categories.flatMap(category => category.subcategories.map(item => item.name));
   else if (module === 'status' && grouping === 'function_group_name') order = [...new Set((state.config.function_groups || []).map(group => group.name))];
   else if (module === 'status' && grouping === 'function_group_subcategory_name') order = state.config.function_groups.flatMap(group => (group.subcategories || []).map(item => item.name));
-  else if (module === 'status' && grouping === 'status') order = statusWorkflowValues;
+  else if (module === 'status' && grouping === 'status') order = statusWorkflowValues();
   else if (module === 'tasks' && grouping === 'category') order = taskCategories();
   else if (module === 'tasks' && grouping === 'subcategory') order = state.config.task_categories.flatMap(category => category.subcategories.map(item => item.name));
   else order = [...present];
@@ -3068,7 +3131,7 @@ const inlineEditDefinitions = {
     due_date: { label: 'Deadline', kind: 'date' }, reminder_date: { label: 'Przypomnienie', kind: 'date' }
   } },
   status: { endpoint: '/api/status', fields: {
-    status: { label: 'Status', kind: 'select', values: statusWorkflowOptions },
+    status: { label: 'Status', kind: 'select', values: () => statusWorkflowOptions() },
     criticality: { label: 'Krytyczność', kind: 'select', values: ['Low', 'Medium', 'High', 'Critical'] },
     responsible_user_ids: { label: 'Odpowiedzialni', kind: 'users' }, requirement_ids: { label: 'Zapotrzebowanie', kind: 'requirements' }
   } }
@@ -3398,7 +3461,7 @@ function renderStatus() {
   const functionGroupsInStatus = [...new Map(state.status.filter(item => item.function_group_id).map(item => [Number(item.function_group_id), { id: Number(item.function_group_id), name: item.function_group_name || `Grupa ${item.function_group_id}` }])).values()].sort((a, b) => a.name.localeCompare(b.name, 'pl', { numeric: true }));
   if (state.statusFunctionGroupFilter && !functionGroupsInStatus.some(item => Number(item.id) === Number(state.statusFunctionGroupFilter))) state.statusFunctionGroupFilter = '';
   const unassignedCount = state.status.filter(item => !item.status_group_id).length;
-  $('#content').innerHTML = `<div class="panel status-matrix-panel" id="status-panel"><div class="toolbar module-toolbar"><strong>Tabele statusowe</strong><button id="status-list-mode" class="secondary active-toggle">Lista</button><button id="status-queue-mode" class="secondary">Kolejka</button><button id="quick-status-edit" class="secondary">Szybka edycja</button><input id="status-matrix-search" class="compact-search" type="search" placeholder="Szukaj punktu lub wartości…" value="${escapeHtml(state.statusMatrixQuery)}"><select id="status-function-group-filter" aria-label="Filtr grupy funkcyjnej">${selectOptions(functionGroupsInStatus.map(item => ({ value: item.id, label: item.name })), state.statusFunctionGroupFilter, 'Wszystkie grupy funkcyjne')}</select><button type="button" class="mini ${state.statusGroupByFunction ? 'active-toggle' : ''}" id="status-group-functional" aria-pressed="${state.statusGroupByFunction}">Grupuj wg grupy funkcyjnej</button><button type="button" class="mini ${state.statusShowUnassigned ? 'active-toggle' : ''}" id="status-show-unassigned" aria-pressed="${state.statusShowUnassigned}">Pokaż nieprzypisane${unassignedCount ? ` · ${unassignedCount}` : ''}</button><button type="button" class="mini" id="status-collapse-all">Zwiń wszystkie</button><button type="button" class="mini" id="status-expand-all">Rozwiń wszystkie</button>${savedViewsToolbar('status')}<div class="status-inline-metrics"><span><b>${d.progress || 0}%</b> postęp</span><span><b>${d.in_progress || 0}</b> w trakcie</span><span class="${d.blocked ? 'danger-text' : ''}"><b>${d.blocked || 0}</b> blokady/NOK</span></div></div><div class="table-view-tools">${columnVisibilityControl('status', visibilityColumns)}</div>${statusSymbolLegend()}<div id="status-matrix-content" class="status-matrix-content"></div></div>`;
+  $('#content').innerHTML = `<div class="panel status-matrix-panel" id="status-panel"><div class="toolbar module-toolbar"><strong>Tabele statusowe</strong><button id="status-list-mode" class="secondary active-toggle">Lista</button><button id="status-queue-mode" class="secondary">Kolejka</button><button id="quick-status-edit" class="secondary">Szybka edycja</button><input id="status-matrix-search" class="compact-search" type="search" placeholder="Szukaj punktu lub wartości…" value="${escapeHtml(state.statusMatrixQuery)}"><select id="status-function-group-filter" aria-label="Filtr grupy funkcyjnej">${selectOptions(functionGroupsInStatus.map(item => ({ value: item.id, label: item.name })), state.statusFunctionGroupFilter, 'Wszystkie grupy funkcyjne')}</select><button type="button" class="mini ${state.statusGroupByFunction ? 'active-toggle' : ''}" id="status-group-functional" aria-pressed="${state.statusGroupByFunction}">Grupuj wg grupy funkcyjnej</button><button type="button" class="mini ${state.statusShowUnassigned ? 'active-toggle' : ''}" id="status-show-unassigned" aria-pressed="${state.statusShowUnassigned}">Pokaż nieprzypisane${unassignedCount ? ` · ${unassignedCount}` : ''}</button><button type="button" class="mini" id="status-collapse-all">Zwiń wszystkie</button><button type="button" class="mini" id="status-expand-all">Rozwiń wszystkie</button>${savedViewsToolbar('status')}<div class="status-inline-metrics"><span><b>${d.progress || 0}%</b> postęp</span><span><b>${d.in_progress || 0}</b> w trakcie</span><span class="${d.blocked ? 'danger-text' : ''}"><b>${d.blocked || 0}</b> blokady/NOK</span></div></div><div class="table-view-tools status-table-view-tools">${columnVisibilityControl('status', visibilityColumns)}${statusSymbolLegend()}</div><div id="status-matrix-content" class="status-matrix-content"></div></div>`;
   bindStatusModeButtons();
   $('#quick-status-edit').addEventListener('click', openQuickStatusEditor);
   $('#status-matrix-search').addEventListener('input', event => { state.statusMatrixQuery = event.target.value; drawStatusRows(); });
@@ -3446,7 +3509,7 @@ function drawStatusRows() {
 function statusMatrixProgress(rows, columns) {
   const tracked = (columns || []).filter(column => column.field_type === 'status' && Number(column.include_in_progress));
   if (!tracked.length) return { done: rows.filter(item => ['Done', 'N/A'].includes(item.status)).length, total: rows.length, progress: rows.length ? Math.round(rows.filter(item => ['Done', 'N/A'].includes(item.status)).length * 100 / rows.length) : 0 };
-  const values = rows.flatMap(item => tracked.map(column => item.matrix_values?.[column.id] || item.status || 'Ready to test'));
+  const values = rows.flatMap(item => tracked.map(column => item.matrix_values?.[column.id] || item.status || 'Never checked'));
   const done = values.filter(value => ['Done', 'N/A'].includes(value)).length;
   return { done, total: values.length, progress: values.length ? Math.round(done * 100 / values.length) : 0 };
 }
@@ -3475,7 +3538,7 @@ function statusMatrixTableHtml(rows, columns, emptyLabel) {
     if (activeSortColumn) {
       const left = a.matrix_values?.[activeSortColumn.id] ?? (activeSortColumn.field_type === 'status' ? a.status : '');
       const right = b.matrix_values?.[activeSortColumn.id] ?? (activeSortColumn.field_type === 'status' ? b.status : '');
-      const statusOrder = activeSortColumn.field_type === 'status' ? statusWorkflowValues.indexOf(left) - statusWorkflowValues.indexOf(right) : 0;
+      const statusOrder = activeSortColumn.field_type === 'status' ? statusWorkflowValues().indexOf(left) - statusWorkflowValues().indexOf(right) : 0;
       const compared = statusOrder || String(left || '').localeCompare(String(right || ''), 'pl', { numeric: true, sensitivity: 'base' });
       if (compared) return compared * state.statusMatrixSort.direction;
     }
@@ -3535,10 +3598,10 @@ function editStatusMatrixTextCell(item, column, anchor) {
 
 function editStatusMatrixStatusCell(item, column, anchor) {
   document.querySelectorAll('.inline-edit-popover').forEach(popover => popover.remove());
-  const current = item.matrix_values?.[column.id] ?? item.status ?? 'Ready to test';
+  const current = item.matrix_values?.[column.id] ?? item.status ?? 'Never checked';
   const root = document.createElement('div');
   root.className = 'inline-edit-popover matrix-status-popover';
-  root.innerHTML = `<header><strong>${escapeHtml(column.name)}</strong><button type="button" class="cancel" title="Anuluj">×</button></header><div class="matrix-status-options">${statusWorkflowOptions.map(option => `<button type="button" data-matrix-status-value="${escapeHtml(option.value)}" class="${option.value === current ? 'active' : ''}">${statusSymbol(option.value)}<span>${escapeHtml(option.label)}</span>${option.value === current ? '<b>Aktualny</b>' : ''}</button>`).join('')}</div>`;
+  root.innerHTML = `<header><strong>${escapeHtml(column.name)}</strong><button type="button" class="cancel" title="Anuluj">×</button></header><div class="matrix-status-options">${statusWorkflowOptions(current).map(option => `<button type="button" data-matrix-status-value="${escapeHtml(option.value)}" class="${option.value === current ? 'active' : ''}">${statusSymbol(option.value)}<span>${escapeHtml(option.label)}</span>${option.value === current ? '<b>Aktualny</b>' : ''}</button>`).join('')}</div>`;
   document.body.append(root); positionInlinePopover(root, anchor);
   let outside;
   const close = () => { root.remove(); document.removeEventListener('pointerdown', outside, true); };
@@ -3568,7 +3631,7 @@ async function editStatusMatrixCell(item, column, anchor) {
   if (column.field_type === 'status' && anchor) return editStatusMatrixStatusCell(item, column, anchor);
   const current = item.matrix_values?.[column.id] ?? (column.field_type === 'status' ? item.status : '');
   const fields = column.field_type === 'status'
-    ? [{ name: 'value', label: column.name, type: 'select', value: current, options: statusWorkflowOptions.map(option => ({ value: option.value, label: `${statusSymbolMap[option.value]?.[0] || ''} ${option.label}` })) }]
+    ? [{ name: 'value', label: column.name, type: 'select', value: current, options: statusWorkflowOptions(current).map(option => ({ value: option.value, label: `${statusSymbolDetails(option.value)[0] || ''} ${option.label}` })) }]
     : [{ name: 'value', label: column.name, type: 'textarea', value: current, rows: 5, full: true }];
   const result = await uiForm({ title: `Edytuj · ${column.name}`, description: item.function_detail, submitLabel: 'Zapisz wartość', fields });
   if (!result) return;
@@ -3638,7 +3701,7 @@ function renderQuickStatusRows() {
     <td><select data-field="status_group_id" class="quick-status-group">${selectOptions(statusGroups().map(group => ({ value: group.id, label: group.name })), item.status_group_id, 'Wybierz grupę')}</select></td>
     <td><select data-field="status_subgroup_id" class="quick-status-subgroup">${selectOptions(statusSubgroups(item.status_group_id).map(subgroup => ({ value: subgroup.id, label: subgroup.name })), item.status_subgroup_id, 'Bezpośrednio w grupie')}</select></td>
     <td><select data-field="criticality">${selectOptions(['Low', 'Medium', 'High', 'Critical'], item.criticality)}</select></td>
-    <td><select data-field="status">${selectOptions(statusWorkflowOptions, item.status)}</select></td>
+    <td><select data-field="status">${selectOptions(statusWorkflowOptions(item.status), item.status)}</select></td>
     <td><select data-field="responsible_user_ids" multiple size="2">${assignableUsers(item.responsible_user_ids || []).map(user => `<option value="${user.id}" ${(item.responsible_user_ids || []).includes(user.id) ? 'selected' : ''}>${escapeHtml(user.display_name)}</option>`).join('')}</select></td>
     <td><textarea data-field="current_note" rows="2">${escapeHtml(item.current_note)}</textarea></td>
   </tr>`).join('') || '<tr><td colspan="7" class="empty">Brak wyników</td></tr>';
@@ -3683,7 +3746,7 @@ function openBulkStatus() {
     <label class="field required-field"><span>Grupa statusu *</span><select name="status_group_id" id="bulk-status-matrix-group" required>${selectOptions(statusGroups().map(item => ({ value: item.id, label: item.name })), statusGroup?.id || '', 'Wybierz grupę')}</select></label>
     <label class="field"><span>Podgrupa</span><select name="status_subgroup_id" id="bulk-status-matrix-subgroup">${selectOptions((statusGroup?.subgroups || []).map(item => ({ value: item.id, label: item.name })), '', 'Bezpośrednio w grupie')}</select></label>
     <label class="field"><span>Krytyczność</span><select name="criticality">${selectOptions(['Low', 'Medium', 'High', 'Critical'], 'Medium', '')}</select></label>
-    <label class="field"><span>Status początkowy</span><select name="status">${selectOptions(statusWorkflowOptions, 'Ready to test', '')}</select></label>
+    <label class="field"><span>Status początkowy</span><select name="status">${selectOptions(statusWorkflowOptions(), 'Never checked', '')}</select></label>
     <label class="field full required-field big"><span>Punkty do dodania *</span><textarea name="names" rows="14" required placeholder="Każdy wiersz to osobny punkt, np.&#10;Sprawdź sygnał QM1&#10;Sprawdź sygnał QM2&#10;Potwierdź blokadę osłony"></textarea><small class="sub">Maksymalnie 500 punktów w jednej operacji. Nazwy mogą się powtarzać.</small></label>${requirementsField({}, 'requirement_ids', 'Zapotrzebowanie')}`;
   bindHierarchyTargetTrees($('#bulk-status-fields'));
   $('#bulk-status-matrix-group').addEventListener('change', event => { $('#bulk-status-matrix-subgroup').innerHTML = selectOptions(statusSubgroups(event.target.value).map(item => ({ value: item.id, label: item.name })), '', 'Bezpośrednio w grupie'); });
@@ -4225,12 +4288,14 @@ function controllerHierarchyConfig(admin) {
     const siblings = children(parentId);
     siblings.forEach((group, index) => {
       rows.push(`<div class="hierarchy-tree-row ${state.hierarchySelection === `group:${group.id}` ? 'selected' : ''}" style="--depth:${depth}">${admin ? orderControls('controller_groups', siblings, index) : ''}<button type="button" class="select-hierarchy-node" data-node="group:${group.id}"><b>▰ ${escapeHtml(group.name)}</b><small>${escapeHtml(group.path_label || group.name)}</small></button><span class="node-count">${state.controllers.filter(item => Number(item.group_id) === group.id).length}</span></div>`);
-      state.controllers.filter(item => Number(item.group_id || 0) === group.id).forEach(controller => rows.push(`<div class="hierarchy-tree-row controller-leaf ${state.hierarchySelection === `controller:${controller.id}` ? 'selected' : ''}" style="--depth:${depth + 1}"><button type="button" class="select-hierarchy-node" data-node="controller:${controller.id}"><b>◇ ${escapeHtml(controller.leaf_code || controller.display_name)}</b><small>${escapeHtml(controller.display_name || controller.hierarchy_label || '')}</small></button></div>`));
+      const groupControllers = state.controllers.filter(item => Number(item.group_id || 0) === group.id);
+      groupControllers.forEach((controller, controllerIndex) => rows.push(`<div class="hierarchy-tree-row controller-leaf ${state.hierarchySelection === `controller:${controller.id}` ? 'selected' : ''}" style="--depth:${depth + 1}">${admin ? orderControls('controllers', groupControllers, controllerIndex) : ''}<button type="button" class="select-hierarchy-node" data-node="controller:${controller.id}"><b>◇ ${escapeHtml(controller.leaf_code || controller.display_name)}</b><small>${escapeHtml(controller.display_name || controller.hierarchy_label || '')}</small></button></div>`));
       walk(group.id, depth + 1);
     });
   };
   walk(null, 0);
-  state.controllers.filter(item => !item.group_id).forEach(controller => rows.push(`<div class="hierarchy-tree-row controller-leaf ${state.hierarchySelection === `controller:${controller.id}` ? 'selected' : ''}" style="--depth:0"><button type="button" class="select-hierarchy-node" data-node="controller:${controller.id}"><b>◇ ${escapeHtml(controller.leaf_code || controller.display_name)}</b><small>Bez przypisanego obszaru</small></button></div>`));
+  const ungroupedControllers = state.controllers.filter(item => !item.group_id);
+  ungroupedControllers.forEach((controller, index) => rows.push(`<div class="hierarchy-tree-row controller-leaf ${state.hierarchySelection === `controller:${controller.id}` ? 'selected' : ''}" style="--depth:0">${admin ? orderControls('controllers', ungroupedControllers, index) : ''}<button type="button" class="select-hierarchy-node" data-node="controller:${controller.id}"><b>◇ ${escapeHtml(controller.leaf_code || controller.display_name)}</b><small>Bez przypisanego obszaru</small></button></div>`));
   const [kind, rawId] = String(state.hierarchySelection || '').split(':');
   const selected = kind === 'group' ? state.controllerGroups.find(item => item.id === Number(rawId)) : state.controllers.find(item => item.id === Number(rawId));
   const details = !selected ? '<div class="empty">Wybierz element z drzewa lub utwórz pierwszy obszar.</div>' : kind === 'group'
@@ -4258,7 +4323,7 @@ function renderSettings() {
     ['users', 'Użytkownicy projektu', 'Role, dostęp, Planner i przypisane obszary', state.users.length, '♙'],
     ['announcements', 'Informator', 'Etykiety oraz poziomy ważności wiadomości', (state.config.announcement_labels || []).length, '◆'],
     ...(admin ? [['planner', 'Planner i czas pracy', 'Święta, normy godzin i mnożniki nadgodzin', (state.planner?.holidays || []).length, '▥']] : []),
-    ['dictionaries', 'Słowniki projektu', 'Zmiany, typy notatek i „Oczekiwanie na”', state.config.options.length, '≡'],
+    ['dictionaries', 'Słowniki projektu', 'Stany statusu, cele odpraw, zmiany i typy notatek', state.config.options.length + (state.config.status_workflow_states?.length || 0), '≡'],
     ['completion_requirements', 'Zapotrzebowanie', 'Lista zapotrzebowania wybierana w Statusie, Zadaniach i Otwartych punktach', (state.config.requirements || []).length, '◇'],
     ['reminders', 'Przypomnienia', 'Domyślne terminy i okno ostrzegawcze', 2, '◷'],
     ...(admin ? [['backup', 'Backup projektu', 'Pobieranie i odtwarzanie kompletnego projektu', '', '⇄'], ['exports', 'Szablony eksportu', 'Predefiniowane raporty statusu do Excel', (state.config.export_templates || []).length, '↗']] : [])
@@ -4278,10 +4343,12 @@ function configPanelDefinition(key) {
   const admin = ['system_admin', 'project_admin'].includes(state.me.role);
   const canEdit = ['system_admin', 'project_admin', 'moderator'].includes(state.me.role);
   const systemAdmin = state.me.role === 'system_admin';
-  const dictionaries = [['waiting_for', 'Oczekiwanie na'], ['shift', 'Zmiany'], ['note_type', 'Typy notatek']].map(([kind, label]) => {
+  const dictionaries = [['waiting_for', 'Oczekiwanie na'], ['shift', 'Zmiany'], ['note_type', 'Typy notatek'], ['meeting_goal', 'Cele elementów odprawy']].map(([kind, label]) => {
     const items = state.config.options.filter(item => item.kind === kind);
     return `<section class="config-subsection"><h3>${label}</h3>${items.map((item, index) => `<div class="settings-row">${orderControls('options', items, index)}<span>${escapeHtml(item.value)}</span><button class="mini edit-option" data-id="${item.id}" data-kind="${kind}" data-value="${escapeHtml(item.value)}">Edytuj</button>${admin ? `<button class="mini delete-config" data-kind="option" data-id="${item.id}">Usuń</button>` : ''}</div>`).join('')}<form class="inline-form add-option" data-kind="${kind}"><input name="value" placeholder="Nowa wartość" required><button class="mini">Dodaj</button></form></section>`;
   }).join('');
+  const workflowStates = state.config.status_workflow_states || fallbackStatusWorkflowStates;
+  const statusStateConfig = `<section class="config-subsection status-state-config"><header><span><h3>Stany punktów statusowych</h3><small class="sub">Wyłączony stan nie pojawi się przy nowych zmianach. Dostępne ikony: ○ ◐ ⊘ ↻ ✓ — ◎ ◉ ◆ ▲ ! ? ★ ⚙</small></span><button type="button" class="secondary" id="new-status-state">+ Dodaj stan</button></header>${workflowStates.map((item, index) => `<div class="settings-row"><span>${statusSymbol(item.value)}</span>${orderControls('status_workflow_states', workflowStates, index)}<span><b>${escapeHtml(item.label)}</b><small class="sub">${escapeHtml(item.description || 'Bez opisu')} · ${item.included ? 'widoczny na listach' : 'wyłączony'}${item.counts_as_done ? ' · zamyka punkt' : ''}</small></span><button type="button" class="mini edit-status-state" data-id="${item.id}">Edytuj</button>${admin && !item.system_key ? `<button type="button" class="mini danger-text delete-status-state" data-id="${item.id}">Usuń</button>` : ''}</div>`).join('')}</section>`;
   const users = state.users.map((item, index) => `<div class="settings-row user-config-row">${systemAdmin ? orderControls('users', state.users, index) : ''}<span><b>${escapeHtml(item.display_name)}</b><small class="sub">${escapeHtml(item.username)} · ${item.system_role === 'system_admin' ? 'Administrator systemu' : roleName(item.project_role)} · ${item.project_active ? 'w projekcie' : 'wyłączony z projektu'} · Planner: ${item.planner_enabled ? 'tak' : 'nie'} · Listy wyboru: ${Number(item.assignable) !== 0 ? 'widoczny' : 'ukryty'}</small><small class="sub">Obszary: ${(item.area_ids || []).map(id => state.controllerGroups.find(group => group.id === id)?.path_label).filter(Boolean).map(escapeHtml).join(', ') || 'nie przypisano'}</small></span>${admin && item.project_active ? `<button class="mini toggle-user-assignable ${Number(item.assignable) !== 0 ? 'active-toggle' : ''}" data-id="${item.id}" data-enabled="${Number(item.assignable) !== 0 ? 1 : 0}">${Number(item.assignable) !== 0 ? 'W wyborach ✓' : 'W wyborach —'}</button><button class="mini toggle-user-planner ${item.planner_enabled ? 'active-toggle' : ''}" data-id="${item.id}" data-enabled="${item.planner_enabled ? 1 : 0}">${item.planner_enabled ? 'Planner ✓' : 'Planner —'}</button>` : ''}${admin && item.project_active && item.system_role !== 'system_admin' ? `<button class="mini edit-user-areas" data-id="${item.id}">Obszary</button>` : ''}${systemAdmin ? `<button class="mini reset-user-password" data-id="${item.id}" data-name="${escapeHtml(item.display_name)}">Nowe hasło</button>` : ''}${canManageUser(item) ? `<button class="mini edit-user" data-id="${item.id}">Edytuj dostęp</button>` : ''}</div>`).join('');
   const importanceItems = state.config.options.filter(item => item.kind === 'announcement_importance');
   const announcementConfig = `<section class="config-panel-body config-two-columns"><section class="config-subsection"><h3>Etykiety wiadomości</h3>${(state.config.announcement_labels || []).map((item, index, items) => `<div class="settings-row">${orderControls('announcement_labels', items, index)}<span><span class="announcement-label ${escapeHtml(item.color)}">${escapeHtml(item.name)}</span></span><button class="mini edit-announcement-label" data-id="${item.id}">Edytuj</button>${admin ? `<button class="mini delete-announcement-label" data-id="${item.id}">Usuń</button>` : ''}</div>`).join('')}<button class="secondary" id="new-announcement-label">+ Dodaj etykietę</button></section><section class="config-subsection"><h3>Poziomy ważności</h3>${importanceItems.map((item, index) => `<div class="settings-row">${orderControls('options', importanceItems, index)}<span>${escapeHtml(item.value)}</span><button class="mini edit-option" data-id="${item.id}" data-kind="announcement_importance" data-value="${escapeHtml(item.value)}">Edytuj</button>${admin ? `<button class="mini delete-config" data-kind="option" data-id="${item.id}">Usuń</button>` : ''}</div>`).join('')}<form class="inline-form add-option" data-kind="announcement_importance"><input name="value" placeholder="Nowy poziom" required><button class="mini">Dodaj</button></form></section></section>`;
@@ -4301,7 +4368,7 @@ function configPanelDefinition(key) {
     users: ['Użytkownicy projektu', `<section class="config-panel-body">${users}${systemAdmin ? '<button class="secondary" id="new-user">+ Dodaj globalne konto</button>' : ''}</section>`],
     announcements: ['Informator · etykiety i ważność', announcementConfig],
     planner: ['Planner · konfiguracja', plannerConfig],
-    dictionaries: ['Słowniki projektu', `<section class="config-panel-body config-dictionaries">${dictionaries}</section>`],
+    dictionaries: ['Słowniki projektu', `<section class="config-panel-body config-dictionaries">${statusStateConfig}${dictionaries}</section>`],
     completion_requirements: ['Zapotrzebowanie', `<section class="config-panel-body"><p class="sub">Ta lista jest dostępna jako wielokrotny wybór w Statusie, Zadaniach i Otwartych punktach.</p>${(state.config.requirements || []).map((item, index, items) => `<div class="settings-row">${canEdit ? orderControls('completion_requirements', items, index) : ''}<span><b>${escapeHtml(item.name)}</b><small class="sub">${escapeHtml(item.description || 'Bez opisu')}</small></span>${canEdit ? `<button class="mini edit-requirement-config" data-id="${item.id}">Edytuj</button>` : ''}${admin ? `<button class="mini delete-requirement-config" data-id="${item.id}">Usuń</button>` : ''}</div>`).join('') || '<div class="empty compact-empty">Nie zdefiniowano jeszcze zapotrzebowania.</div>'}${canEdit ? '<button class="secondary" id="new-requirement-config">+ Dodaj pozycję</button>' : ''}</section>`],
     reminders: ['Ustawienia przypomnień', `<section class="config-panel-body">${admin ? `<p class="sub">Źródło obszarów dla „Mojego podsumowania” każdy użytkownik wybiera indywidualnie w tym module.</p><label class="field"><span>Domyślne przypomnienie po utworzeniu (dni)</span><input id="default-reminder" type="number" min="1" value="${escapeHtml(state.config.settings.default_reminder_days || 14)}"></label><label class="field"><span>Okno „zbliżających się” przypomnień (dni)</span><input id="warning-days" type="number" min="1" value="${escapeHtml(state.config.settings.reminder_warning_days || 7)}"></label>` : '<p class="sub">Tylko administrator może zmieniać ustawienia projektu.</p>'}</section>`],
     backup: ['Backup projektu', `<section class="config-panel-body"><p class="sub">Backup zawiera konfigurację i dane projektu. Nowe pliki są szyfrowane hasłem lokalnie w przeglądarce; hasło nie trafia na serwer.</p><div class="backup-actions"><button class="secondary" id="download-backup">Pobierz zaszyfrowany backup</button><label class="secondary file-button">Wczytaj backup<input id="restore-backup" type="file" accept="application/json,.json,.plcbak"></label></div></section>`],
@@ -4316,6 +4383,23 @@ function openConfigPanel(key) {
   if (!$('#config-full-dialog').open) $('#config-full-dialog').showModal();
 }
 
+async function editStatusWorkflowState(id = null) {
+  const item = (state.config.status_workflow_states || []).find(row => Number(row.id) === Number(id));
+  const icons = ['○', '◐', '⊘', '↻', '✓', '—', '◎', '◉', '◆', '▲', '!', '?', '★', '⚙'];
+  const result = await uiForm({ title: item ? 'Edytuj stan statusu' : 'Dodaj stan statusu', description: item?.system_key ? 'Nazwa widoczna, ikona i opis mogą być zmienione. Znaczenie bazowego stanu pozostaje zachowane.' : 'Własny stan będzie dostępny we wszystkich podpunktach statusowych tego projektu.', submitLabel: 'Zapisz stan', fields: [
+    { name: 'label', label: 'Nazwa', value: item?.label || '', required: true },
+    { name: 'icon', label: 'Ikona', type: 'select', value: item?.icon || '○', options: icons.map(icon => ({ value: icon, label: icon })) },
+    { name: 'description', label: 'Opis w legendzie', type: 'textarea', rows: 3, value: item?.description || '', full: true },
+    { name: 'included', label: 'Dostępny przy zmianie statusu', type: 'checkbox', value: item ? Number(item.included) !== 0 : true },
+    { name: 'counts_as_done', label: 'Uwzględniaj jako ukończony', type: 'checkbox', value: Boolean(item?.counts_as_done) }
+  ] });
+  if (!result) return;
+  try {
+    await api(`/api/status-workflow-states${item ? `/${item.id}` : ''}`, { method: item ? 'PATCH' : 'POST', body: JSON.stringify(result) });
+    await loadData(true); toast('Stan statusu został zapisany');
+  } catch (error) { toast(error.message, true); }
+}
+
 function refreshConfigPanel() {
   if (!state.configPanel) return;
   const dialog = $('#config-full-dialog'); const [title, html] = configPanelDefinition(state.configPanel);
@@ -4328,6 +4412,9 @@ function refreshConfigPanel() {
 
 function bindSettings() {
   $$('.move-item').forEach(button => button.addEventListener('click', () => moveConfigItem(button.dataset.kind, Number(button.dataset.id), Number(button.dataset.direction))));
+  $('#new-status-state')?.addEventListener('click', () => editStatusWorkflowState());
+  $$('.edit-status-state').forEach(button => button.addEventListener('click', () => editStatusWorkflowState(Number(button.dataset.id))));
+  $$('.delete-status-state').forEach(button => button.addEventListener('click', async () => { if (!await uiConfirm('Usuń własny stan', 'Stan można usunąć tylko wtedy, gdy nie jest używany.', 'Usuń', true)) return; try { await api(`/api/status-workflow-states/${button.dataset.id}`, { method: 'DELETE' }); await loadData(true); } catch (error) { toast(error.message, true); } }));
   $('#new-status-group')?.addEventListener('click', () => editStatusGroup());
   $('#status-layout-export')?.addEventListener('click', exportStatusLayout);
   $('#status-layout-import')?.addEventListener('change', importStatusLayoutFile);
@@ -4958,7 +5045,7 @@ async function openRecord(type, record = null, prefill = null, duplicateSource =
   $('#comments-section').classList.toggle('hidden', !commentable);
   $('#comment-content').value = '';
   if (commentable) renderEntityComments(record.comments || []);
-  resetSimilarKnowledge();
+  resetSimilarHistory();
   const visibleFields = type === 'status' && record
     ? definition.fields.filter(field => !['hierarchy_target', 'status_group_id', 'status_subgroup_id'].includes(field[0]))
     : definition.fields;
@@ -4972,7 +5059,7 @@ async function openRecord(type, record = null, prefill = null, duplicateSource =
   $('#modal').showModal();
   setRecordDialogMode(state.dialog.editing);
   $('#modal').dataset.dirty = '';
-  if (record && ['status', 'tasks', 'points'].includes(type)) void loadSimilarKnowledge(typeToEntity(type), record.id);
+  if (!record && ['tasks', 'points'].includes(type)) bindSimilarHistorySearch(typeToEntity(type));
 }
 
 function renderRecordDialogHeader() {
@@ -5026,25 +5113,42 @@ async function toggleRecordEditLock() {
   } catch (error) { toast(error.message, true); }
 }
 
-function resetSimilarKnowledge() {
-  $('#similar-knowledge-section').classList.add('hidden');
-  $('#similar-knowledge-count').textContent = '';
-  $('#similar-knowledge-list').innerHTML = '';
+function resetSimilarHistory() {
+  $('#similar-history-section').classList.add('hidden');
+  $('#similar-history-count').textContent = '';
+  $('#similar-history-list').innerHTML = '';
 }
 
-async function loadSimilarKnowledge(entityType, entityId) {
+async function loadSimilarHistory(entityType, query) {
   try {
-    const rows = await api(`/api/knowledge/similar?type=${encodeURIComponent(entityType)}&id=${Number(entityId)}`);
-    if (state.dialog?.record?.id !== Number(entityId) || typeToEntity(state.dialog?.type) !== entityType || !rows.length) return;
-    $('#similar-knowledge-count').textContent = `${rows.length} ${rows.length === 1 ? 'podpowiedź' : 'podpowiedzi'}`;
-    $('#similar-knowledge-list').innerHTML = rows.map(item => `<details class="similar-knowledge-row">
-      <summary><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml([item.category, item.tags].filter(Boolean).join(' · ') || 'Baza wiedzy')}</small></span><strong>${Number(item.similarity || 0)}% zgodności</strong></summary>
-      <div><p><b>Problem:</b> ${escapeHtml(item.problem).replace(/\n/g, '<br>')}</p><p><b>Rozwiązanie:</b> ${escapeHtml(item.solution).replace(/\n/g, '<br>')}</p></div>
+    const rows = await api(`/api/similar-history?type=${encodeURIComponent(entityType)}&q=${encodeURIComponent(query)}`);
+    if (typeToEntity(state.dialog?.type) !== entityType) return;
+    if (!rows.length) return resetSimilarHistory();
+    $('#similar-history-count').textContent = `${rows.length} ${rows.length === 1 ? 'podpowiedź' : 'podpowiedzi'}`;
+    $('#similar-history-list').innerHTML = rows.map(item => `<details class="similar-history-row">
+      <summary><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml([item.entity_type === 'task' ? 'Zadanie' : 'Otwarty punkt', item.scope_label, item.category, displayDate(item.updated_at)].filter(Boolean).join(' · '))}</small></span><strong>${Number(item.similarity || 0)}% zgodności</strong></summary>
+      <div><p>${escapeHtml(item.outcome || 'Brak dodatkowego opisu rezultatu.').replace(/\n/g, '<br>')}</p></div>
     </details>`).join('');
-    $('#similar-knowledge-section').classList.remove('hidden');
+    $('#similar-history-section').classList.remove('hidden');
   } catch {
-    resetSimilarKnowledge();
+    resetSimilarHistory();
   }
+}
+
+function bindSimilarHistorySearch(entityType) {
+  const fields = ['#form-title', '#fields [name="description"]', '#fields [name="impact"]', '#fields [name="next_action"]'].map(selector => $(selector)).filter(Boolean);
+  if (!fields.length) return;
+  let timer;
+  const refresh = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      const query = fields.map(field => field.value.trim()).filter(Boolean).join(' ');
+      if (query.length < 4) return resetSimilarHistory();
+      void loadSimilarHistory(entityType, query);
+    }, 280);
+  };
+  fields.forEach(field => field.addEventListener('input', refresh));
+  refresh();
 }
 
 function typeToEntity(type) { return ({ status: 'status', tasks: 'task', points: 'point', notes: 'note', goals: 'goal' })[type]; }
@@ -5161,10 +5265,10 @@ function statusMatrixEditorField(record, groupId = record?.status_group_id, subg
   const basic = columns.filter(column => statusColumnRole(column) === 'basic');
   const subpoints = columns.filter(column => statusColumnRole(column) === 'subpoint');
   const workflowSubpoints = subpoints.filter(column => column.field_type === 'status');
-  const value = column => record?.matrix_values?.[column.id] ?? (column.field_type === 'status' ? record?.status || 'Ready to test' : '');
+  const value = column => record?.matrix_values?.[column.id] ?? (column.field_type === 'status' ? record?.status || 'Never checked' : '');
   const basicHtml = basic.map(column => `<label class="field"><span>${escapeHtml(column.name)}</span><input type="text" data-matrix-value data-column="${column.id}" data-column-type="text" value="${escapeHtml(value(column))}"></label>`).join('');
   const subpointsHtml = subpoints.map(column => column.field_type === 'status'
-    ? `<label class="status-subpoint-field"><span>${statusSymbol(value(column))}<b>${escapeHtml(column.name)}</b></span><select data-matrix-value data-column="${column.id}" data-column-type="status">${selectOptions(statusWorkflowOptions.map(option => ({ value: option.value, label: `${statusSymbolMap[option.value]?.[0] || ''} ${option.label}` })), value(column), null)}</select></label>`
+    ? `<label class="status-subpoint-field"><span>${statusSymbol(value(column))}<b>${escapeHtml(column.name)}</b></span><select data-matrix-value data-column="${column.id}" data-column-type="status">${selectOptions(statusWorkflowOptions(value(column)).map(option => ({ value: option.value, label: `${statusSymbolDetails(option.value)[0] || ''} ${option.label}` })), value(column), null)}</select></label>`
     : `<label class="status-subpoint-field text"><span><i class="status-text-marker">Aa</i><b>${escapeHtml(column.name)}</b></span><input type="text" data-matrix-value data-column="${column.id}" data-column-type="text" value="${escapeHtml(value(column))}"></label>`).join('');
   const scope = statusGroups().find(item => Number(item.id) === Number(groupId));
   const scopeName = [scope?.name, scope?.subgroups?.find(item => Number(item.id) === Number(subgroupId))?.name].filter(Boolean).join(' → ');
@@ -5238,7 +5342,7 @@ function fieldHtml([name, label, type = 'text', extra], record, formType = '') {
   else if (type === 'boolean') input = `<select name="${name}"><option value="1"${Number(value) !== 0 ? ' selected' : ''}>Tak</option><option value="0"${Number(value) === 0 ? ' selected' : ''}>Nie</option></select>`;
   else if (type === 'readonly') input = `<span class="id-lock"><input name="${name}" value="${escapeHtml(value || 'Zostanie nadane automatycznie')}" readonly></span>`;
   else input = `<input name="${name}" type="${type}" value="${escapeHtml(value)}" ${required ? 'required' : ''}>`;
-  const info = formType === 'status' && name === 'status' ? `<span class="field-info" tabindex="0" aria-label="Legenda statusów">i<span class="field-info-tooltip" role="tooltip"><b>Legenda statusów</b><ul>${statusWorkflowLegend.map(([title, description]) => `<li><strong>${escapeHtml(title)}</strong> — ${escapeHtml(description)}</li>`).join('')}</ul></span></span>` : '';
+  const info = formType === 'status' && name === 'status' ? `<span class="field-info" tabindex="0" aria-label="Legenda statusów">i<span class="field-info-tooltip" role="tooltip"><b>Legenda statusów</b><ul>${allStatusWorkflowStates().filter(item => Number(item.included) !== 0).map(({ label: title, description }) => `<li><strong>${escapeHtml(title)}</strong> — ${escapeHtml(description)}</li>`).join('')}</ul></span></span>` : '';
   const compactOptions = type === 'select' && Array.isArray(extra) ? extra.map(option => String(typeof option === 'object' ? option.label : option)) : [];
   const compact = (compactOptions.length && Math.max(...compactOptions.map(option => option.length)) <= 22) || ['date', 'boolean'].includes(type);
   return `<label class="field ${required ? 'required-field' : ''} ${['textarea', 'bigtextarea', 'wide-text'].includes(type) ? `full ${type === 'bigtextarea' ? 'big' : ''}` : compact ? 'ui-compact-field' : ''}"><span>${label}${required ? ' *' : ''}${info}</span>${input}${type === 'readonly' ? '<small class="sub">ID jest unikalne w projekcie i nie można go edytować.</small>' : ''}</label>`;
@@ -5534,19 +5638,27 @@ async function openEntitySelection(context) {
   state.selectionContext = context;
   state.selectionDraft = [...new Map((context.initial || []).map(item => [`${item.entity_type}:${Number(item.entity_id)}`, { entity_type: item.entity_type, entity_id: Number(item.entity_id) }])).values()];
   $('#entity-selection-search').value = '';
-  $('#entity-selection-type').innerHTML = `<option value="all">Wszystkie typy</option>${context.allowed.map(type => `<option value="${type}">${labels[type]}</option>`).join('')}`;
-  $('#entity-selection-title').textContent = context.mode === 'planner' ? 'Przypisz pracę pracownikowi' : context.onApply ? 'Powiązane elementy informacji' : 'Dodaj istniejące elementy do dnia';
+  $('#entity-selection-type').innerHTML = context.meeting
+    ? `<option value="due">Terminy w okresie i zbliżające się</option><option value="status">Otwarte punkty statusu</option><option value="task">Otwarte zadania</option><option value="point">Otwarte punkty</option><option value="goal">Otwarte cele</option>`
+    : `<option value="all">Wszystkie typy</option>${context.allowed.map(type => `<option value="${type}">${labels[type]}</option>`).join('')}`;
+  $('#entity-selection-title').textContent = context.meeting ? 'Dodaj tematy do odprawy' : context.mode === 'planner' ? 'Przypisz pracę pracownikowi' : context.onApply ? 'Powiązane elementy informacji' : 'Dodaj istniejące elementy do dnia';
   const user = context.userId ? state.users.find(item => item.id === context.userId) : null;
-  $('#entity-selection-description').textContent = context.mode === 'planner'
+  $('#entity-selection-description').textContent = context.meeting ? `${displayDate(context.from)}–${displayDate(context.to)} · wybierz jedną z osobnych list i zawęź ją obszarami.` : context.mode === 'planner'
     ? `${user?.display_name || 'Pracownik'} · ${displayDate(context.date)} · wybór przypisze osobę i planowany start.`
     : context.onApply ? 'Wybierz zadania, status, otwarte punkty, cele lub wcześniejsze przekazania związane z tą informacją.'
       : `${displayDate(context.date)} · wybrane elementy pojawią się w tym dniu bez zmiany ich terminów.`;
+  $('#entity-selection-scope').innerHTML = context.meeting ? hierarchyMultiDropdownHtml([]) : '';
+  state.selectionScopes = [];
+  if (context.meeting) bindHierarchyMultiDropdown($('#entity-selection-scope'), selected => { state.selectionScopes = selected; renderEntitySelection(); });
   $('#entity-selection-dialog').showModal();
   $('#entity-selection-content').innerHTML = '<div class="loading">Ładowanie elementów całego projektu…</div>';
   try {
-    const endpoints = { status: '/api/status?controller=all', task: '/api/tasks?controller=all', point: '/api/open-points?controller=all', goal: '/api/goals?controller=all', note: '/api/daily-notes?controller=all' };
-    const values = await Promise.all(context.allowed.map(type => api(endpoints[type])));
-    state.selectionCollections = Object.fromEntries(context.allowed.map((type, index) => [type, values[index]]));
+    if (context.meeting) state.selectionCollections = await api(`/api/project-meetings/candidates?from=${encodeURIComponent(context.from)}&to=${encodeURIComponent(context.to)}`);
+    else {
+      const endpoints = { status: '/api/status?controller=all', task: '/api/tasks?controller=all', point: '/api/open-points?controller=all', goal: '/api/goals?controller=all', note: '/api/daily-notes?controller=all' };
+      const values = await Promise.all(context.allowed.map(type => api(endpoints[type])));
+      state.selectionCollections = Object.fromEntries(context.allowed.map((type, index) => [type, values[index]]));
+    }
   } catch (error) { toast(error.message, true); state.selectionCollections = null; }
   renderEntitySelection();
 }
@@ -5557,8 +5669,14 @@ function renderEntitySelection() {
   const query = ($('#entity-selection-search').value || '').toLocaleLowerCase('pl');
   const selectedType = $('#entity-selection-type').value || 'all';
   const selected = new Set(state.selectionDraft.map(item => `${item.entity_type}:${item.entity_id}`));
-  let rows = context.allowed.flatMap(type => (selectionCollections()[type] || []).map(item => ({ type, item })));
-  rows = rows.filter(({ type, item }) => (selectedType === 'all' || type === selectedType) && (!query || `${entityLabel(type, item)} ${controllerLabel(item)} ${item.owner_name || item.responsible_name || item.created_by_name || ''} ${item.category || ''}`.toLocaleLowerCase('pl').includes(query)));
+  let rows = context.meeting
+    ? (selectionCollections()[selectedType] || []).map(item => ({ type: item.entity_type || selectedType, item: { ...item, id: item.entity_id || item.id } }))
+    : context.allowed.flatMap(type => (selectionCollections()[type] || []).map(item => ({ type, item })));
+  rows = rows.filter(({ type, item }) => (context.meeting || selectedType === 'all' || type === selectedType) && (!query || `${entityLabel(type, item)} ${controllerLabel(item)} ${item.owner_name || item.responsible_name || item.created_by_name || ''} ${item.category || ''}`.toLocaleLowerCase('pl').includes(query)));
+  if (context.meeting && state.selectionScopes?.length) rows = rows.filter(({ item }) => {
+    const codes = rowControllerCodes(item);
+    return state.selectionScopes.some(value => [...hierarchyControllerCodes(value)].some(code => codes.has(code)));
+  });
   const typeNames = { status: 'Status', task: 'Zadanie', point: 'Otwarty punkt', goal: 'Cel', note: 'Przekazanie statusu' };
   $('#entity-selection-content').innerHTML = `<div class="link-picker-table">${pickerGroupHtml(rows.slice(0, 700), ({ type, item }) => {
     const key = `${type}:${item.id}`;
@@ -5768,7 +5886,7 @@ async function saveRecord(event) {
   if (record?.updated_at) input.updated_at = record.updated_at;
   if (duplicateSource?.id) input.duplicate_source_id = duplicateSource.id;
   if (type === 'status') {
-    input.status = record?.status || duplicateSource?.status || 'Ready to test';
+    input.status = record?.status || duplicateSource?.status || 'Never checked';
     if (duplicateSource?.id) input.matrix_values = desiredMatrixValues;
   }
   if (formDefinitions[type].fields.some(field => field[2] === 'multi-links')) { captureMultiLinks(); input.links = state.linkDraft; }

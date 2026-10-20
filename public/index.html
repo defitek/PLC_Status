@@ -61,7 +61,7 @@
       </header>
       <div id="record-meta" class="record-meta"></div>
       <div id="fields" class="formgrid"></div>
-      <section id="similar-knowledge-section" class="similar-knowledge-section hidden"><header><h3>Podobne rozwiązania</h3><span id="similar-knowledge-count"></span></header><p>Podpowiedzi z bazy wiedzy dopasowane do treści i zakresu tego elementu.</p><div id="similar-knowledge-list"></div></section>
+      <section id="similar-history-section" class="similar-history-section hidden"><header><h3>Podobne zakończone elementy</h3><span id="similar-history-count"></span></header><p>Podpowiedzi z wcześniejszych zadań i otwartych punktów są dopasowywane do wpisywanej treści.</p><div id="similar-history-list"></div></section>
       <section id="comments-section" class="comments-section hidden"><header><h3>Komentarze</h3><span id="comments-count"></span></header><div id="comments-list"></div><div class="comment-compose"><textarea id="comment-content" rows="2" maxlength="5000" placeholder="Dodaj komentarz…"></textarea><button type="button" id="comment-add" class="secondary">Dodaj komentarz</button></div></section>
       <button type="button" id="audit-toggle" class="secondary audit-toggle" hidden>Pokaż historię edycji</button>
       <section id="audit-section" class="audit-section hidden"><h3>Historia edycji</h3><div id="audit-list"></div></section>
@@ -181,7 +181,7 @@
 
   <dialog id="entity-selection-dialog" class="wide-dialog">
     <header class="dialog-head"><div><h2 id="entity-selection-title">Wybierz elementy</h2><p id="entity-selection-description"></p></div><button type="button" class="x" id="entity-selection-close">×</button></header>
-    <div class="picker-tools"><input id="entity-selection-search" type="search" placeholder="Szukaj po nazwie, obszarze lub osobie…"><select id="entity-selection-type"></select></div>
+    <div class="picker-tools"><input id="entity-selection-search" type="search" placeholder="Szukaj po nazwie, obszarze lub osobie…"><select id="entity-selection-type"></select><div id="entity-selection-scope"></div></div>
     <div class="picker-legend"><span><i class="type-dot status"></i>Status</span><span><i class="type-dot task"></i>Zadanie</span><span><i class="type-dot point"></i>Otwarty punkt</span><span><i class="type-dot goal"></i>Cel</span><span><i class="type-dot note"></i>Przekazanie statusu</span></div>
     <div id="entity-selection-content" class="picker-content link-picker-content"></div>
     <footer class="dialog-actions"><span id="entity-selection-count"></span><span></span><button type="button" class="secondary" id="entity-selection-cancel">Anuluj</button><button type="button" class="primary" id="entity-selection-apply">Zastosuj wybór</button></footer>

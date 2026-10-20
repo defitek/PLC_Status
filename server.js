@@ -310,6 +310,8 @@ async function handleProjectApi(request, response, url, user) {
   const orphanLinkId = path.match(/^\/api\/data-quality\/orphan-links\/(\d+)$/);
   if (orphanLinkId && method === 'DELETE') { requireRole(user, 'moderator'); return json(response, 200, repository.deleteOrphanLink(Number(orphanLinkId[1]))); }
   if (method === 'POST' && path === '/api/project-meetings') { requireRole(user, 'moderator'); return json(response, 201, repository.saveProjectMeeting(null, await readJson(request), user)); }
+  if (method === 'GET' && path === '/api/project-meetings/candidates') { requireRole(user, 'moderator'); return json(response, 200, repository.meetingCandidates(url.searchParams.get('from'), url.searchParams.get('to'), user)); }
+  if (method === 'GET' && path === '/api/meeting-summaries') return json(response, 200, repository.meetingSummaries(user));
   const meetingId = numericId(path, '/api/project-meetings');
   if (meetingId !== null) {
     requireRole(user, 'moderator');
@@ -323,14 +325,7 @@ async function handleProjectApi(request, response, url, user) {
     if (method === 'PATCH') return json(response, 200, repository.saveExternalDependency(externalDependencyId, await readJson(request), user));
     if (method === 'DELETE') { repository.deleteExternalDependency(externalDependencyId); response.writeHead(204); return response.end(); }
   }
-  if (method === 'POST' && path === '/api/knowledge') { requireRole(user, 'moderator'); return json(response, 201, repository.saveKnowledgeArticle(null, await readJson(request), user)); }
-  if (method === 'GET' && path === '/api/knowledge/similar') return json(response, 200, repository.similarKnowledge(url.searchParams.get('type'), Number(url.searchParams.get('id')), user));
-  const knowledgeId = numericId(path, '/api/knowledge');
-  if (knowledgeId !== null) {
-    requireRole(user, 'moderator');
-    if (method === 'PATCH') return json(response, 200, repository.saveKnowledgeArticle(knowledgeId, await readJson(request), user));
-    if (method === 'DELETE') { repository.deleteKnowledgeArticle(knowledgeId); response.writeHead(204); return response.end(); }
-  }
+  if (method === 'GET' && path === '/api/similar-history') return json(response, 200, repository.similarHistory(url.searchParams.get('type'), url.searchParams.get('q'), user));
   if (method === 'GET' && path === '/api/handovers') return json(response, 200, repository.handovers(user));
   if (method === 'POST' && path === '/api/handovers') return json(response, 201, repository.saveHandover(null, await readJson(request), user));
   const handoverAccept = path.match(/^\/api\/handovers\/(\d+)\/accept$/);
@@ -580,6 +575,13 @@ async function handleProjectApi(request, response, url, user) {
     if (path === resource.path && method === 'POST') { requireRole(user, 'moderator'); return json(response, 201, resource.save(null, await readJson(request))); }
     id = numericId(path, resource.path);
     if (id !== null) { requireRole(user, 'moderator'); if (method === 'PATCH') return json(response, 200, resource.save(id, await readJson(request))); if (method === 'DELETE') { requireRole(user, 'project_admin'); repository.deleteConfig(resource.type, id); response.writeHead(204); return response.end(); } }
+  }
+
+  if (path === '/api/status-workflow-states' && method === 'POST') { requireRole(user, 'moderator'); return json(response, 201, repository.saveStatusWorkflowState(null, await readJson(request))); }
+  id = numericId(path, '/api/status-workflow-states');
+  if (id !== null) {
+    if (method === 'PATCH') { requireRole(user, 'moderator'); return json(response, 200, repository.saveStatusWorkflowState(id, await readJson(request))); }
+    if (method === 'DELETE') { requireRole(user, 'project_admin'); repository.deleteStatusWorkflowState(id); response.writeHead(204); return response.end(); }
   }
 
   if (path === '/api/completion-requirements' && method === 'POST') { requireRole(user, 'moderator'); return json(response, 201, repository.saveCompletionRequirement(null, await readJson(request))); }
