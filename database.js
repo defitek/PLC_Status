@@ -22,6 +22,17 @@ const nullableDate = value => /^\d{4}-\d{2}-\d{2}$/.test(clean(value)) ? clean(v
 const nullableTime = value => /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(clean(value)) ? clean(value) : null;
 const nullableNumber = value => value === '' || value === null || value === undefined || !Number.isFinite(Number(value)) ? null : Number(value);
 const asId = value => Number(value) > 0 ? Number(value) : null;
+const recurringDueDate = (from, interval, unit) => {
+  const date = new Date(`${from}T12:00:00Z`);
+  if (unit === 'months') {
+    const day = date.getUTCDate();
+    date.setUTCDate(1);
+    date.setUTCMonth(date.getUTCMonth() + interval);
+    const lastDay = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+    date.setUTCDate(Math.min(day, lastDay));
+  } else date.setUTCDate(date.getUTCDate() + interval * (unit === 'weeks' ? 7 : 1));
+  return date.toISOString().slice(0, 10);
+};
 const appError = (message, statusCode = 400) => Object.assign(new Error(message), { statusCode });
 const validPassword = password => typeof password === 'string' && password.length >= 8 && password.length <= 256;
 const hashPassword = password => {
@@ -61,6 +72,7 @@ export function openDatabase(databasePath) {
   migrateToV15(db);
   migrateToV16(db);
   migrateToV17(db);
+  migrateToV18(db);
   migrateSecurityFoundation(db);
   migrateStatusWorkflow(db);
   migrateEntityDependencies(db);
@@ -92,6 +104,7 @@ export function openDatabase(databasePath) {
   migrateToV15(db);
   migrateToV16(db);
   migrateToV17(db);
+  migrateToV18(db);
   migrateSecurityFoundation(db);
   migrateStatusWorkflow(db);
   migrateEntityDependencies(db);
@@ -317,6 +330,18 @@ function migrateToV17(db) {
   db.exec(`UPDATE planner_requirements
     SET manual_required_count=CASE WHEN note='Automatyczne minimum z sumy podobszarów' THEN 0 ELSE required_count END
     WHERE manual_required_count IS NULL`);
+}
+
+function migrateToV18(db) {
+  ensureColumn(db, 'tasks', 'recurrence_interval', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'tasks', 'recurrence_unit', "TEXT NOT NULL DEFAULT 'days'");
+  ensureColumn(db, 'tasks', 'recurrence_next_task_id', 'INTEGER');
+  ensureColumn(db, 'status_groups', 'inherit_from_group_id', 'INTEGER');
+  ensureColumn(db, 'status_groups', 'inherit_from_subgroup_id', 'INTEGER');
+  ensureColumn(db, 'status_subgroups', 'inherit_from_group_id', 'INTEGER');
+  ensureColumn(db, 'status_subgroups', 'inherit_from_subgroup_id', 'INTEGER');
+  db.exec("UPDATE tasks SET recurrence_interval=0 WHERE recurrence_interval IS NULL OR recurrence_interval<0");
+  db.exec("UPDATE tasks SET recurrence_unit='days' WHERE recurrence_unit NOT IN ('days','weeks','months') OR recurrence_unit IS NULL");
 }
 
 function migrateSecurityFoundation(db) {
@@ -1254,15 +1279,50 @@ function createRepository(db, defaultProjectId) {
     return value;
   }
 
+  function statusOwnColumns(groupId, subgroupId = null) {
+    return all(`SELECT * FROM status_columns WHERE status_group_id=? AND active=1 AND
+      ((status_subgroup_id IS NULL AND ? IS NULL) OR status_subgroup_id=?) ORDER BY sort_order,name,id`, asId(groupId), asId(subgroupId), asId(subgroupId));
+  }
+
+  function statusColumnLayout(groupId, subgroupId = null, visited = new Set()) {
+    const group = one('SELECT * FROM status_groups WHERE id=? AND project_id=? AND active=1', asId(groupId), activeProjectId());
+    if (!group) return { columns: [], own_columns: [], inherited: false, source: null };
+    const subgroup = asId(subgroupId) ? one('SELECT * FROM status_subgroups WHERE id=? AND status_group_id=? AND active=1', asId(subgroupId), group.id) : null;
+    const key = subgroup ? `subgroup:${subgroup.id}` : `group:${group.id}`;
+    if (visited.has(key)) return { columns: [], own_columns: statusOwnColumns(group.id, subgroup?.id), inherited: false, source: null };
+    const nextVisited = new Set(visited); nextVisited.add(key);
+    const ownColumns = statusOwnColumns(group.id, subgroup?.id);
+    const configured = subgroup || group;
+    let sourceGroupId = asId(configured.inherit_from_group_id);
+    let sourceSubgroupId = asId(configured.inherit_from_subgroup_id);
+    if (sourceSubgroupId) {
+      const sourceSubgroup = one(`SELECT ss.id,ss.status_group_id,ss.name,sg.name group_name FROM status_subgroups ss
+        JOIN status_groups sg ON sg.id=ss.status_group_id WHERE ss.id=? AND sg.project_id=? AND ss.active=1 AND sg.active=1`, sourceSubgroupId, activeProjectId());
+      if (sourceSubgroup) sourceGroupId = sourceSubgroup.status_group_id;
+      else sourceSubgroupId = null;
+    }
+    if (!sourceSubgroupId && sourceGroupId && !one('SELECT 1 FROM status_groups WHERE id=? AND project_id=? AND active=1', sourceGroupId, activeProjectId())) sourceGroupId = null;
+    const implicitParent = Boolean(subgroup && !sourceGroupId && !sourceSubgroupId && !ownColumns.length);
+    if (implicitParent) sourceGroupId = group.id;
+    if (!sourceGroupId && !sourceSubgroupId) return { columns: ownColumns, own_columns: ownColumns, inherited: false, source: null };
+    const sourceLayout = statusColumnLayout(sourceGroupId, sourceSubgroupId, nextVisited);
+    const sourceGroup = one('SELECT name FROM status_groups WHERE id=? AND project_id=?', sourceGroupId, activeProjectId());
+    const sourceSubgroup = sourceSubgroupId ? one('SELECT name FROM status_subgroups WHERE id=?', sourceSubgroupId) : null;
+    const source = { group_id: sourceGroupId, subgroup_id: sourceSubgroupId, label: [sourceGroup?.name, sourceSubgroup?.name].filter(Boolean).join(' → '), implicit: implicitParent };
+    return { columns: sourceLayout.columns.map(column => ({ ...column, inherited: true })), own_columns: ownColumns, inherited: true, source };
+  }
+
   function statusStructureRows() {
-    return all('SELECT * FROM status_groups WHERE project_id=? AND active=1 ORDER BY sort_order,name,id', activeProjectId()).map(group => ({
-      ...group,
-      columns: all('SELECT * FROM status_columns WHERE status_group_id=? AND status_subgroup_id IS NULL AND active=1 ORDER BY sort_order,name,id', group.id),
-      subgroups: all('SELECT * FROM status_subgroups WHERE status_group_id=? AND active=1 ORDER BY sort_order,name,id', group.id).map(subgroup => ({
-        ...subgroup,
-        columns: all('SELECT * FROM status_columns WHERE status_group_id=? AND status_subgroup_id=? AND active=1 ORDER BY sort_order,name,id', group.id, subgroup.id)
-      }))
-    }));
+    return all('SELECT * FROM status_groups WHERE project_id=? AND active=1 ORDER BY sort_order,name,id', activeProjectId()).map(group => {
+      const layout = statusColumnLayout(group.id);
+      return {
+        ...group, columns: layout.columns, own_columns: layout.own_columns, inheritance: layout.source,
+        subgroups: all('SELECT * FROM status_subgroups WHERE status_group_id=? AND active=1 ORDER BY sort_order,name,id', group.id).map(subgroup => {
+          const subgroupLayout = statusColumnLayout(group.id, subgroup.id);
+          return { ...subgroup, columns: subgroupLayout.columns, own_columns: subgroupLayout.own_columns, inheritance: subgroupLayout.source };
+        })
+      };
+    });
   }
 
   function importStatusLayout(input) {
@@ -1368,10 +1428,53 @@ function createRepository(db, defaultProjectId) {
     return { group, subgroup };
   }
 
+  function parseStatusInheritance(value, targetGroupId, targetSubgroupId = null) {
+    const normalized = clean(value);
+    if (!normalized || normalized === 'own' || normalized === 'parent') return { inherit_from_group_id: null, inherit_from_subgroup_id: null };
+    if (normalized.startsWith('group:')) {
+      const sourceGroupId = asId(normalized.slice(6));
+      if (!sourceGroupId || sourceGroupId === Number(targetGroupId) && !targetSubgroupId) throw appError('Układ nie może dziedziczyć sam po sobie');
+      if (!one('SELECT 1 FROM status_groups WHERE id=? AND project_id=? AND active=1', sourceGroupId, activeProjectId())) throw appError('Nie znaleziono źródłowej grupy statusu');
+      return { inherit_from_group_id: sourceGroupId, inherit_from_subgroup_id: null };
+    }
+    if (normalized.startsWith('subgroup:')) {
+      const sourceSubgroupId = asId(normalized.slice(9));
+      const source = one(`SELECT ss.id,ss.status_group_id FROM status_subgroups ss JOIN status_groups sg ON sg.id=ss.status_group_id
+        WHERE ss.id=? AND ss.active=1 AND sg.active=1 AND sg.project_id=?`, sourceSubgroupId, activeProjectId());
+      if (!source || source.id === Number(targetSubgroupId)) throw appError('Układ nie może dziedziczyć sam po sobie');
+      return { inherit_from_group_id: null, inherit_from_subgroup_id: source.id };
+    }
+    throw appError('Nieprawidłowe źródło dziedziczenia układu');
+  }
+
+  function assertStatusInheritanceAcyclic(targetKey, override) {
+    const sourceKey = key => {
+      const [kind, rawId] = String(key).split(':'); const id = Number(rawId);
+      if (key === targetKey) {
+        if (override.inherit_from_subgroup_id) return `subgroup:${override.inherit_from_subgroup_id}`;
+        if (override.inherit_from_group_id) return `group:${override.inherit_from_group_id}`;
+      }
+      if (kind === 'group') {
+        const group = one('SELECT inherit_from_group_id,inherit_from_subgroup_id FROM status_groups WHERE id=? AND project_id=?', id, activeProjectId());
+        if (!group) return null;
+        return group.inherit_from_subgroup_id ? `subgroup:${group.inherit_from_subgroup_id}` : group.inherit_from_group_id ? `group:${group.inherit_from_group_id}` : null;
+      }
+      const subgroup = one('SELECT status_group_id,inherit_from_group_id,inherit_from_subgroup_id FROM status_subgroups WHERE id=?', id);
+      if (!subgroup) return null;
+      if (subgroup.inherit_from_subgroup_id) return `subgroup:${subgroup.inherit_from_subgroup_id}`;
+      if (subgroup.inherit_from_group_id) return `group:${subgroup.inherit_from_group_id}`;
+      return statusOwnColumns(subgroup.status_group_id, subgroup.id).length ? null : `group:${subgroup.status_group_id}`;
+    };
+    const visited = new Set([targetKey]);
+    for (let key = sourceKey(targetKey); key; key = sourceKey(key)) {
+      if (visited.has(key)) throw appError('Dziedziczenie układu tworzy zamknięty cykl');
+      visited.add(key);
+    }
+  }
+
   function applicableStatusColumns(groupId, subgroupId = null) {
     if (!asId(groupId)) return [];
-    return all(`SELECT * FROM status_columns WHERE status_group_id=? AND active=1 AND
-      ((status_subgroup_id IS NULL AND ? IS NULL) OR status_subgroup_id=?) ORDER BY sort_order,name,id`, asId(groupId), asId(subgroupId), asId(subgroupId));
+    return statusColumnLayout(groupId, subgroupId).columns;
   }
 
   function statusCellValues(statusId) {
@@ -1381,11 +1484,9 @@ function createRepository(db, defaultProjectId) {
   function syncStatusIdentity(statusId) {
     const row = one('SELECT id,status_group_id,status_subgroup_id,test_id,function_detail FROM status_items WHERE id=? AND project_id=?', asId(statusId), activeProjectId());
     if (!row) return;
-    const basicValues = all(`SELECT scv.value FROM status_columns sc JOIN status_cell_values scv ON scv.column_id=sc.id
-      WHERE scv.status_item_id=? AND sc.active=1 AND sc.column_role='basic' AND sc.status_group_id=?
-        AND ((sc.status_subgroup_id IS NULL AND ? IS NULL) OR sc.status_subgroup_id=?)
-      ORDER BY sc.sort_order,sc.name,sc.id`, row.id, row.status_group_id, row.status_subgroup_id, row.status_subgroup_id)
-      .map(item => clean(item.value)).filter(Boolean);
+    const values = statusCellValues(row.id);
+    const basicValues = applicableStatusColumns(row.status_group_id, row.status_subgroup_id)
+      .filter(column => column.column_role === 'basic').map(column => clean(values[column.id])).filter(Boolean);
     if (!basicValues.length) return;
     db.prepare('UPDATE status_items SET function_detail=? WHERE id=? AND project_id=?').run(basicValues.join(' · ').slice(0, 4000), row.id, activeProjectId());
   }
@@ -1398,6 +1499,16 @@ function createRepository(db, defaultProjectId) {
     for (const value of existing) if (!allowedIds.has(value.column_id)) db.prepare('DELETE FROM status_cell_values WHERE status_item_id=? AND column_id=?').run(statusId, value.column_id);
     const insert = db.prepare('INSERT OR IGNORE INTO status_cell_values(status_item_id,column_id,value,updated_by) VALUES(?,?,?,?)');
     for (const column of columns) insert.run(statusId, column.id, column.field_type === 'status' ? defaultStatus : '', userId);
+  }
+
+  function refreshAllStatusCells(userId = null) {
+    const items = all('SELECT id,status,status_group_id,status_subgroup_id FROM status_items WHERE project_id=? AND status_group_id IS NOT NULL', activeProjectId());
+    for (const item of items) {
+      ensureStatusCells(item.id, item.status_group_id, item.status_subgroup_id, item.status, userId);
+      const nextStatus = aggregateMatrixStatus(item.id, item.status);
+      db.prepare("UPDATE status_items SET status=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=?").run(nextStatus, item.id);
+      syncStatusIdentity(item.id);
+    }
   }
 
   function aggregateWorkflowValues(input, fallback = 'Ready to test') {
@@ -1478,8 +1589,7 @@ function createRepository(db, defaultProjectId) {
     return { groups, controllers, groupMap };
   }
 
-  function attachControllerMeta(row) {
-    const hierarchy = hierarchyData();
+  function attachControllerMeta(row, hierarchy = hierarchyData()) {
     const item = hierarchy.controllers.find(controller => controller.id === Number(row.controller_id));
     const group = row.controller_group_id ? hierarchy.groupMap.get(Number(row.controller_group_id)) : null;
     if (group) return {
@@ -2594,7 +2704,7 @@ function createRepository(db, defaultProjectId) {
     return all(`SELECT u.id,u.display_name,u.sort_order,COALESCE(pm.role,'user') role,
       COALESCE(pm.planner_enabled,1) planner_enabled,COALESCE(pm.active,1) project_active
       FROM users u LEFT JOIN project_memberships pm ON pm.user_id=u.id AND pm.project_id=?
-      WHERE u.active=1 AND pm.active=1 ORDER BY u.sort_order,u.display_name`, activeProjectId());
+      WHERE u.active=1 AND pm.active=1 AND pm.planner_enabled=1 ORDER BY u.sort_order,u.display_name`, activeProjectId());
   }
 
   function validatePlannerUserDate(userId, planDate) {
@@ -2602,7 +2712,7 @@ function createRepository(db, defaultProjectId) {
       JOIN project_memberships pm ON pm.user_id=u.id
       WHERE u.id=? AND u.active=1 AND pm.project_id=? AND pm.active=1`, asId(userId), activeProjectId());
     if (!user) throw appError('Użytkownik nie jest aktywny w tym projekcie');
-    if (!Number(user.planner_enabled) && planDate !== new Date().toISOString().slice(0, 10)) throw appError('Osobę spoza stałego planu można dodać wyłącznie do dzisiejszego dnia');
+    if (!Number(user.planner_enabled)) throw appError('Ta osoba jest wyłączona z Plannera w konfiguracji projektu');
     return user;
   }
 
@@ -2663,20 +2773,20 @@ function createRepository(db, defaultProjectId) {
       FROM planner_entries pe JOIN users u ON u.id=pe.user_id
       JOIN project_memberships pm ON pm.project_id=pe.project_id AND pm.user_id=pe.user_id AND pm.active=1
       LEFT JOIN users creator ON creator.id=pe.created_by
-      WHERE pe.project_id=? AND pe.plan_date BETWEEN ? AND ?
+      WHERE pe.project_id=? AND pe.plan_date BETWEEN ? AND ? AND pm.planner_enabled=1
       ORDER BY pe.plan_date,u.sort_order,pe.id`, activeProjectId(), range.from, range.to).map(entry => {
         const area = groupMap.get(Number(entry.controller_group_id));
         return { ...entry, activity_type: entry.transport_mode === 'transport_only' ? 'transport' : 'work', project_code: currentProject?.code || '', project_name: currentProject?.name || '', is_current_project: true, area_name: area?.name || '', area_path: area?.path_label || '', area_depth: area?.depth || 0, root_area_id: area?.root_group_id || null };
       });
     const crossProjectVisibility = canManageRequirements
-      ? { sql: 'AND EXISTS(SELECT 1 FROM project_memberships current_pm WHERE current_pm.project_id=? AND current_pm.user_id=pe.user_id AND current_pm.active=1)', params: [activeProjectId()] }
+      ? { sql: 'AND EXISTS(SELECT 1 FROM project_memberships current_pm WHERE current_pm.project_id=? AND current_pm.user_id=pe.user_id AND current_pm.active=1 AND current_pm.planner_enabled=1)', params: [activeProjectId()] }
       : { sql: 'AND pe.user_id=?', params: [Number(currentUser?.id || 0)] };
     const crossProjectEntries = all(`SELECT pe.*,u.display_name,creator.display_name created_by_name,p.code project_code,p.name project_name
       FROM planner_entries pe JOIN users u ON u.id=pe.user_id
       JOIN projects p ON p.id=pe.project_id AND p.active=1
       JOIN project_memberships pm ON pm.project_id=pe.project_id AND pm.user_id=pe.user_id AND pm.active=1
       LEFT JOIN users creator ON creator.id=pe.created_by
-      WHERE pe.project_id!=? AND pe.plan_date BETWEEN ? AND ?
+      WHERE pe.project_id!=? AND pe.plan_date BETWEEN ? AND ? AND pm.planner_enabled=1
       ${crossProjectVisibility.sql}
       ORDER BY pe.plan_date,u.sort_order,p.sort_order,pe.id`, activeProjectId(), range.from, range.to, ...crossProjectVisibility.params).map(entry => {
         const otherHierarchy = hierarchyData(entry.project_id);
@@ -2687,7 +2797,7 @@ function createRepository(db, defaultProjectId) {
     const timeAdjustments = all(`SELECT * FROM planner_time_adjustments
       WHERE project_id=? AND plan_date BETWEEN ? AND ? ORDER BY plan_date,user_id`, activeProjectId(), range.from, range.to);
     const absences = all(`SELECT pa.*,u.display_name FROM system_absences pa JOIN users u ON u.id=pa.user_id
-      JOIN project_memberships current_pm ON current_pm.user_id=pa.user_id AND current_pm.project_id=? AND current_pm.active=1
+      JOIN project_memberships current_pm ON current_pm.user_id=pa.user_id AND current_pm.project_id=? AND current_pm.active=1 AND current_pm.planner_enabled=1
       WHERE pa.absence_date BETWEEN ? AND ? ORDER BY pa.absence_date,u.sort_order,u.display_name`, activeProjectId(), range.from, range.to);
     const overlapVisibility = canManageRequirements ? { sql: '', params: [] } : { sql: 'AND por.user_id=?', params: [Number(currentUser?.id || 0)] };
     const overlapReviews = all(`SELECT por.*,u.display_name,decider.display_name decided_by_name,
@@ -2698,13 +2808,11 @@ function createRepository(db, defaultProjectId) {
       LEFT JOIN projects p ON p.id=pe.project_id AND p.active=1
       WHERE por.project_id=? AND por.plan_date BETWEEN ? AND ? ${overlapVisibility.sql}
       GROUP BY por.project_id,por.user_id,por.plan_date ORDER BY por.plan_date,u.sort_order,u.display_name`, activeProjectId(), range.from, range.to, ...overlapVisibility.params);
-    const usersWithEntries = new Set([...entries.map(entry => Number(entry.user_id)), ...crossProjectEntries.map(entry => Number(entry.user_id)), ...absences.map(item => Number(item.user_id))]);
     const decorateUser = user => {
       const areaIds = all('SELECT controller_group_id FROM project_user_areas WHERE project_id=? AND user_id=? ORDER BY sort_order', activeProjectId(), user.id).map(row => row.controller_group_id);
       return { ...user, configured_area_ids: areaIds, configured_areas: areaIds.map(id => groupMap.get(id)?.path_label).filter(Boolean).join(', ') };
     };
-    const users = projectUsers.filter(user => Number(user.planner_enabled) || usersWithEntries.has(Number(user.id))).map(decorateUser);
-    const available_today_users = projectUsers.filter(user => !Number(user.planner_enabled) && !usersWithEntries.has(Number(user.id))).map(decorateUser);
+    const users = projectUsers.map(decorateUser);
     const work = all(`SELECT user_id,work_date,SUM(tasks) tasks,SUM(points) points,SUM(statuses) statuses,SUM(notes) notes FROM (
       SELECT ta.user_id,COALESCE(t.start_date,t.due_date,date(t.created_at)) work_date,COUNT(DISTINCT t.id) tasks,0 points,0 statuses,0 notes
         FROM task_assignees ta JOIN tasks t ON t.id=ta.task_id AND t.project_id=ta.project_id
@@ -2724,7 +2832,7 @@ function createRepository(db, defaultProjectId) {
       COUNT(DISTINCT CASE WHEN pe.transport_mode!='transport_only' AND pe.work_mode='offline' THEN pe.user_id END) offline_headcount,
       SUM(pe.transport_mode='transport_only') transport_only,SUM(pe.transport_mode='transport_work') transport_work
       FROM planner_entries pe JOIN project_memberships pm ON pm.project_id=pe.project_id AND pm.user_id=pe.user_id AND pm.active=1
-      WHERE pe.project_id=? AND pe.plan_date BETWEEN ? AND ? GROUP BY pe.plan_date ORDER BY pe.plan_date`, activeProjectId(), range.from, range.to);
+      WHERE pe.project_id=? AND pe.plan_date BETWEEN ? AND ? AND pm.planner_enabled=1 GROUP BY pe.plan_date ORDER BY pe.plan_date`, activeProjectId(), range.from, range.to);
     const requirements = canManageRequirements ? all(`SELECT pr.*,cg.name area_name FROM planner_requirements pr
       JOIN controller_groups cg ON cg.id=pr.controller_group_id
       WHERE pr.project_id=? AND pr.plan_date BETWEEN ? AND ? ORDER BY pr.plan_date,cg.sort_order,pr.work_mode`, activeProjectId(), range.from, range.to).map(row => {
@@ -2804,7 +2912,7 @@ function createRepository(db, defaultProjectId) {
         WHERE project_id=? AND plan_date BETWEEN ? AND ? ORDER BY plan_date,user_id`, activeProjectId(), calculationFrom, range.to);
       timeDetails = plannerTimeCalculation(calculationRange, projectUsers, calculationEntries, calculationAbsences, calculationHolidays, calculationAdjustments, range);
     }
-    return { ...range, users, available_today_users, entries, cross_project_entries: crossProjectEntries, absences, holidays, overlap_reviews: overlapReviews, time_adjustments: canManageRequirements ? timeAdjustments : [], work, summary, area_summary, area_day_summary, shift_summary, mode_summary, areas: hierarchy.groups, requirements, time_details: timeDetails, can_manage_requirements: canManageRequirements, can_manage_time: canManageRequirements };
+    return { ...range, users, entries, cross_project_entries: crossProjectEntries, absences, holidays, overlap_reviews: overlapReviews, time_adjustments: canManageRequirements ? timeAdjustments : [], work, summary, area_summary, area_day_summary, shift_summary, mode_summary, areas: hierarchy.groups, requirements, time_details: timeDetails, can_manage_requirements: canManageRequirements, can_manage_time: canManageRequirements };
   }
 
   function plannerTimeCalculation(range, users, entries, absences, holidays, adjustments = [], visibleRange = range) {
@@ -3723,27 +3831,45 @@ function createRepository(db, defaultProjectId) {
     return 'Cały projekt';
   }
 
-  function operationEntity(type, id, currentUser) {
-    const collections = operationCollections(currentUser);
-    const row = collections[type]?.find(item => item.id === Number(id));
+  function operationEntity(type, id, currentUser, hierarchy = null) {
+    const projectId = activeProjectId();
+    let row = null;
+    if (type === 'status') row = one(`SELECT s.*,c.code controller,responsible.display_name responsible_name
+      FROM status_items s JOIN controllers c ON c.id=s.controller_id LEFT JOIN users responsible ON responsible.id=s.responsible_user_id
+      WHERE s.id=? AND s.project_id=?`, asId(id), projectId);
+    else if (type === 'task') row = one(`SELECT t.*,c.code controller,owner.display_name owner_name
+      FROM tasks t JOIN controllers c ON c.id=t.controller_id LEFT JOIN users owner ON owner.id=t.owner_user_id
+      WHERE t.id=? AND t.project_id=?`, asId(id), projectId);
+    else if (type === 'point') row = one(`SELECT p.*,c.code controller,owner.display_name owner_name
+      FROM open_points p JOIN controllers c ON c.id=p.controller_id LEFT JOIN users owner ON owner.id=p.owner_user_id
+      WHERE p.id=? AND p.project_id=?`, asId(id), projectId);
+    else if (type === 'goal') row = one(`SELECT g.*,c.code controller FROM goals g LEFT JOIN controllers c ON c.id=g.controller_id
+      WHERE g.id=? AND g.project_id=?`, asId(id), projectId);
     if (!row) return null;
+    row = attachControllerMeta(row, hierarchy || hierarchyData());
+    const assigneeUserIds = type === 'task'
+      ? all('SELECT user_id FROM task_assignees WHERE project_id=? AND task_id=? AND assigned_directly=1 ORDER BY user_id', projectId, row.id).map(item => item.user_id)
+      : type === 'status'
+        ? all('SELECT user_id FROM status_assignees WHERE project_id=? AND status_id=? ORDER BY user_id', projectId, row.id).map(item => item.user_id)
+        : type === 'point' && row.owner_user_id ? [row.owner_user_id] : [];
     return {
       entity_type: type, entity_id: row.id, title: operationTitle(type, row) || row.content || 'Element projektu',
       status: row.status || row.type || '', priority: row.priority || row.criticality || '', scope_label: operationScope(row),
       due_date: row.due_date || null, owner_name: row.owner_name || row.responsible_name || '',
       controller: row.controller || '', controller_id: row.controller_id || null, controller_group_id: row.controller_group_id || null,
-      assignee_user_ids: type === 'task' ? (row.direct_assignee_user_ids || []) : type === 'status' ? (row.responsible_user_ids || []) : type === 'point' && row.owner_user_id ? [row.owner_user_id] : [],
+      assignee_user_ids: assigneeUserIds,
       search_text: [row.title, row.function_detail, row.description, row.current_note, row.impact, row.next_action, row.category, row.subcategory, row.content].filter(Boolean).join(' ')
     };
   }
 
   function projectMeetingRows(currentUser) {
+    const hierarchy = hierarchyData();
     return all(`SELECT pm.*,creator.display_name created_by_name,closer.display_name closed_by_name FROM project_meetings pm
       LEFT JOIN users creator ON creator.id=pm.created_by LEFT JOIN users closer ON closer.id=pm.closed_by
       WHERE pm.project_id=? ORDER BY pm.meeting_date DESC,pm.id DESC`, activeProjectId()).map(meeting => ({
         ...meeting, period_from: meeting.period_from || meeting.meeting_date, period_to: meeting.period_to || meeting.meeting_date,
         items: all(`SELECT pmi.*,u.display_name owner_name FROM project_meeting_items pmi LEFT JOIN users u ON u.id=pmi.owner_user_id WHERE pmi.meeting_id=? ORDER BY pmi.sort_order,pmi.id`, meeting.id).map(item => {
-          const entity = operationEntity(item.entity_type, item.entity_id, currentUser);
+          const entity = operationEntity(item.entity_type, item.entity_id, currentUser, hierarchy);
           const audit = auditRowsForEntity(item.entity_type, item.entity_id).filter(row => String(row.changed_at) >= String(meeting.created_at)).map(row => {
             let changes = {}; try { changes = JSON.parse(row.changes_json || '{}'); } catch {}
             return { changed_at: row.changed_at, user_name: row.user_name, changes };
@@ -3756,19 +3882,54 @@ function createRepository(db, defaultProjectId) {
   }
 
   function meetingCandidateRows(from, to, currentUser) {
+    const projectId = activeProjectId();
+    const start = nullableDate(from) || new Date().toISOString().slice(0, 10);
     const end = nullableDate(to) || nullableDate(from) || new Date().toISOString().slice(0, 10);
-    const dueLimit = new Date(`${end}T12:00:00Z`); dueLimit.setUTCDate(dueLimit.getUTCDate() + 7);
+    const warningSetting = Number(one("SELECT value FROM settings WHERE project_id=? AND key='reminder_warning_days'", projectId)?.value || 7);
+    const warningDays = Math.max(1, Math.min(365, Number.isFinite(warningSetting) ? Math.trunc(warningSetting) : 7));
+    const dueLimit = new Date(`${end}T12:00:00Z`); dueLimit.setUTCDate(dueLimit.getUTCDate() + warningDays);
     const dueUntil = dueLimit.toISOString().slice(0, 10);
     const completedStatusValues = new Set(statusWorkflowRows().filter(item => item.counts_as_done).map(item => item.value));
-    const groups = {
-      status: statusRows('all', currentUser).filter(item => !completedStatusValues.has(item.status)),
-      task: taskRows('all', currentUser).filter(item => item.status !== 'Done'),
-      point: pointRows('all', currentUser).filter(item => item.status !== 'Closed'),
-      goal: goalRows('all', currentUser).filter(item => item.status !== 'Done')
+    const hierarchy = hierarchyData();
+    const attach = row => {
+      const controllerItem = hierarchy.controllers.find(item => item.id === Number(row.controller_id));
+      const group = row.controller_group_id ? hierarchy.groupMap.get(Number(row.controller_group_id)) : null;
+      return {
+        ...row,
+        scope_label: group?.path_label || controllerItem?.display_name || row.controller || 'Cały projekt',
+        scope_path: group?.path_label || controllerItem?.hierarchy_label || row.controller || 'Cały projekt',
+        controller_label: group?.path_label || controllerItem?.display_name || row.controller || 'Cały projekt'
+      };
     };
-    const shape = (entityType, item) => ({ entity_type: entityType, entity_id: item.id, title: operationTitle(entityType, item), status: item.status, priority: item.priority || item.criticality || '', due_date: item.due_date || null, owner_name: item.owner_name || item.responsible_name || '', controller_id: item.controller_id, controller_group_id: item.controller_group_id, controller: item.controller, scope_label: item.scope_label || item.controller_label || '' });
+    const statusValues = new Map();
+    all(`SELECT scv.status_item_id,scv.column_id,scv.value FROM status_cell_values scv
+      JOIN status_items s ON s.id=scv.status_item_id WHERE s.project_id=?`, projectId).forEach(cell => {
+      if (!statusValues.has(cell.status_item_id)) statusValues.set(cell.status_item_id, {});
+      statusValues.get(cell.status_item_id)[cell.column_id] = cell.value;
+    });
+    const groups = {
+      status: all(`SELECT s.*,c.code controller,responsible.display_name responsible_name,sg.name status_group_name,ssg.name status_subgroup_name,
+        (SELECT GROUP_CONCAT(u.display_name, ', ') FROM status_assignees sa JOIN users u ON u.id=sa.user_id WHERE sa.project_id=s.project_id AND sa.status_id=s.id) owner_name
+        FROM status_items s JOIN controllers c ON c.id=s.controller_id LEFT JOIN users responsible ON responsible.id=s.responsible_user_id
+        LEFT JOIN status_groups sg ON sg.id=s.status_group_id LEFT JOIN status_subgroups ssg ON ssg.id=s.status_subgroup_id
+        WHERE s.project_id=? ORDER BY s.id`, projectId).filter(item => !completedStatusValues.has(item.status)).map(item => ({ ...attach(item), matrix_values: statusValues.get(item.id) || {} })),
+      task: all(`SELECT t.*,c.code controller,fg.name function_group_name,fge.name function_group_element_name,
+        CASE WHEN ((SELECT COALESCE(SUM(tc.weight),0) FROM task_checklist tc WHERE tc.task_id=t.id)+(SELECT COUNT(*) FROM task_scope_checklist tsc WHERE tsc.task_id=t.id))>0
+          THEN ROUND(100.0*((SELECT COALESCE(SUM(tc.weight),0) FROM task_checklist tc WHERE tc.task_id=t.id AND tc.done=1)+(SELECT COUNT(*) FROM task_scope_checklist tsc WHERE tsc.task_id=t.id AND tsc.done=1))/
+            ((SELECT COALESCE(SUM(tc.weight),0) FROM task_checklist tc WHERE tc.task_id=t.id)+(SELECT COUNT(*) FROM task_scope_checklist tsc WHERE tsc.task_id=t.id)))
+          ELSE CASE WHEN t.status='In progress' THEN 50 ELSE 0 END END progress,
+        (SELECT GROUP_CONCAT(u.display_name, ', ') FROM task_assignees ta JOIN users u ON u.id=ta.user_id WHERE ta.project_id=t.project_id AND ta.task_id=t.id) owner_name
+        FROM tasks t JOIN controllers c ON c.id=t.controller_id LEFT JOIN function_groups fg ON fg.id=t.function_group_id
+        LEFT JOIN function_group_elements fge ON fge.id=t.function_group_element_id WHERE t.project_id=? AND t.status!='Done' ORDER BY t.id`, projectId).map(attach),
+      point: all(`SELECT p.*,c.code controller,owner.display_name owner_name FROM open_points p JOIN controllers c ON c.id=p.controller_id
+        LEFT JOIN users owner ON owner.id=p.owner_user_id WHERE p.project_id=? AND p.status!='Closed' ORDER BY p.id`, projectId).map(attach),
+      goal: all(`SELECT g.*,c.code controller FROM goals g LEFT JOIN controllers c ON c.id=g.controller_id
+        WHERE g.project_id=? AND g.status!='Done' ORDER BY g.id`, projectId).map(attach)
+    };
+    const shape = (entityType, item) => ({ ...item, entity_type: entityType, entity_id: item.id, title: operationTitle(entityType, item), priority: item.priority || item.criticality || '', owner_name: item.owner_name || item.responsible_name || '' });
     const result = Object.fromEntries(Object.entries(groups).map(([type, rows]) => [type, rows.map(item => shape(type, item))]));
-    result.due = ['task', 'point', 'goal'].flatMap(type => result[type]).filter(item => item.due_date && item.due_date <= dueUntil).sort((a, b) => a.due_date.localeCompare(b.due_date));
+    result.due = ['task', 'point', 'goal'].flatMap(type => result[type]).filter(item => item.due_date && item.due_date >= start && item.due_date <= dueUntil).sort((a, b) => a.due_date.localeCompare(b.due_date));
+    result.meta = { period_from: start, period_to: end, deadline_window_days: warningDays, due_until: dueUntil };
     return result;
   }
 
@@ -3801,21 +3962,30 @@ function createRepository(db, defaultProjectId) {
     const primary = assigneeIds[0] || null;
     const userLabel = primary ? userName(primary) : '';
     const before = baseSnapshot(item.entity_type, item.entity_id);
+    const targetStatus = clean(item.target_status);
+    let savedThroughTaskWorkflow = false;
     if (item.entity_type === 'task') {
-      saveTaskAssignees(item.entity_id, assigneeIds, before?.checklist || []);
-      db.prepare("UPDATE tasks SET owner_user_id=?,owner=?,due_date=COALESCE(?,due_date),updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?").run(primary, userLabel, nullableDate(item.due_date), item.entity_id, activeProjectId());
+      const allowedTaskStatuses = new Set(['To do', 'In progress', 'Blocked', 'Done']);
+      repository.saveTask(item.entity_id, {
+        ...before,
+        direct_assignee_user_ids: assigneeIds,
+        due_date: nullableDate(item.due_date) || before.due_date,
+        status: allowedTaskStatuses.has(targetStatus) ? targetStatus : before.status,
+        recurrence_enabled: Number(before.recurrence_interval || 0) > 0 ? 1 : 0
+      }, currentUser);
+      savedThroughTaskWorkflow = true;
     } else if (item.entity_type === 'status') {
       db.prepare('DELETE FROM status_assignees WHERE project_id=? AND status_id=?').run(activeProjectId(), item.entity_id);
       const insert = db.prepare('INSERT OR IGNORE INTO status_assignees(project_id,status_id,user_id) VALUES(?,?,?)'); assigneeIds.forEach(userId => insert.run(activeProjectId(), item.entity_id, userId));
       db.prepare("UPDATE status_items SET responsible_user_id=?,responsible=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now'),progress_updated_at=strftime('%Y-%m-%d %H:%M:%f','now'),progress_updated_by=? WHERE id=? AND project_id=?").run(primary, userLabel, currentUser.id, item.entity_id, activeProjectId());
     } else if (item.entity_type === 'point') db.prepare("UPDATE open_points SET owner_user_id=?,owner=?,due_date=COALESCE(?,due_date),updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?").run(primary, userLabel, nullableDate(item.due_date), item.entity_id, activeProjectId());
     else if (item.entity_type === 'goal') db.prepare("UPDATE goals SET due_date=COALESCE(?,due_date),updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?").run(nullableDate(item.due_date), item.entity_id, activeProjectId());
-    if (clean(item.target_status)) {
+    if (targetStatus && item.entity_type !== 'task') {
       const allowed = item.entity_type === 'status' ? statusWorkflowValueSet() : item.entity_type === 'task' ? new Set(['To do', 'In progress', 'Blocked', 'Done']) : item.entity_type === 'point' ? new Set(['Open', 'Waiting', 'In progress', 'Closed']) : new Set(['Open', 'In progress', 'Done']);
-      if (allowed.has(clean(item.target_status))) db.prepare(`UPDATE ${TABLES[item.entity_type]} SET status=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?`).run(clean(item.target_status), item.entity_id, activeProjectId());
+      if (allowed.has(targetStatus)) db.prepare(`UPDATE ${TABLES[item.entity_type]} SET status=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?`).run(targetStatus, item.entity_id, activeProjectId());
     }
     const after = baseSnapshot(item.entity_type, item.entity_id);
-    if (JSON.stringify(before) !== JSON.stringify(after)) writeAudit(item.entity_type, item.entity_id, 'update', currentUser, before, after);
+    if (!savedThroughTaskWorkflow && JSON.stringify(before) !== JSON.stringify(after)) writeAudit(item.entity_type, item.entity_id, 'update', currentUser, before, after);
     const decisionChanged = clean(item.decision) && clean(item.decision) !== clean(previous?.decision);
     const outcomeChanged = clean(item.outcome_comment) && clean(item.outcome_comment) !== clean(previous?.outcome_comment);
     if (decisionChanged || (closing && outcomeChanged)) {
@@ -3836,7 +4006,7 @@ function createRepository(db, defaultProjectId) {
     let recordId = asId(id);
     if (recordId && !one('SELECT 1 FROM project_meetings WHERE id=? AND project_id=?', recordId, activeProjectId())) throw appError('Nie znaleziono rekordu odprawy', 404);
     const scope = clean(input.scope) || 'all';
-    const scoped = operationCollections(currentUser, scope);
+    const scoped = scope === 'all' ? {} : operationCollections(currentUser, scope);
     const scopedIds = new Map(Object.entries(scoped).map(([type, rows]) => [type, new Set(rows.map(row => Number(row.id)))]));
     const inScope = (type, entityId) => scope === 'all' || scopedIds.get(type)?.has(Number(entityId));
     let requested = Array.isArray(input.items) ? input.items : [];
@@ -3844,12 +4014,6 @@ function createRepository(db, defaultProjectId) {
       const hiddenExisting = all('SELECT * FROM project_meeting_items WHERE meeting_id=? ORDER BY sort_order,id', recordId)
         .filter(item => !inScope(item.entity_type, item.entity_id));
       requested = [...requested, ...hiddenExisting];
-    }
-    if (!id) {
-      const carryover = all(`SELECT pmi.* FROM project_meeting_items pmi JOIN project_meetings pm ON pm.id=pmi.meeting_id
-        WHERE pm.project_id=? AND pmi.item_status IN ('open','deferred') ORDER BY pm.id DESC,pmi.sort_order`, activeProjectId()).filter(item => operationEntity(item.entity_type, item.entity_id, currentUser));
-      const seen = new Set(requested.map(item => `${item.entity_type}:${item.entity_id}`));
-      for (const item of carryover) if (!seen.has(`${item.entity_type}:${item.entity_id}`)) { requested.push({ ...item, id: null }); seen.add(`${item.entity_type}:${item.entity_id}`); }
     }
     const prepared = requested.map(item => ({ item, entity: operationEntity(item.entity_type, item.entity_id, currentUser) })).filter(row => row.entity);
     if (values.status === 'closed') for (const { item, entity } of prepared) {
@@ -4316,7 +4480,7 @@ function createRepository(db, defaultProjectId) {
     return employeeReviewRow(one('SELECT * FROM monthly_employee_reviews WHERE id=?', review.id));
   }
 
-  return {
+  const repository = {
     close() { db.close(); },
     withProject(projectId, callback) { return projectStorage.run(asId(projectId), callback); },
     activeProjectIds() { return all('SELECT id FROM projects WHERE active=1 ORDER BY sort_order,id').map(row => row.id); },
@@ -4829,12 +4993,21 @@ function createRepository(db, defaultProjectId) {
       if (id) {
         const previous = one('SELECT * FROM status_groups WHERE id=? AND project_id=?', id, activeProjectId());
         if (!previous) throw appError('Nie znaleziono grupy statusu', 404);
-        db.prepare('UPDATE status_groups SET name=?,description=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(name, description, id);
+        const inheritance = Object.hasOwn(input, 'inheritance_source')
+          ? parseStatusInheritance(input.inheritance_source, id)
+          : { inherit_from_group_id: asId(previous.inherit_from_group_id), inherit_from_subgroup_id: asId(previous.inherit_from_subgroup_id) };
+        assertStatusInheritanceAcyclic(`group:${id}`, inheritance);
+        db.prepare(`UPDATE status_groups SET name=?,description=?,inherit_from_group_id=?,inherit_from_subgroup_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+          .run(name, description, inheritance.inherit_from_group_id, inheritance.inherit_from_subgroup_id, id);
         db.prepare('UPDATE status_items SET category=?,updated_at=strftime(\'%Y-%m-%d %H:%M:%f\',\'now\') WHERE project_id=? AND status_group_id=?').run(name, activeProjectId(), id);
       } else {
         const sortOrder = one('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM status_groups WHERE project_id=?', activeProjectId()).value;
         id = insertRecord('status_groups', { project_id: activeProjectId(), name, description, sort_order: sortOrder, active: 1 });
+        const inheritance = parseStatusInheritance(input.inheritance_source, id);
+        assertStatusInheritanceAcyclic(`group:${id}`, inheritance);
+        db.prepare('UPDATE status_groups SET inherit_from_group_id=?,inherit_from_subgroup_id=? WHERE id=?').run(inheritance.inherit_from_group_id, inheritance.inherit_from_subgroup_id, id);
       }
+      refreshAllStatusCells();
       return one('SELECT * FROM status_groups WHERE id=?', id);
     },
     importStatusLayout(input) { return importStatusLayout(input); },
@@ -4843,6 +5016,7 @@ function createRepository(db, defaultProjectId) {
       if (!group) throw appError('Nie znaleziono grupy statusu', 404);
       db.prepare('UPDATE status_items SET status_group_id=NULL,status_subgroup_id=NULL WHERE project_id=? AND status_group_id=?').run(activeProjectId(), group.id);
       db.prepare('DELETE FROM status_groups WHERE id=?').run(group.id);
+      refreshAllStatusCells();
     },
     saveStatusSubgroup(groupId, id, input) {
       const { group } = statusMatrixScope(groupId);
@@ -4854,18 +5028,21 @@ function createRepository(db, defaultProjectId) {
       if (id) {
         const previous = one('SELECT * FROM status_subgroups WHERE id=? AND status_group_id=?', id, group.id);
         if (!previous) throw appError('Nie znaleziono podgrupy statusu', 404);
-        db.prepare('UPDATE status_subgroups SET name=?,description=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(name, description, id);
+        const inheritance = Object.hasOwn(input, 'inheritance_source')
+          ? parseStatusInheritance(input.inheritance_source, group.id, id)
+          : { inherit_from_group_id: asId(previous.inherit_from_group_id), inherit_from_subgroup_id: asId(previous.inherit_from_subgroup_id) };
+        assertStatusInheritanceAcyclic(`subgroup:${id}`, inheritance);
+        db.prepare(`UPDATE status_subgroups SET name=?,description=?,inherit_from_group_id=?,inherit_from_subgroup_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+          .run(name, description, inheritance.inherit_from_group_id, inheritance.inherit_from_subgroup_id, id);
         db.prepare('UPDATE status_items SET subcategory=?,updated_at=strftime(\'%Y-%m-%d %H:%M:%f\',\'now\') WHERE project_id=? AND status_group_id=? AND status_subgroup_id=?').run(name, activeProjectId(), group.id, id);
       } else {
         const sortOrder = one('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM status_subgroups WHERE status_group_id=?', group.id).value;
         id = insertRecord('status_subgroups', { status_group_id: group.id, name, description, sort_order: sortOrder, active: 1 });
-        if (Number(input.copy_parent_columns)) {
-          const insert = db.prepare(`INSERT INTO status_columns(status_group_id,status_subgroup_id,name,column_role,field_type,include_in_progress,sort_order)
-            SELECT status_group_id,?,name,column_role,field_type,include_in_progress,sort_order FROM status_columns
-            WHERE status_group_id=? AND status_subgroup_id IS NULL AND active=1 ORDER BY sort_order,id`);
-          insert.run(id, group.id);
-        }
+        const inheritance = parseStatusInheritance(input.inheritance_source || 'parent', group.id, id);
+        assertStatusInheritanceAcyclic(`subgroup:${id}`, inheritance);
+        db.prepare('UPDATE status_subgroups SET inherit_from_group_id=?,inherit_from_subgroup_id=? WHERE id=?').run(inheritance.inherit_from_group_id, inheritance.inherit_from_subgroup_id, id);
       }
+      refreshAllStatusCells();
       return one('SELECT * FROM status_subgroups WHERE id=?', id);
     },
     deleteStatusSubgroup(groupId, id) {
@@ -4876,6 +5053,7 @@ function createRepository(db, defaultProjectId) {
       db.prepare('UPDATE status_items SET status_subgroup_id=NULL WHERE project_id=? AND status_group_id=? AND status_subgroup_id=?').run(activeProjectId(), group.id, subgroup.id);
       for (const item of affected) ensureStatusCells(item.id, group.id, null, item.status);
       db.prepare('DELETE FROM status_subgroups WHERE id=?').run(subgroup.id);
+      refreshAllStatusCells();
     },
     saveStatusColumn(groupId, subgroupId, id, input) {
       const { group, subgroup } = statusMatrixScope(groupId, subgroupId);
@@ -4914,6 +5092,7 @@ function createRepository(db, defaultProjectId) {
       }
       if (fieldType === 'status' || previous?.field_type === 'status') for (const item of scopedItems) db.prepare('UPDATE status_items SET status=?,updated_at=strftime(\'%Y-%m-%d %H:%M:%f\',\'now\') WHERE id=?').run(aggregateMatrixStatus(item.id, item.status), item.id);
       if (columnRole === 'basic' || previous?.column_role === 'basic') for (const item of scopedItems) syncStatusIdentity(item.id);
+      refreshAllStatusCells();
       return one('SELECT * FROM status_columns WHERE id=?', id);
     },
     deleteStatusColumn(groupId, subgroupId, id) {
@@ -4925,6 +5104,7 @@ function createRepository(db, defaultProjectId) {
         ((status_subgroup_id IS NULL AND ? IS NULL) OR status_subgroup_id=?)`, activeProjectId(), group.id, subgroup?.id || null, subgroup?.id || null);
       db.prepare('DELETE FROM status_columns WHERE id=?').run(column.id);
       for (const item of items) db.prepare('UPDATE status_items SET status=?,updated_at=strftime(\'%Y-%m-%d %H:%M:%f\',\'now\') WHERE id=?').run(aggregateMatrixStatus(item.id, item.status), item.id);
+      refreshAllStatusCells();
     },
     config() {
       ensureStatusWorkflowStates(db, activeProjectId());
@@ -5247,8 +5427,8 @@ function createRepository(db, defaultProjectId) {
       assertFresh('status', statusId, input.updated_at);
       const column = one(`SELECT sc.* FROM status_columns sc JOIN status_groups sg ON sg.id=sc.status_group_id
         WHERE sc.id=? AND sg.project_id=? AND sc.active=1`, asId(columnId), activeProjectId());
-      if (!column || Number(column.status_group_id) !== Number(before.status_group_id)
-        || Number(column.status_subgroup_id || 0) !== Number(before.status_subgroup_id || 0)) throw appError('Ta kolumna nie należy do tabeli punktu statusu', 404);
+      const applicableColumnIds = new Set(applicableStatusColumns(before.status_group_id, before.status_subgroup_id).map(item => Number(item.id)));
+      if (!column || !applicableColumnIds.has(Number(column.id))) throw appError('Ta kolumna nie należy do tabeli punktu statusu', 404);
       let value = clean(input.value);
       const requestedDependencies = Array.isArray(input.dependency_refs) ? input.dependency_refs : before.dependency_refs || [];
       if (Array.isArray(input.dependency_refs)) validateEntityDependencies('status', statusId, requestedDependencies);
@@ -5393,9 +5573,11 @@ function createRepository(db, defaultProjectId) {
           upsertCell.run(recordId, column.id, cellValue, currentUser.id);
         }
       }
-      if (effectiveStatusChanged && matrixGroupId) db.prepare(`UPDATE status_cell_values SET value=?,updated_by=?,updated_at=CURRENT_TIMESTAMP
-        WHERE status_item_id=? AND column_id IN (SELECT id FROM status_columns WHERE status_group_id=? AND active=1 AND field_type='status'
-          AND ((status_subgroup_id IS NULL AND ? IS NULL) OR status_subgroup_id=?))`).run(effectiveStatus, currentUser.id, recordId, matrixGroupId, matrixSubgroupId, matrixSubgroupId);
+      if (effectiveStatusChanged && matrixGroupId) {
+        const statusColumnIds = applicableStatusColumns(matrixGroupId, matrixSubgroupId).filter(column => column.field_type === 'status').map(column => column.id);
+        if (statusColumnIds.length) db.prepare(`UPDATE status_cell_values SET value=?,updated_by=?,updated_at=CURRENT_TIMESTAMP
+          WHERE status_item_id=? AND column_id IN (${statusColumnIds.map(() => '?').join(',')})`).run(effectiveStatus, currentUser.id, recordId, ...statusColumnIds);
+      }
       syncStatusIdentity(recordId);
       const savedOwners = !id || ownerInputProvided ? saveStatusAssignees(recordId, ownerIds) : ownerIds;
       const primaryOwner = savedOwners[0] || null;
@@ -5476,12 +5658,20 @@ function createRepository(db, defaultProjectId) {
         const group = functionGroup(groupId);
         if (elementId && !one('SELECT 1 FROM function_group_elements WHERE id=? AND function_group_id=?', elementId, group.id)) throw appError('Element nie należy do wybranej grupy');
       }
+      const recurrenceEnabled = Object.hasOwn(input, 'recurrence_enabled')
+        ? Number(input.recurrence_enabled) !== 0
+        : Number(Object.hasOwn(input, 'recurrence_interval') ? input.recurrence_interval : before?.recurrence_interval || 0) > 0;
+      const requestedRecurrenceInterval = Number(input.recurrence_interval || before?.recurrence_interval || 1);
+      if (recurrenceEnabled && (!Number.isFinite(requestedRecurrenceInterval) || requestedRecurrenceInterval < 1 || requestedRecurrenceInterval > 3650)) throw appError('Czas cyklu musi mieścić się w zakresie 1–3650');
+      const recurrenceInterval = recurrenceEnabled ? Math.trunc(requestedRecurrenceInterval) : 0;
+      const recurrenceUnit = ['days', 'weeks', 'months'].includes(clean(input.recurrence_unit)) ? clean(input.recurrence_unit) : before?.recurrence_unit || 'days';
       const values = {
         project_id: activeProjectId(), controller_id: targetController.id, controller_group_id: scopeGroupId, title: clean(input.title), description: clean(input.description), station: clean(input.station),
         function_group_id: groupId, function_group_element_id: elementId, other_object: otherObject,
         priority: clean(input.priority) || 'Medium', owner_user_id: ownerId, owner: userName(ownerId), status: clean(input.status) || 'To do',
         start_date: nullableDate(input.start_date), due_date: nullableDate(input.due_date), category: clean(input.category), subcategory: clean(input.subcategory),
-        info_link: clean(input.info_link), linked_entity_type: clean(input.linked_entity_type), linked_entity_id: asId(input.linked_entity_id), linked_test_id: null
+        info_link: clean(input.info_link), linked_entity_type: clean(input.linked_entity_type), linked_entity_id: asId(input.linked_entity_id), linked_test_id: null,
+        recurrence_interval: recurrenceInterval, recurrence_unit: recurrenceUnit, recurrence_next_task_id: asId(before?.recurrence_next_task_id)
       };
       if (!values.title) throw appError('Tytuł zadania jest wymagany');
       assertDependencyTransition('task', before?.status || null, values.status, requestedDependencies);
@@ -5503,6 +5693,24 @@ function createRepository(db, defaultProjectId) {
       refreshDependentStatusItems('task', recordId, currentUser);
       const previousAssignees = before ? [...(before.direct_assignee_user_ids || []), ...(before.checklist || []).map(item => item.owner_user_id).filter(Boolean)] : [];
       notifyNewTaskAssignees(recordId, previousAssignees, allAssignees, currentUser);
+      if (before && before.status !== 'Done' && values.status === 'Done' && recurrenceInterval > 0 && !asId(before.recurrence_next_task_id)) {
+        const nextTask = this.saveTask(null, {
+          hierarchy_target: scopeGroupId ? `group:${scopeGroupId}` : `controller:${targetController.code}`,
+          title: values.title, description: values.description, info_link: values.info_link,
+          direct_assignee_user_ids: directUserIds,
+          checklist: checklist.map(item => ({ ...item, done: false })),
+          scope_checklist: (Array.isArray(input.scope_checklist) ? input.scope_checklist : before.scope_checklist || []).map(item => ({ ...item, done: false })),
+          function_group_id: groupId, function_group_element_id: elementId, other_object: otherObject,
+          status: 'To do', priority: values.priority, start_date: null,
+          due_date: recurringDueDate(new Date().toISOString().slice(0, 10), recurrenceInterval, recurrenceUnit),
+          category: values.category, subcategory: values.subcategory,
+          requirement_ids: input.requirement_ids || before.requirement_ids || [],
+          dependency_refs: input.dependency_refs || before.dependency_refs || [],
+          links: input.links || before.links || [],
+          recurrence_enabled: 1, recurrence_interval: recurrenceInterval, recurrence_unit: recurrenceUnit
+        }, currentUser);
+        db.prepare("UPDATE tasks SET recurrence_next_task_id=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?").run(nextTask.id, recordId, activeProjectId());
+      }
       const row = one(`SELECT t.*,c.code controller,creator.display_name created_by_name,owner.display_name owner_name FROM tasks t JOIN controllers c ON c.id=t.controller_id LEFT JOIN users creator ON creator.id=t.created_by LEFT JOIN users owner ON owner.id=t.owner_user_id WHERE t.id=?`, recordId);
       return decorateTask(attachControllerMeta(row), currentUser);
     },
@@ -5731,4 +5939,5 @@ function createRepository(db, defaultProjectId) {
       };
     }
   };
+  return repository;
 }

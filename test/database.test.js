@@ -51,6 +51,29 @@ test('V3 supports overview, ordering, assignment, mentions, audit and deletion r
     assert.match(repository.tasks('all', worker).find(item => item.id === task.id).controller_label, /UB512/);
     assert.throws(() => repository.deleteTask(task.id, worker), /Nie możesz usunąć/);
 
+    const recurring = repository.saveTask(null, {
+      controller: 'HB522', title: 'Recurring inspection', status: 'To do', recurrence_enabled: 1, recurrence_interval: 2, recurrence_unit: 'weeks'
+    }, admin);
+    const completedRecurring = repository.saveTask(recurring.id, { ...recurring, status: 'Done' }, admin);
+    assert.ok(completedRecurring.recurrence_next_task_id);
+    const nextRecurring = repository.tasks('all', admin).find(item => item.id === completedRecurring.recurrence_next_task_id);
+    const expectedRecurringDate = new Date(); expectedRecurringDate.setUTCDate(expectedRecurringDate.getUTCDate() + 14);
+    assert.equal(nextRecurring.status, 'To do');
+    assert.equal(nextRecurring.due_date, expectedRecurringDate.toISOString().slice(0, 10));
+    assert.equal(nextRecurring.recurrence_interval, 2);
+    const recurringCount = repository.tasks('all', admin).filter(item => item.title === 'Recurring inspection').length;
+    repository.saveTask(recurring.id, { ...completedRecurring, status: 'Done' }, admin);
+    assert.equal(repository.tasks('all', admin).filter(item => item.title === 'Recurring inspection').length, recurringCount, 'saving an already completed cycle must not create another task');
+    const meetingRecurring = repository.saveTask(null, {
+      controller: 'HB522', title: 'Meeting recurring inspection', status: 'To do', recurrence_enabled: 1, recurrence_interval: 3, recurrence_unit: 'days'
+    }, admin);
+    repository.saveProjectMeeting(null, {
+      period_from: new Date().toISOString().slice(0, 10), period_to: new Date().toISOString().slice(0, 10), title: 'Recurring task meeting',
+      items: [{ entity_type: 'task', entity_id: meetingRecurring.id, target_status: 'Done', item_status: 'decided' }]
+    }, admin);
+    const completedInMeeting = repository.tasks('all', admin).find(item => item.id === meetingRecurring.id);
+    assert.ok(completedInMeeting.recurrence_next_task_id, 'completion during a meeting must start the next recurrence');
+
     const point = repository.savePoint(null, {
       controller: 'HB522', title: 'Mention worker', mentioned_user_ids: [worker.id], owner_user_id: admin.id
     }, admin);
@@ -238,7 +261,7 @@ test('V3.2 manages controller function groups, check templates and batch status 
   }
 });
 
-test('configurable status matrices keep independent subgroup columns and symbol workflow values', () => {
+test('configurable status matrices inherit empty subgroup layouts and keep explicit columns independent', () => {
   const temporary = temporaryDatabase();
   let repository = openDatabase(temporary.path);
   try {
@@ -247,16 +270,12 @@ test('configurable status matrices keep independent subgroup columns and symbol 
 
     const group = repository.saveStatusGroup(null, { name: 'Hardware test', description: 'Configurable hardware matrix' });
     const directColumn = repository.saveStatusColumn(group.id, null, null, { name: '+24V', column_role: 'subpoint', field_type: 'status', include_in_progress: 1 });
-    const subgroup = repository.saveStatusSubgroup(group.id, null, { name: 'Napędy', copy_parent_columns: 1 });
-    const textColumn = repository.saveStatusColumn(group.id, subgroup.id, null, { name: 'Device Name', column_role: 'basic', field_type: 'text' });
-    const textSubpoint = repository.saveStatusColumn(group.id, subgroup.id, null, { name: 'MAC Address', column_role: 'subpoint', field_type: 'text', include_in_progress: 1 });
-    const copiedColumn = repository.config().status_groups.find(item => item.id === group.id).subgroups.find(item => item.id === subgroup.id).columns.find(item => item.name === directColumn.name);
-    assert.ok(copiedColumn);
-    assert.equal(copiedColumn.column_role, 'subpoint');
-    assert.equal(textColumn.column_role, 'basic');
-    assert.equal(textSubpoint.column_role, 'subpoint');
-    assert.equal(textSubpoint.field_type, 'text');
-    assert.equal(textSubpoint.include_in_progress, 0, 'a text subpoint cannot affect workflow progress');
+    const subgroup = repository.saveStatusSubgroup(group.id, null, { name: 'Napędy' });
+    let subgroupConfig = repository.config().status_groups.find(item => item.id === group.id).subgroups.find(item => item.id === subgroup.id);
+    const inheritedColumn = subgroupConfig.columns.find(item => item.id === directColumn.id);
+    assert.ok(inheritedColumn);
+    assert.equal(inheritedColumn.inherited, true);
+    assert.equal(subgroupConfig.inheritance.implicit, true);
 
     const status = repository.saveStatus(null, {
       controller: 'HB522', status_group_id: group.id, status_subgroup_id: subgroup.id,
@@ -264,9 +283,25 @@ test('configurable status matrices keep independent subgroup columns and symbol 
     }, admin);
     assert.equal(status.status_group_name, 'Hardware test');
     assert.equal(status.status_subgroup_name, 'Napędy');
-    assert.equal(status.matrix_values[copiedColumn.id], 'Ready to test');
+    assert.equal(status.matrix_values[inheritedColumn.id], 'Ready to test');
 
-    const textSaved = repository.saveStatusCell(status.id, textColumn.id, { value: 'SINAMICS', updated_at: status.updated_at }, admin);
+    const textColumn = repository.saveStatusColumn(group.id, subgroup.id, null, { name: 'Device Name', column_role: 'basic', field_type: 'text' });
+    const textSubpoint = repository.saveStatusColumn(group.id, subgroup.id, null, { name: 'MAC Address', column_role: 'subpoint', field_type: 'text', include_in_progress: 1 });
+    const workflowColumn = repository.saveStatusColumn(group.id, subgroup.id, null, { name: 'Test result', column_role: 'subpoint', field_type: 'status', include_in_progress: 1 });
+    subgroupConfig = repository.config().status_groups.find(item => item.id === group.id).subgroups.find(item => item.id === subgroup.id);
+    assert.equal(subgroupConfig.inheritance, null);
+    assert.equal(subgroupConfig.columns.some(item => item.id === directColumn.id), false);
+    assert.equal(textColumn.column_role, 'basic');
+    assert.equal(textSubpoint.column_role, 'subpoint');
+    assert.equal(textSubpoint.field_type, 'text');
+    assert.equal(textSubpoint.include_in_progress, 0, 'a text subpoint cannot affect workflow progress');
+    const inheritedGroup = repository.saveStatusGroup(null, { name: 'Mirror layout', inheritance_source: `subgroup:${subgroup.id}` });
+    const inheritedGroupConfig = repository.config().status_groups.find(item => item.id === inheritedGroup.id);
+    assert.equal(inheritedGroupConfig.inheritance.subgroup_id, subgroup.id);
+    assert.deepEqual(inheritedGroupConfig.columns.map(item => item.id), [textColumn.id, textSubpoint.id, workflowColumn.id]);
+
+    const statusWithOwnLayout = repository.status('all', admin).find(item => item.id === status.id);
+    const textSaved = repository.saveStatusCell(status.id, textColumn.id, { value: 'SINAMICS', updated_at: statusWithOwnLayout.updated_at }, admin);
     assert.equal(textSaved.matrix_values[textColumn.id], 'SINAMICS');
     assert.equal(textSaved.function_detail, 'SINAMICS', 'basic columns should identify the status item without a separate title field');
     assert.equal(textSaved.status, 'Ready to test');
@@ -275,8 +310,8 @@ test('configurable status matrices keep independent subgroup columns and symbol 
     assert.equal(subpointSaved.matrix_values[textSubpoint.id], 'de:0b');
     assert.equal(subpointSaved.function_detail, 'SINAMICS', 'a text subpoint must not replace the identifying basic-column value');
     assert.equal(subpointSaved.status, 'Ready to test');
-    const done = repository.saveStatusCell(status.id, copiedColumn.id, { value: 'Done', updated_at: subpointSaved.updated_at }, admin);
-    assert.equal(done.matrix_values[copiedColumn.id], 'Done');
+    const done = repository.saveStatusCell(status.id, workflowColumn.id, { value: 'Done', updated_at: subpointSaved.updated_at }, admin);
+    assert.equal(done.matrix_values[workflowColumn.id], 'Done');
     assert.equal(done.status, 'Done');
     assert.ok(done.progress_updated_at);
     assert.equal(done.progress_updated_by_name, admin.display_name);
@@ -663,7 +698,7 @@ test('V7 supports canonical hierarchy IDs, area tasks, goal links and configurab
   }
 });
 
-test('V8 supports announcements, aggregated KPI trends, unified Planner requirements and today-only guests', () => {
+test('V8 supports announcements, aggregated KPI trends, unified Planner requirements and configured Planner participants', () => {
   const temporary = temporaryDatabase();
   const repository = openDatabase(temporary.path);
   try {
@@ -692,18 +727,21 @@ test('V8 supports announcements, aggregated KPI trends, unified Planner requirem
       assert.equal(announcement.links.length, 2);
       assert.equal(repository.announcements(guest)[0].can_edit, false);
 
-      repository.savePlannerDay({ user_id: guest.id, plan_date: today, entries: [{ controller_group_id: roots[0].id, work_mode: 'online', shift: 'Dzień' }] }, admin);
-      assert.throws(() => repository.savePlannerDay({ user_id: guest.id, plan_date: tomorrow, entries: [{ controller_group_id: roots[0].id, work_mode: 'online', shift: 'Dzień' }] }, admin), /wyłącznie do dzisiejszego/);
+      assert.throws(() => repository.savePlannerDay({ user_id: guest.id, plan_date: today, entries: [{ controller_group_id: roots[0].id, work_mode: 'online', shift: 'Dzień' }] }, admin), /wyłączona z Plannera/);
+      assert.throws(() => repository.savePlannerDay({ user_id: guest.id, plan_date: tomorrow, entries: [{ controller_group_id: roots[0].id, work_mode: 'online', shift: 'Dzień' }] }, admin), /wyłączona z Plannera/);
       repository.setPlannerRequirements({ plan_date: today, controller_group_id: roots[0].id, online_required: 3, offline_required: 1, note: 'Rozruch' }, admin);
       const managerPlan = repository.planner(today, today, admin);
       const userPlan = repository.planner(today, today, guest);
       assert.equal(managerPlan.can_manage_requirements, true);
+      assert.equal(managerPlan.users.some(item => item.id === guest.id), false);
+      assert.equal(Object.hasOwn(managerPlan, 'available_today_users'), false);
       assert.equal(managerPlan.requirements.length, 2);
       assert.equal(userPlan.can_manage_requirements, false);
       assert.equal(userPlan.requirements.length, 0);
       assert.equal(managerPlan.area_day_summary.find(item => item.id === roots[0].id).days[0].online_required, 3);
 
       repository.setPlannerEnabled(guest.id, { planner_enabled: 1 });
+      repository.savePlannerDay({ user_id: guest.id, plan_date: today, entries: [{ controller_group_id: roots[0].id, work_mode: 'online', shift: 'Dzień' }] }, admin);
       const entry = repository.planner(today, today, admin).entries.find(item => item.user_id === guest.id);
       repository.movePlannerEntry({ entry_id: entry.id, target_user_id: guest.id, target_date: tomorrow, copy: true }, admin);
       assert.ok(repository.planner(today, tomorrow, admin).entries.some(item => item.user_id === guest.id && item.plan_date === tomorrow));
@@ -1121,7 +1159,7 @@ test('status handovers support meetings, risk and historical suggestions', () =>
       const followupMeeting = repository.saveProjectMeeting(null, {
         period_from: '2026-10-16', period_to: '2026-10-22', title: 'V13 Kolejna odprawa', summary: '', items: []
       }, manager);
-      assert.equal(followupMeeting.items.some(item => item.entity_type === 'point' && item.entity_id === riskPoint.id && item.item_status === 'deferred'), true);
+      assert.equal(followupMeeting.items.length, 0, 'new meetings start empty and only contain explicitly selected topics');
 
       const dependency = repository.saveExternalDependency(null, {
         entity_type: 'task', entity_id: task.id, party: 'Dostawca sieci', dependency_status: 'waiting', expected_date: '2026-10-10', next_followup: '2026-10-09', owner_user_id: workerRecord.id
