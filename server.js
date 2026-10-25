@@ -318,6 +318,8 @@ async function handleProjectApi(request, response, url, user) {
     if (method === 'PATCH') return json(response, 200, repository.saveProjectMeeting(meetingId, await readJson(request), user));
     if (method === 'DELETE') { repository.deleteProjectMeeting(meetingId); response.writeHead(204); return response.end(); }
   }
+  const meetingPublish = path.match(/^\/api\/project-meetings\/(\d+)\/publish$/);
+  if (meetingPublish && method === 'POST') { requireRole(user, 'moderator'); return json(response, 200, repository.publishProjectMeeting(Number(meetingPublish[1]), user)); }
   if (method === 'POST' && path === '/api/external-dependencies') { requireRole(user, 'moderator'); return json(response, 201, repository.saveExternalDependency(null, await readJson(request), user)); }
   const externalDependencyId = numericId(path, '/api/external-dependencies');
   if (externalDependencyId !== null) {
@@ -410,6 +412,7 @@ async function handleProjectApi(request, response, url, user) {
     from: url.searchParams.get('from'), to: url.searchParams.get('to'), scope,
     types: url.searchParams.getAll('type'), priorities: url.searchParams.getAll('priority'), category: url.searchParams.get('category'), only_mine: url.searchParams.get('only_mine') === '1'
   }, user));
+  if (method === 'GET' && path === '/api/calendar/annotations') { requireRole(user, 'moderator'); return json(response, 200, repository.calendarAnnotations()); }
   if (method === 'POST' && path === '/api/calendar/items') return json(response, 201, repository.saveCalendarItems(await readJson(request), user));
   if (method === 'POST' && path === '/api/calendar/annotations') { requireRole(user, 'moderator'); return json(response, 201, repository.saveCalendarAnnotation(null, await readJson(request), user)); }
   let annotationMatch = path.match(/^\/api\/calendar\/annotations\/(\d+)$/);
@@ -447,8 +450,11 @@ async function handleProjectApi(request, response, url, user) {
   if (method === 'PATCH' && path === '/api/status/batch') return json(response, 200, repository.batchUpdateStatus(await readJson(request), user));
   if (method === 'POST' && path === '/api/status/bulk-create') return json(response, 201, repository.bulkCreateStatus(await readJson(request), user));
   if (method === 'POST' && path === '/api/status-layout/import') { requireRole(user, 'moderator'); return json(response, 200, repository.importStatusLayout(await readJson(request, 2_000_000))); }
+  if (method === 'POST' && path === '/api/status-layout/copy') { requireRole(user, 'moderator'); return json(response, 200, repository.copyStatusLayoutElements(await readJson(request))); }
   const statusCellMatch = path.match(/^\/api\/status\/(\d+)\/cells\/(\d+)$/);
   if (statusCellMatch && method === 'PATCH') return json(response, 200, repository.saveStatusCell(Number(statusCellMatch[1]), Number(statusCellMatch[2]), await readJson(request), user));
+  const taskRecurrenceSkip = path.match(/^\/api\/tasks\/(\d+)\/skip-recurrence$/);
+  if (taskRecurrenceSkip && method === 'POST') return json(response, 200, repository.skipRecurringTask(Number(taskRecurrenceSkip[1]), user));
 
   const resources = [
     { path: '/api/status', list: () => repository.status(scope, user), save: (id, body) => repository.saveStatus(id, body, user), remove: id => repository.deleteStatus(id, user), deleteRole: 'project_admin' },

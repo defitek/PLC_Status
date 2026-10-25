@@ -52,18 +52,20 @@ test('V3 supports overview, ordering, assignment, mentions, audit and deletion r
     assert.throws(() => repository.deleteTask(task.id, worker), /Nie możesz usunąć/);
 
     const recurring = repository.saveTask(null, {
-      controller: 'HB522', title: 'Recurring inspection', status: 'To do', recurrence_enabled: 1, recurrence_interval: 2, recurrence_unit: 'weeks'
+      controller: 'HB522', title: 'Recurring inspection', status: 'To do', due_date: '2026-10-04', recurrence_enabled: 1, recurrence_interval: 1, recurrence_unit: 'weeks'
     }, admin);
     const completedRecurring = repository.saveTask(recurring.id, { ...recurring, status: 'Done' }, admin);
     assert.ok(completedRecurring.recurrence_next_task_id);
     const nextRecurring = repository.tasks('all', admin).find(item => item.id === completedRecurring.recurrence_next_task_id);
-    const expectedRecurringDate = new Date(); expectedRecurringDate.setUTCDate(expectedRecurringDate.getUTCDate() + 14);
     assert.equal(nextRecurring.status, 'To do');
-    assert.equal(nextRecurring.due_date, expectedRecurringDate.toISOString().slice(0, 10));
-    assert.equal(nextRecurring.recurrence_interval, 2);
+    assert.equal(nextRecurring.due_date, '2026-10-11', 'the next deadline must be anchored to the previous deadline');
+    assert.equal(nextRecurring.recurrence_interval, 1);
     const recurringCount = repository.tasks('all', admin).filter(item => item.title === 'Recurring inspection').length;
     repository.saveTask(recurring.id, { ...completedRecurring, status: 'Done' }, admin);
     assert.equal(repository.tasks('all', admin).filter(item => item.title === 'Recurring inspection').length, recurringCount, 'saving an already completed cycle must not create another task');
+    const skippedRecurring = repository.skipRecurringTask(nextRecurring.id, admin);
+    assert.equal(skippedRecurring.due_date, '2026-10-18');
+    assert.equal(repository.tasks('all', admin).some(item => item.id === nextRecurring.id), false, 'skipping removes the current occurrence');
     const meetingRecurring = repository.saveTask(null, {
       controller: 'HB522', title: 'Meeting recurring inspection', status: 'To do', recurrence_enabled: 1, recurrence_interval: 3, recurrence_unit: 'days'
     }, admin);
@@ -89,6 +91,46 @@ test('V3 supports overview, ordering, assignment, mentions, audit and deletion r
     const ownTask = repository.saveTask(null, { controller: 'HB522', title: 'Untouched own task' }, worker);
     repository.deleteTask(ownTask.id, worker);
     assert.equal(repository.audit('task', ownTask.id)[0].action, 'delete');
+  } finally {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
+test('V19 supports annotated planning, justified task states, status layout copies and published meetings', () => {
+  const temporary = temporaryDatabase();
+  const repository = openDatabase(temporary.path);
+  try {
+    const account = repository.authenticate('admin');
+    const admin = repository.me(account.id);
+    const controller = repository.controllers()[0];
+    const task = repository.saveTask(null, { controller: controller.code, title: 'Retest drive', status: 'To do' }, admin);
+    assert.throws(() => repository.saveTask(task.id, { ...task, status: 'NOK / Retest required' }, admin), /wymaga komentarza/);
+    const retest = repository.saveTask(task.id, { ...task, status: 'NOK / Retest required', status_change_comment: 'Pomiar poza tolerancją' }, admin);
+    assert.ok(retest.comments.some(comment => comment.content.includes('Pomiar poza tolerancją')));
+
+    const annotation = repository.saveCalendarAnnotation(null, {
+      title: 'Okno wsparcia', start_date: '2026-10-26', end_date: '2026-10-28', controller_id: controller.id,
+      background_color: '#12AB34', text_color: '#FFFFFF', description: 'Wsparcie dostawcy na obiekcie'
+    }, admin);
+    assert.equal(annotation.background_color, '#12ab34');
+    assert.equal(repository.planner('2026-10-26', '2026-10-28', admin).annotations[0].title, 'Okno wsparcia');
+
+    const source = repository.saveStatusGroup(null, { name: 'Napędy V19', description: 'Układ źródłowy' });
+    const column = repository.saveStatusColumn(source.id, null, null, { name: 'Test kierunku', description: 'Potwierdź kierunek obrotów', column_role: 'subpoint', field_type: 'status', include_in_progress: 1 });
+    const target = repository.saveStatusGroup(null, { name: 'Roboty V19' });
+    repository.copyStatusLayoutElements({ source_group_id: source.id, target_group_id: target.id, mode: 'selected', column_ids: [column.id] });
+    const copied = repository.config().status_groups.find(group => group.id === target.id).columns.find(item => item.name === column.name);
+    assert.equal(copied.description, 'Potwierdź kierunek obrotów');
+
+    const meeting = repository.saveProjectMeeting(null, {
+      period_from: '2026-10-26', period_to: '2026-10-30', title: 'Plan uruchomienia V19',
+      items: [{ entity_type: 'task', entity_id: retest.id, objective: 'Retest', decision: 'Powtórzyć pomiar', item_status: 'open' }]
+    }, admin);
+    const published = repository.publishProjectMeeting(meeting.id, admin);
+    assert.ok(published.meeting.published_at);
+    assert.equal(published.announcement.links[0].entity_id, retest.id);
+    assert.ok(repository.audit('task', retest.id).some(entry => entry.changes.meeting_assignment?.to?.title === 'Plan uruchomienia V19'));
   } finally {
     repository.close();
     rmSync(temporary.directory, { recursive: true, force: true });
