@@ -784,7 +784,8 @@ export const server = createServer(async (request, response) => {
     const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
     if (url.pathname.startsWith('/api/')) return await handleApi(request, response, url);
     const publicLoginFiles = ['/login.html', '/login.js', '/styles.css'];
-    if (!await currentUser(request) && !publicLoginFiles.includes(url.pathname)) return serveStatic(response, '/login.html');
+    const publicLoginAsset = url.pathname.startsWith('/assets/');
+    if (!await currentUser(request) && !publicLoginAsset && !publicLoginFiles.includes(url.pathname)) return serveStatic(response, '/login.html');
     return serveStatic(response, url.pathname);
   } catch (error) {
     const statusCode = Number(error.statusCode) || (String(error.message).includes('UNIQUE constraint') ? 409 : 500);

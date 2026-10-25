@@ -136,17 +136,18 @@ test('V20 supports hierarchical annotations, meeting priorities and review histo
     const closedMeeting = repository.saveProjectMeeting(meeting.id, {
       ...meeting, status: 'closed', items: [{ ...meeting.items[0], meeting_priority: 'Critical', item_status: 'decided', status_changed_by_user_id: admin.id, worker_user_ids: [admin.id] }]
     }, admin);
-    assert.equal(closedMeeting.items[0].meeting_priority, 'Critical');
+    assert.equal(closedMeeting.items[0].meeting_priority, '1');
     assert.equal(closedMeeting.items[0].baseline.status, 'NOK / Retest required');
     assert.equal(closedMeeting.items[0].entity.status, 'Done');
     assert.equal(closedMeeting.items[0].status_changed_by_user_id, admin.id);
     assert.ok(closedMeeting.items[0].comments.some(comment => comment.content.includes('Retest zakończony')));
-    assert.ok(repository.notifications(admin).some(notification => notification.kind === 'meeting' && notification.entity_id === meeting.id));
+    assert.equal(repository.notifications(admin).some(notification => notification.kind === 'meeting' && notification.entity_id === meeting.id), false, 'saving a meeting draft must not notify the project');
     const published = repository.publishProjectMeeting(meeting.id, admin);
     assert.ok(published.meeting.published_at);
     assert.equal(published.announcement.links[0].entity_id, retest.id);
-    assert.match(published.announcement.content, /Krytyczny \| Zadanie/);
-    assert.equal(repository.meetingSummaries(admin)[0].items[0].meeting_priority, 'Critical');
+    assert.match(published.announcement.content, /1 \| Zadanie/);
+    assert.equal(repository.meetingSummaries(admin)[0].items[0].meeting_priority, '1');
+    assert.ok(repository.notifications(admin).some(notification => notification.kind === 'meeting' && notification.entity_id === meeting.id));
     assert.ok(repository.audit('task', retest.id).some(entry => entry.changes.meeting_assignment?.to?.title === 'Plan uruchomienia V19'));
   } finally {
     repository.close();
@@ -154,7 +155,7 @@ test('V20 supports hierarchical annotations, meeting priorities and review histo
   }
 });
 
-test('V21 keeps meeting drafts private, groups plan items and targets status-transfer notifications', () => {
+test('V22 publishes explicit meeting snapshots, groups numbered priorities and targets status-transfer notifications', () => {
   const temporary = temporaryDatabase();
   const repository = openDatabase(temporary.path);
   try {
@@ -166,23 +167,29 @@ test('V21 keeps meeting drafts private, groups plan items and targets status-tra
 
     const meeting = repository.saveProjectMeeting(null, {
       period_from: '2026-10-25', period_to: '2026-10-31', title: 'V21 private plan', status: 'open',
-      items: [{ entity_type: 'task', entity_id: task.id, group_name: 'Rozruch linii', objective: 'Ukończenie', meeting_priority: 'High', item_status: 'open' }]
+      items: [{ entity_type: 'task', entity_id: task.id, group_name: 'Rozruch linii', objective: 'Ukończenie', meeting_priority: 2, item_status: 'open' }]
     }, admin);
     assert.equal(meeting.items[0].group_name, 'Rozruch linii');
-    assert.ok(repository.meetingSummaries(admin).some(item => item.id === meeting.id), 'a manager should see a draft');
+    assert.equal(meeting.items[0].meeting_priority, '2');
+    assert.equal(repository.meetingSummaries(admin).some(item => item.id === meeting.id), false, 'a draft should not appear in the manager Informator');
     assert.equal(repository.meetingSummaries(workerOne).some(item => item.id === meeting.id), false, 'a worker should not see a draft');
+    assert.equal(repository.notifications(workerOne).some(item => item.kind === 'meeting' && item.entity_id === meeting.id), false, 'saving a draft should not notify workers');
     assert.throws(() => repository.saveProjectMeeting(null, {
       period_from: '2026-10-25', period_to: '2026-10-25', title: 'v21 PRIVATE PLAN', items: []
     }, admin), /istnieje już odprawa/);
 
     const firstPublication = repository.publishProjectMeeting(meeting.id, admin);
     assert.ok(repository.meetingSummaries(workerOne).some(item => item.id === meeting.id), 'publishing should expose the plan');
+    const meetingNotificationsAfterPublish = repository.notifications(workerOne).filter(item => item.kind === 'meeting' && item.entity_id === meeting.id).length;
     const renamed = repository.saveProjectMeeting(meeting.id, { ...meeting, title: 'V21 renamed plan', items: meeting.items }, admin);
     assert.equal(renamed.title, 'V21 renamed plan');
-    assert.equal(repository.meetingSummaries(workerOne).some(item => item.id === meeting.id), false, 'editing a published plan should require republishing');
-    assert.equal(repository.announcements(workerOne).some(item => item.id === firstPublication.announcement.id), false, 'an unpublished plan must not remain as a regular Informator item');
+    assert.equal(repository.meetingSummaries(workerOne).find(item => item.id === meeting.id).title, 'V21 private plan', 'saving a draft must keep the published snapshot unchanged');
+    assert.ok(repository.announcements(workerOne).some(item => item.id === firstPublication.announcement.id), 'the previous publication should remain available until explicit update');
+    assert.equal(repository.notifications(workerOne).filter(item => item.kind === 'meeting' && item.entity_id === meeting.id).length, meetingNotificationsAfterPublish, 'saving a draft must not create notifications');
     const secondPublication = repository.publishProjectMeeting(meeting.id, admin);
+    assert.equal(secondPublication.announcement.id, firstPublication.announcement.id, 'updating the Informator should update the existing publication');
     assert.equal(repository.meetingSummaries(workerOne).find(item => item.id === meeting.id).title, 'V21 renamed plan');
+    assert.equal(repository.notifications(workerOne).filter(item => item.kind === 'meeting' && item.entity_id === meeting.id).length, meetingNotificationsAfterPublish + 1, 'explicit Informator update should notify workers');
 
     const note = repository.saveNote(null, {
       title: 'Zmiana zakresu rozruchu', note_date: '2026-10-25', shift: 'Dzień', mentioned_user_ids: [workerOne.id],
@@ -1251,6 +1258,7 @@ test('status handovers support meetings, risk and historical suggestions', () =>
       assert.equal(meeting.items[0].entity.entity_id, riskPoint.id);
       assert.deepEqual(meeting.items[0].assignee_user_ids, [workerRecord.id]);
       assert.equal(repository.meetingCandidates('2026-10-09', '2026-10-15', manager).point.some(item => item.entity_id === riskPoint.id), true);
+      assert.equal(repository.meetingSummaries(manager).some(item => item.id === meeting.id), false, 'a draft meeting stays outside the Informator');
 
       assert.throws(() => repository.saveProjectMeeting(meeting.id, {
         ...meeting, status: 'closed', items: [{ ...meeting.items[0], item_status: 'deferred', outcome_comment: '' }]
@@ -1264,6 +1272,8 @@ test('status handovers support meetings, risk and historical suggestions', () =>
       assert.equal(meeting.status, 'closed');
       assert.equal(meeting.items[0].item_status, 'deferred');
       assert.deepEqual(meeting.items[0].worker_user_ids, [workerRecord.id]);
+      assert.equal(repository.meetingSummaries(manager).some(item => item.id === meeting.id), false, 'closing a draft does not publish it automatically');
+      repository.publishProjectMeeting(meeting.id, manager);
       const meetingSummary = repository.meetingSummaries(manager).find(item => item.id === meeting.id);
       assert.equal(meetingSummary.item_count, 1);
       assert.equal(meetingSummary.deferred_count, 1);

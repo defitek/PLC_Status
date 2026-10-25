@@ -77,6 +77,7 @@ export function openDatabase(databasePath) {
   migrateToV19(db);
   migrateToV20(db);
   migrateToV21(db);
+  migrateToV22(db);
   migrateSecurityFoundation(db);
   migrateStatusWorkflow(db);
   migrateEntityDependencies(db);
@@ -112,6 +113,7 @@ export function openDatabase(databasePath) {
   migrateToV19(db);
   migrateToV20(db);
   migrateToV21(db);
+  migrateToV22(db);
   migrateSecurityFoundation(db);
   migrateStatusWorkflow(db);
   migrateEntityDependencies(db);
@@ -152,12 +154,13 @@ function ensureProjectMeetingFeatures(db) {
   ensureColumn(db, 'project_meeting_items', 'objective', "TEXT NOT NULL DEFAULT 'Kontynuacja'");
   ensureColumn(db, 'project_meeting_items', 'outcome_comment', "TEXT NOT NULL DEFAULT ''");
   ensureColumn(db, 'project_meeting_items', 'target_status', "TEXT NOT NULL DEFAULT ''");
-  ensureColumn(db, 'project_meeting_items', 'meeting_priority', "TEXT NOT NULL DEFAULT 'Medium'");
+  ensureColumn(db, 'project_meeting_items', 'meeting_priority', "TEXT NOT NULL DEFAULT '5'");
   ensureColumn(db, 'project_meeting_items', 'baseline_json', "TEXT NOT NULL DEFAULT '{}'");
   ensureColumn(db, 'project_meeting_items', 'status_changed_by_user_id', 'INTEGER');
   ensureColumn(db, 'project_meeting_items', 'group_name', "TEXT NOT NULL DEFAULT ''");
   ensureColumn(db, 'project_meetings', 'published_at', 'TEXT');
   ensureColumn(db, 'project_meetings', 'published_announcement_id', 'INTEGER');
+  ensureColumn(db, 'project_meetings', 'published_snapshot_json', "TEXT NOT NULL DEFAULT '{}'");
   db.exec(`CREATE TABLE IF NOT EXISTS project_meeting_item_assignees (
     meeting_item_id INTEGER NOT NULL REFERENCES project_meeting_items(id) ON DELETE CASCADE,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -367,7 +370,7 @@ function migrateToV19(db) {
 }
 
 function migrateToV20(db) {
-  ensureColumn(db, 'project_meeting_items', 'meeting_priority', "TEXT NOT NULL DEFAULT 'Medium'");
+  ensureColumn(db, 'project_meeting_items', 'meeting_priority', "TEXT NOT NULL DEFAULT '5'");
   ensureColumn(db, 'project_meeting_items', 'status_changed_by_user_id', 'INTEGER');
   db.exec(`CREATE TABLE IF NOT EXISTS calendar_annotation_scopes (
     annotation_id INTEGER NOT NULL REFERENCES calendar_annotations(id) ON DELETE CASCADE,
@@ -448,6 +451,31 @@ function migrateToV21(db) {
       COMMIT;
     `);
   }
+}
+
+function migrateToV22(db) {
+  ensureColumn(db, 'project_meetings', 'published_snapshot_json', "TEXT NOT NULL DEFAULT '{}'");
+  db.exec(`UPDATE project_meeting_items SET meeting_priority=CASE meeting_priority
+    WHEN 'Critical' THEN '1' WHEN 'High' THEN '3' WHEN 'Medium' THEN '5' WHEN 'Low' THEN '8'
+    ELSE CAST(MAX(1,MIN(10,CAST(meeting_priority AS INTEGER))) AS TEXT) END
+    WHERE meeting_priority NOT IN ('1','2','3','4','5','6','7','8','9','10')`);
+  const publishedMeetings = db.prepare(`SELECT pm.*,creator.display_name created_by_name,closer.display_name closed_by_name
+    FROM project_meetings pm LEFT JOIN users creator ON creator.id=pm.created_by LEFT JOIN users closer ON closer.id=pm.closed_by
+    WHERE pm.published_at IS NOT NULL AND COALESCE(pm.published_snapshot_json,'{}')='{}'`).all();
+  const itemRows = db.prepare('SELECT * FROM project_meeting_items WHERE meeting_id=? ORDER BY sort_order,id');
+  const assigneeRows = db.prepare(`SELECT pmia.user_id,u.display_name FROM project_meeting_item_assignees pmia
+    JOIN users u ON u.id=pmia.user_id WHERE pmia.meeting_item_id=? ORDER BY u.display_name`);
+  const workerRows = db.prepare(`SELECT pmiw.user_id,u.display_name FROM project_meeting_item_workers pmiw
+    JOIN users u ON u.id=pmiw.user_id WHERE pmiw.meeting_item_id=? ORDER BY u.display_name`);
+  const saveSnapshot = db.prepare('UPDATE project_meetings SET published_snapshot_json=? WHERE id=?');
+  publishedMeetings.forEach(meeting => {
+    const items = itemRows.all(meeting.id).map(item => {
+      const assignees = assigneeRows.all(item.id); const workers = workerRows.all(item.id);
+      return { ...item, assignee_user_ids: assignees.map(row => row.user_id), assignee_names: assignees.map(row => row.display_name), worker_user_ids: workers.map(row => row.user_id), worker_names: workers.map(row => row.display_name) };
+    });
+    const { published_snapshot_json: ignored, ...snapshot } = meeting;
+    saveSnapshot.run(JSON.stringify({ ...snapshot, period_from: meeting.period_from || meeting.meeting_date, period_to: meeting.period_to || meeting.meeting_date, items }), meeting.id);
+  });
 }
 
 function migrateSecurityFoundation(db) {
@@ -3656,7 +3684,7 @@ function createRepository(db, defaultProjectId) {
       recipientIds.forEach(userId => insertUser.run(recordId, userId));
       links.forEach(link => insertLink.run(recordId, link.entity_type, link.entity_id));
       labelIds.forEach(labelId => insertLabel.run(recordId, labelId));
-      if (isNew) {
+      if (isNew && !input.suppress_notifications) {
         const notificationIds = (recipientIds.length ? recipientIds : all('SELECT user_id FROM project_memberships WHERE project_id=? AND active=1', activeProjectId()).map(item => item.user_id)).filter(userId => Number(userId) !== Number(currentUser.id));
         const notificationAudience = notificationIds.map(user_id => ({ user_id }));
         for (const member of notificationAudience) {
@@ -4062,25 +4090,36 @@ function createRepository(db, defaultProjectId) {
     };
   }
 
+  function decorateMeetingItem(item, meeting, currentUser, hierarchy, preservePublishedPeople = false) {
+    const entity = operationEntity(item.entity_type, item.entity_id, currentUser, hierarchy);
+    const audit = auditRowsForEntity(item.entity_type, item.entity_id).filter(row => String(row.changed_at) >= String(meeting.created_at)).map(row => {
+      let changes = {}; try { changes = JSON.parse(row.changes_json || '{}'); } catch {}
+      return { user_id: row.user_id, changed_at: row.changed_at, user_name: row.user_name, changes };
+    }).filter(row => Object.keys(row.changes).length);
+    const comments = ['status', 'task', 'point', 'goal'].includes(item.entity_type) ? commentRows(item.entity_type, item.entity_id).filter(row => String(row.created_at) >= String(meeting.created_at)) : [];
+    const status_events = audit.filter(row => row.changes.status).map(row => ({ user_id: row.user_id, user_name: row.user_name, changed_at: row.changed_at, from: row.changes.status.from, to: row.changes.status.to }));
+    const statusChangedByUserId = asId(item.status_changed_by_user_id) || asId(status_events[0]?.user_id);
+    const assignees = preservePublishedPeople ? null : all(`SELECT pmia.user_id,u.display_name FROM project_meeting_item_assignees pmia JOIN users u ON u.id=pmia.user_id WHERE pmia.meeting_item_id=? ORDER BY u.display_name`, item.id);
+    const workers = preservePublishedPeople ? null : all(`SELECT pmiw.user_id,u.display_name FROM project_meeting_item_workers pmiw JOIN users u ON u.id=pmiw.user_id WHERE pmiw.meeting_item_id=? ORDER BY u.display_name`, item.id);
+    return {
+      ...item, baseline: item.baseline || parseJson(item.baseline_json, {}), entity,
+      assignee_user_ids: preservePublishedPeople ? (item.assignee_user_ids || []) : assignees.map(row => row.user_id),
+      assignee_names: preservePublishedPeople ? (item.assignee_names || []) : assignees.map(row => row.display_name),
+      worker_user_ids: preservePublishedPeople ? (item.worker_user_ids || []) : workers.map(row => row.user_id),
+      worker_names: preservePublishedPeople ? (item.worker_names || []) : workers.map(row => row.display_name),
+      changes: audit, comments, status_events, status_changed_by_user_id: statusChangedByUserId,
+      status_changed_by_name: statusChangedByUserId ? userName(statusChangedByUserId) : ''
+    };
+  }
+
   function projectMeetingRows(currentUser) {
     const hierarchy = hierarchyData();
     return all(`SELECT pm.*,creator.display_name created_by_name,closer.display_name closed_by_name FROM project_meetings pm
       LEFT JOIN users creator ON creator.id=pm.created_by LEFT JOIN users closer ON closer.id=pm.closed_by
       WHERE pm.project_id=? ORDER BY pm.meeting_date DESC,pm.id DESC`, activeProjectId()).map(meeting => ({
         ...meeting, period_from: meeting.period_from || meeting.meeting_date, period_to: meeting.period_to || meeting.meeting_date,
-        items: all(`SELECT pmi.*,u.display_name owner_name FROM project_meeting_items pmi LEFT JOIN users u ON u.id=pmi.owner_user_id WHERE pmi.meeting_id=? ORDER BY pmi.sort_order,pmi.id`, meeting.id).map(item => {
-          const entity = operationEntity(item.entity_type, item.entity_id, currentUser, hierarchy);
-          const audit = auditRowsForEntity(item.entity_type, item.entity_id).filter(row => String(row.changed_at) >= String(meeting.created_at)).map(row => {
-            let changes = {}; try { changes = JSON.parse(row.changes_json || '{}'); } catch {}
-            return { user_id: row.user_id, changed_at: row.changed_at, user_name: row.user_name, changes };
-          }).filter(row => Object.keys(row.changes).length);
-          const comments = ['status', 'task', 'point', 'goal'].includes(item.entity_type) ? commentRows(item.entity_type, item.entity_id).filter(row => String(row.created_at) >= String(meeting.created_at)) : [];
-          const status_events = audit.filter(row => row.changes.status).map(row => ({ user_id: row.user_id, user_name: row.user_name, changed_at: row.changed_at, from: row.changes.status.from, to: row.changes.status.to }));
-          const statusChangedByUserId = asId(item.status_changed_by_user_id) || asId(status_events[0]?.user_id);
-          const assignees = all(`SELECT pmia.user_id,u.display_name FROM project_meeting_item_assignees pmia JOIN users u ON u.id=pmia.user_id WHERE pmia.meeting_item_id=? ORDER BY u.display_name`, item.id);
-          const workers = all(`SELECT pmiw.user_id,u.display_name FROM project_meeting_item_workers pmiw JOIN users u ON u.id=pmiw.user_id WHERE pmiw.meeting_item_id=? ORDER BY u.display_name`, item.id);
-          return { ...item, baseline: parseJson(item.baseline_json, {}), entity, assignee_user_ids: assignees.map(row => row.user_id), assignee_names: assignees.map(row => row.display_name), worker_user_ids: workers.map(row => row.user_id), worker_names: workers.map(row => row.display_name), changes: audit, comments, status_events, status_changed_by_user_id: statusChangedByUserId, status_changed_by_name: statusChangedByUserId ? userName(statusChangedByUserId) : '' };
-        })
+        items: all(`SELECT pmi.*,u.display_name owner_name FROM project_meeting_items pmi LEFT JOIN users u ON u.id=pmi.owner_user_id WHERE pmi.meeting_id=? ORDER BY pmi.sort_order,pmi.id`, meeting.id)
+          .map(item => decorateMeetingItem(item, meeting, currentUser, hierarchy))
       }));
   }
 
@@ -4137,23 +4176,32 @@ function createRepository(db, defaultProjectId) {
   }
 
   function meetingSummaryRows(currentUser) {
-    const canCoordinateMeetings = ['system_admin', 'project_admin', 'moderator'].includes(currentUser?.role);
-    const summaries = all(`SELECT pm.id,pm.title,pm.created_by,COALESCE(pm.period_from,pm.meeting_date) period_from,
-      COALESCE(pm.period_to,pm.meeting_date) period_to,pm.status,pm.summary,pm.created_at,pm.closed_at,
-      pm.published_at,pm.published_announcement_id,
-      creator.display_name created_by_name,closer.display_name closed_by_name,
-      COUNT(pmi.id) item_count,
-      COALESCE(SUM(pmi.item_status='open'),0) open_count,
-      COALESCE(SUM(pmi.item_status='deferred'),0) deferred_count,
-      COALESCE(SUM(pmi.item_status='decided'),0) closed_count
-      FROM project_meetings pm
-      LEFT JOIN users creator ON creator.id=pm.created_by
-      LEFT JOIN users closer ON closer.id=pm.closed_by
-      LEFT JOIN project_meeting_items pmi ON pmi.meeting_id=pm.id
-      WHERE pm.project_id=? AND (?=1 OR pm.published_at IS NOT NULL)
-      GROUP BY pm.id ORDER BY pm.meeting_date DESC,pm.id DESC`, activeProjectId(), canCoordinateMeetings ? 1 : 0);
-    const details = new Map(projectMeetingRows(currentUser).map(meeting => [meeting.id, meeting]));
-    return summaries.map(summary => ({ ...summary, items: details.get(summary.id)?.items || [] }));
+    const hierarchy = hierarchyData();
+    const live = new Map(projectMeetingRows(currentUser).map(meeting => [meeting.id, meeting]));
+    return all(`SELECT pm.*,creator.display_name created_by_name,closer.display_name closed_by_name FROM project_meetings pm
+      LEFT JOIN users creator ON creator.id=pm.created_by LEFT JOIN users closer ON closer.id=pm.closed_by
+      WHERE pm.project_id=? AND pm.published_at IS NOT NULL`, activeProjectId()).map(meeting => {
+      const snapshot = parseJson(meeting.published_snapshot_json, {});
+      const source = Array.isArray(snapshot.items) ? snapshot : live.get(meeting.id) || meeting;
+      const publishedMeeting = {
+        ...meeting,
+        title: source.title || meeting.title,
+        period_from: source.period_from || meeting.period_from || meeting.meeting_date,
+        period_to: source.period_to || meeting.period_to || meeting.meeting_date,
+        status: source.status || meeting.status,
+        summary: source.summary ?? meeting.summary,
+        closed_at: source.closed_at || null,
+        closed_by_name: source.closed_by_name || '',
+        created_by_name: source.created_by_name || meeting.created_by_name
+      };
+      const items = (source.items || []).map(item => decorateMeetingItem(item, publishedMeeting, currentUser, hierarchy, true));
+      return {
+        ...publishedMeeting, items, item_count: items.length,
+        open_count: items.filter(item => item.item_status === 'open').length,
+        deferred_count: items.filter(item => item.item_status === 'deferred').length,
+        closed_count: items.filter(item => item.item_status === 'decided').length
+      };
+    }).sort((first, second) => String(second.period_from || '').localeCompare(String(first.period_from || '')) || second.id - first.id);
   }
 
   function setMeetingUsers(table, meetingItemId, userIds) {
@@ -4212,7 +4260,6 @@ function createRepository(db, defaultProjectId) {
     if (periodTo < periodFrom) throw appError('Koniec zakresu odprawy nie może być wcześniejszy niż początek');
     const values = { project_id: activeProjectId(), meeting_date: periodFrom, period_from: periodFrom, period_to: periodTo, title, summary: clean(input.summary), status: clean(input.status) === 'closed' ? 'closed' : 'open' };
     let recordId = asId(id);
-    const isNew = !recordId;
     const existingMeeting = recordId ? one('SELECT * FROM project_meetings WHERE id=? AND project_id=?', recordId, activeProjectId()) : null;
     if (recordId && !existingMeeting) throw appError('Nie znaleziono rekordu odprawy', 404);
     if (one('SELECT 1 FROM project_meetings WHERE project_id=? AND title=? COLLATE NOCASE AND id!=?', activeProjectId(), title, recordId || 0)) throw appError('W tym projekcie istnieje już odprawa o tej nazwie');
@@ -4235,11 +4282,6 @@ function createRepository(db, defaultProjectId) {
     try {
       if (recordId) updateRecord('project_meetings', recordId, values, Object.keys(values));
       else recordId = insertRecord('project_meetings', { ...values, created_by: currentUser.id });
-      if (existingMeeting?.published_announcement_id) {
-        db.prepare("DELETE FROM notifications WHERE project_id=? AND entity_type='announcement' AND entity_id=?").run(activeProjectId(), existingMeeting.published_announcement_id);
-        db.prepare('DELETE FROM announcements WHERE id=? AND project_id=?').run(existingMeeting.published_announcement_id, activeProjectId());
-        db.prepare('UPDATE project_meetings SET published_at=NULL,published_announcement_id=NULL WHERE id=?').run(recordId);
-      }
       const existing = new Map(all('SELECT * FROM project_meeting_items WHERE meeting_id=?', recordId).map(item => [`${item.entity_type}:${item.entity_id}`, item]));
       const requestedKeys = new Set();
       const upsert = db.prepare(`INSERT INTO project_meeting_items(meeting_id,entity_type,entity_id,decision,objective,outcome_comment,target_status,meeting_priority,baseline_json,owner_user_id,status_changed_by_user_id,group_name,due_date,item_status,sort_order)
@@ -4248,7 +4290,10 @@ function createRepository(db, defaultProjectId) {
       prepared.forEach(({ item, entity }, index) => {
         const key = `${item.entity_type}:${Number(item.entity_id)}`; requestedKeys.add(key);
         const itemStatus = ['open', 'decided', 'deferred'].includes(item.item_status) ? item.item_status : 'open';
-        const meetingPriority = ['Low', 'Medium', 'High', 'Critical'].includes(clean(item.meeting_priority)) ? clean(item.meeting_priority) : ['Low', 'Medium', 'High', 'Critical'].includes(entity.priority) ? entity.priority : 'Medium';
+        const requestedPriority = Number(item.meeting_priority);
+        const legacyPriority = ({ Critical: 1, High: 3, Medium: 5, Low: 8 })[clean(item.meeting_priority)];
+        const entityPriority = ({ Critical: 1, High: 3, Medium: 5, Low: 8 })[entity.priority] || 5;
+        const meetingPriority = String(Number.isInteger(requestedPriority) && requestedPriority >= 1 && requestedPriority <= 10 ? requestedPriority : legacyPriority || entityPriority);
         const assignmentIds = Array.isArray(item.assignee_user_ids) ? item.assignee_user_ids : (item.owner_user_id ? [item.owner_user_id] : entity.assignee_user_ids || []);
         const statusChangedByUserId = asId(item.status_changed_by_user_id); if (statusChangedByUserId && !projectUserIds.has(statusChangedByUserId)) throw appError('Osoba zmieniająca status nie należy do projektu');
         upsert.run(recordId, item.entity_type, asId(item.entity_id), clean(item.decision), clean(item.objective) || 'Kontynuacja', clean(item.outcome_comment), clean(item.target_status), meetingPriority, JSON.stringify(entity), asId(item.owner_user_id || assignmentIds[0]), statusChangedByUserId, clean(item.group_name).slice(0, 120), nullableDate(item.due_date), itemStatus, index);
@@ -4266,7 +4311,6 @@ function createRepository(db, defaultProjectId) {
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
     const saved = projectMeetingRows(currentUser).find(item => item.id === recordId);
-    notifyProjectMeeting(recordId, isNew ? `Utworzono plan odprawy: ${values.title}` : values.status === 'closed' ? `Podsumowano odprawę: ${values.title}` : `Zaktualizowano plan odprawy: ${values.title}`, `${currentUser.display_name} · ${values.period_from}–${values.period_to}`);
     return scope === 'all' ? saved : { ...saved, items: saved.items.filter(item => inScope(item.entity_type, item.entity_id)) };
   }
 
@@ -4275,24 +4319,26 @@ function createRepository(db, defaultProjectId) {
     if (!meeting) throw appError('Nie znaleziono odprawy', 404);
     if (!meeting.items.length) throw appError('Dodaj co najmniej jeden element przed opublikowaniem odprawy');
     const typeNames = { status: 'Punkt statusu', task: 'Zadanie', point: 'Otwarty punkt', goal: 'Cel', note: 'Przekazanie statusu' };
-    const priorityNames = { Critical: 'Krytyczny', High: 'Wysoki', Medium: 'Średni', Low: 'Niski' };
     const lines = [
       `Plan i priorytety: ${meeting.period_from}–${meeting.period_to}.`,
       meeting.summary ? `Cel / agenda: ${meeting.summary}` : '',
       '',
       'Lp. | Priorytet | Typ | Temat | Obszar | Odpowiedzialni | Deadline',
-      ...meeting.items.map((item, index) => `${index + 1}. | ${priorityNames[item.meeting_priority] || 'Średni'} | ${typeNames[item.entity_type] || item.entity_type} | ${item.entity?.title || 'Element projektu'} | ${item.entity?.scope_label || 'Cały projekt'} | ${item.assignee_names?.join(', ') || 'Nieprzypisane'} | ${item.due_date || item.entity?.due_date || 'bez terminu'}${item.decision ? `\n   Plan: ${item.decision}` : ''}`)
+      ...meeting.items.map((item, index) => `${index + 1}. | ${item.meeting_priority || '5'} | ${typeNames[item.entity_type] || item.entity_type} | ${item.entity?.title || 'Element projektu'} | ${item.entity?.scope_label || 'Cały projekt'} | ${item.assignee_names?.join(', ') || 'Nieprzypisane'} | ${item.due_date || item.entity?.due_date || 'bez terminu'}${item.group_name ? ` | Grupa: ${item.group_name}` : ''}${item.decision ? `\n   Plan: ${item.decision}` : ''}`)
     ].filter((line, index, list) => line || list[index - 1]);
+    const wasPublished = Boolean(meeting.published_at);
     const announcement = saveAnnouncement(asId(meeting.published_announcement_id), {
       title: `Plan i priorytety: ${meeting.title}`,
       content: lines.join('\n'),
       importance: 'Normalna', entry_type: 'message', decision_status: 'published',
-      effective_date: meeting.period_from, links: meeting.items.map(item => ({ entity_type: item.entity_type, entity_id: item.entity_id }))
+      effective_date: meeting.period_from, links: meeting.items.map(item => ({ entity_type: item.entity_type, entity_id: item.entity_id })),
+      suppress_notifications: true
     }, currentUser);
-    db.prepare("UPDATE project_meetings SET published_at=strftime('%Y-%m-%d %H:%M:%f','now'),published_announcement_id=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?")
-      .run(announcement.id, meeting.id, activeProjectId());
-    notifyProjectMeeting(meeting.id, `Opublikowano plan odprawy: ${meeting.title}`, `${currentUser.display_name} udostępnił(a) plan w sekcji „Plany i priorytety”.`);
-    return { meeting: projectMeetingRows(currentUser).find(item => item.id === meeting.id), announcement };
+    const { published_snapshot_json: ignoredSnapshot, ...publishedSnapshot } = meeting;
+    db.prepare("UPDATE project_meetings SET published_at=strftime('%Y-%m-%d %H:%M:%f','now'),published_announcement_id=?,published_snapshot_json=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?")
+      .run(announcement.id, JSON.stringify(publishedSnapshot), meeting.id, activeProjectId());
+    notifyProjectMeeting(meeting.id, `${wasPublished ? 'Zaktualizowano' : 'Opublikowano'} plan odprawy: ${meeting.title}`, `${currentUser.display_name} ${wasPublished ? 'zaktualizował(a)' : 'udostępnił(a)'} plan w sekcji „Plany i priorytety”.`);
+    return { meeting: meetingSummaryRows(currentUser).find(item => item.id === meeting.id), announcement };
   }
 
   function deleteProjectMeeting(id) {

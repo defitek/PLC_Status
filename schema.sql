@@ -937,6 +937,7 @@ CREATE TABLE IF NOT EXISTS project_meetings (
   closed_at TEXT,
   published_at TEXT,
   published_announcement_id INTEGER REFERENCES announcements(id) ON DELETE SET NULL,
+  published_snapshot_json TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) STRICT;
@@ -950,7 +951,7 @@ CREATE TABLE IF NOT EXISTS project_meeting_items (
   objective TEXT NOT NULL DEFAULT 'Kontynuacja',
   outcome_comment TEXT NOT NULL DEFAULT '',
   target_status TEXT NOT NULL DEFAULT '',
-  meeting_priority TEXT NOT NULL DEFAULT 'Medium',
+  meeting_priority TEXT NOT NULL DEFAULT '5',
   baseline_json TEXT NOT NULL DEFAULT '{}',
   owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
   status_changed_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,

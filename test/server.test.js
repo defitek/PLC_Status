@@ -72,6 +72,10 @@ function totp(secret) {
 
 test('API protects manager data, project directory and account sessions', async t => {
   const { baseUrl } = await startApplication(t);
+  const loginLogo = await request(baseUrl, '/assets/commissioning-hub-login.png');
+  assert.equal(loginLogo.status, 200);
+  assert.equal(loginLogo.headers.get('content-type'), 'image/png');
+  assert.deepEqual([...new Uint8Array(await loginLogo.arrayBuffer()).slice(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
   const health = await request(baseUrl, '/api/health');
   assert.equal((await health.clone().json()).version, '1.0.0');
   assert.equal(health.headers.get('x-frame-options'), 'DENY');
