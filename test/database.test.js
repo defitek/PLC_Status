@@ -97,7 +97,7 @@ test('V3 supports overview, ordering, assignment, mentions, audit and deletion r
   }
 });
 
-test('V19 supports annotated planning, justified task states, status layout copies and published meetings', () => {
+test('V20 supports hierarchical annotations, meeting priorities and review history', () => {
   const temporary = temporaryDatabase();
   const repository = openDatabase(temporary.path);
   try {
@@ -109,12 +109,16 @@ test('V19 supports annotated planning, justified task states, status layout copi
     const retest = repository.saveTask(task.id, { ...task, status: 'NOK / Retest required', status_change_comment: 'Pomiar poza tolerancją' }, admin);
     assert.ok(retest.comments.some(comment => comment.content.includes('Pomiar poza tolerancją')));
 
+    const area = repository.controllerGroups()[0];
     const annotation = repository.saveCalendarAnnotation(null, {
-      title: 'Okno wsparcia', start_date: '2026-10-26', end_date: '2026-10-28', controller_id: controller.id,
+      title: 'Okno wsparcia', start_date: '2026-10-26', end_date: '2026-10-28', scope_refs: [`group:${area.id}`, `controller:${controller.id}`],
       background_color: '#12AB34', text_color: '#FFFFFF', description: 'Wsparcie dostawcy na obiekcie'
     }, admin);
     assert.equal(annotation.background_color, '#12ab34');
-    assert.equal(repository.planner('2026-10-26', '2026-10-28', admin).annotations[0].title, 'Okno wsparcia');
+    assert.deepEqual(new Set(annotation.scope_refs), new Set([`group:${area.id}`, `controller:${controller.id}`]));
+    const plannedAnnotation = repository.planner('2026-10-26', '2026-10-28', admin).annotations[0];
+    assert.equal(plannedAnnotation.title, 'Okno wsparcia');
+    assert.ok(plannedAnnotation.scope_labels.some(label => label.includes(area.name)));
 
     const source = repository.saveStatusGroup(null, { name: 'Napędy V19', description: 'Układ źródłowy' });
     const column = repository.saveStatusColumn(source.id, null, null, { name: 'Test kierunku', description: 'Potwierdź kierunek obrotów', column_role: 'subpoint', field_type: 'status', include_in_progress: 1 });
@@ -125,11 +129,24 @@ test('V19 supports annotated planning, justified task states, status layout copi
 
     const meeting = repository.saveProjectMeeting(null, {
       period_from: '2026-10-26', period_to: '2026-10-30', title: 'Plan uruchomienia V19',
-      items: [{ entity_type: 'task', entity_id: retest.id, objective: 'Retest', decision: 'Powtórzyć pomiar', item_status: 'open' }]
+      items: [{ entity_type: 'task', entity_id: retest.id, objective: 'Retest', decision: 'Powtórzyć pomiar', meeting_priority: 'Critical', item_status: 'open' }]
     }, admin);
+    repository.saveTask(retest.id, { ...retest, status: 'Done' }, admin);
+    repository.addComment({ entity_type: 'task', entity_id: retest.id, content: 'Retest zakończony prawidłowo' }, admin);
+    const closedMeeting = repository.saveProjectMeeting(meeting.id, {
+      ...meeting, status: 'closed', items: [{ ...meeting.items[0], meeting_priority: 'Critical', item_status: 'decided', status_changed_by_user_id: admin.id, worker_user_ids: [admin.id] }]
+    }, admin);
+    assert.equal(closedMeeting.items[0].meeting_priority, 'Critical');
+    assert.equal(closedMeeting.items[0].baseline.status, 'NOK / Retest required');
+    assert.equal(closedMeeting.items[0].entity.status, 'Done');
+    assert.equal(closedMeeting.items[0].status_changed_by_user_id, admin.id);
+    assert.ok(closedMeeting.items[0].comments.some(comment => comment.content.includes('Retest zakończony')));
+    assert.ok(repository.notifications(admin).some(notification => notification.kind === 'meeting' && notification.entity_id === meeting.id));
     const published = repository.publishProjectMeeting(meeting.id, admin);
     assert.ok(published.meeting.published_at);
     assert.equal(published.announcement.links[0].entity_id, retest.id);
+    assert.match(published.announcement.content, /Krytyczny \| Zadanie/);
+    assert.equal(repository.meetingSummaries(admin)[0].items[0].meeting_priority, 'Critical');
     assert.ok(repository.audit('task', retest.id).some(entry => entry.changes.meeting_assignment?.to?.title === 'Plan uruchomienia V19'));
   } finally {
     repository.close();

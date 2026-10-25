@@ -605,8 +605,8 @@ CREATE TABLE IF NOT EXISTS notifications (
   id INTEGER PRIMARY KEY,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL CHECK(kind IN ('assignment','announcement','comment','handover','automation')),
-  entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point','goal','announcement','handover')),
+  kind TEXT NOT NULL CHECK(kind IN ('assignment','announcement','comment','handover','automation','meeting')),
+  entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point','goal','announcement','handover','meeting')),
   entity_id INTEGER NOT NULL,
   title TEXT NOT NULL,
   message TEXT NOT NULL DEFAULT '',
@@ -735,6 +735,13 @@ CREATE TABLE IF NOT EXISTS calendar_annotations (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS calendar_annotation_scopes (
+  annotation_id INTEGER NOT NULL REFERENCES calendar_annotations(id) ON DELETE CASCADE,
+  scope_type TEXT NOT NULL CHECK(scope_type IN ('project','group','controller')),
+  scope_id INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(annotation_id,scope_type,scope_id)
+) STRICT, WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS saved_views (
   id INTEGER PRIMARY KEY,
@@ -937,8 +944,10 @@ CREATE TABLE IF NOT EXISTS project_meeting_items (
   objective TEXT NOT NULL DEFAULT 'Kontynuacja',
   outcome_comment TEXT NOT NULL DEFAULT '',
   target_status TEXT NOT NULL DEFAULT '',
+  meeting_priority TEXT NOT NULL DEFAULT 'Medium',
   baseline_json TEXT NOT NULL DEFAULT '{}',
   owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  status_changed_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
   due_date TEXT,
   item_status TEXT NOT NULL DEFAULT 'open' CHECK(item_status IN ('open','decided','deferred')),
   sort_order INTEGER NOT NULL DEFAULT 0,
@@ -1012,6 +1021,7 @@ CREATE INDEX IF NOT EXISTS idx_planner_requirements_date ON planner_requirements
 CREATE INDEX IF NOT EXISTS idx_announcements_project ON announcements(project_id,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_announcement_labels_project ON announcement_labels(project_id,sort_order,name);
 CREATE INDEX IF NOT EXISTS idx_calendar_annotations_date ON calendar_annotations(project_id,start_date,end_date);
+CREATE INDEX IF NOT EXISTS idx_calendar_annotation_scopes ON calendar_annotation_scopes(scope_type,scope_id,annotation_id);
 CREATE INDEX IF NOT EXISTS idx_calendar_item_dates ON calendar_item_dates(project_id,calendar_date,entity_type);
 CREATE INDEX IF NOT EXISTS idx_comments_entity ON entity_comments(project_id,entity_type,entity_id,created_at);
 CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(project_id,user_id,read_at,created_at DESC);

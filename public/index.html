@@ -30,7 +30,7 @@
       </label>
       <nav id="nav">
         <button data-view="mine" class="active"><span>◉</span><span>Moje podsumowanie</span></button>
-        <button data-view="overview"><span>◫</span><span>Overview</span></button>
+        <button data-view="overview"><span>◫</span><span>Przegląd</span></button>
         <button data-view="announcements"><span>◆</span><span>Informator</span><b id="n-announcements">0</b></button>
         <button data-view="operations"><span>⌁</span><span>Centrum operacyjne</span><b id="n-operations">0</b></button>
         <button data-view="planner"><span>▥</span><span>Planner</span></button>
@@ -47,7 +47,7 @@
     </aside>
     <main>
       <header class="pagehead">
-        <div><h1 id="title">Overview</h1><p id="desc"></p></div>
+        <div><h1 id="title">Przegląd</h1><p id="desc"></p></div>
         <div class="page-actions"><button id="export" class="secondary">Eksportuj</button><button id="add" class="primary">+ Dodaj</button></div>
       </header>
       <section id="content"><div class="loading">Ładowanie…</div></section>
@@ -101,7 +101,7 @@
       <label class="field"><span>Zakres sterowników</span><select id="export-scope"></select></label>
       <label class="field export-status-field"><span>Szablon statusu</span><select id="export-template"><option value="">Ustawienia ręczne</option></select></label>
       <label class="field export-status-field"><span>Poziom szczegółowości</span><select id="export-detail"><option value="controller">Tylko sterowniki</option><option value="category">Sterowniki i kategorie</option><option value="function_group">Grupy funkcyjne</option><option value="detailed" selected>Pełna lista szczegółowa</option></select></label>
-      <label class="field export-filter-field"><span>Filtr statusu</span><select id="export-status-filter"><option value="">Wszystkie</option><option>Not started</option><option>In progress</option><option>Blocked</option><option>NOK / Rework</option><option>Done</option></select></label>
+      <label class="field export-filter-field"><span>Filtr statusu</span><select id="export-status-filter"><option value="">Wszystkie</option><option value="Not started">Nie rozpoczęto</option><option value="In progress">W trakcie</option><option value="Blocked">Zablokowane</option><option value="NOK / Rework">NOK / wymagany retest</option><option value="Done">Gotowe</option></select></label>
       <label class="field export-filter-field"><span>Sortowanie</span><select id="export-sort"><option value="">Kolejność konfiguracji</option><option value="controller">Sterownik</option><option value="category">Kategoria</option><option value="status">Status</option><option value="due_date">Deadline</option><option value="reminder_date">Przypomnienie</option></select></label>
     </div><footer class="dialog-actions"><span></span><button type="button" class="secondary" id="export-cancel">Anuluj</button><button class="primary">Pobierz Excel</button></footer></form>
   </dialog>

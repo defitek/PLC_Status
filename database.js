@@ -75,6 +75,7 @@ export function openDatabase(databasePath) {
   migrateToV17(db);
   migrateToV18(db);
   migrateToV19(db);
+  migrateToV20(db);
   migrateSecurityFoundation(db);
   migrateStatusWorkflow(db);
   migrateEntityDependencies(db);
@@ -108,6 +109,7 @@ export function openDatabase(databasePath) {
   migrateToV17(db);
   migrateToV18(db);
   migrateToV19(db);
+  migrateToV20(db);
   migrateSecurityFoundation(db);
   migrateStatusWorkflow(db);
   migrateEntityDependencies(db);
@@ -148,7 +150,9 @@ function ensureProjectMeetingFeatures(db) {
   ensureColumn(db, 'project_meeting_items', 'objective', "TEXT NOT NULL DEFAULT 'Kontynuacja'");
   ensureColumn(db, 'project_meeting_items', 'outcome_comment', "TEXT NOT NULL DEFAULT ''");
   ensureColumn(db, 'project_meeting_items', 'target_status', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, 'project_meeting_items', 'meeting_priority', "TEXT NOT NULL DEFAULT 'Medium'");
   ensureColumn(db, 'project_meeting_items', 'baseline_json', "TEXT NOT NULL DEFAULT '{}'");
+  ensureColumn(db, 'project_meeting_items', 'status_changed_by_user_id', 'INTEGER');
   ensureColumn(db, 'project_meetings', 'published_at', 'TEXT');
   ensureColumn(db, 'project_meetings', 'published_announcement_id', 'INTEGER');
   db.exec(`CREATE TABLE IF NOT EXISTS project_meeting_item_assignees (
@@ -357,6 +361,47 @@ function migrateToV19(db) {
   ensureColumn(db, 'project_meetings', 'published_at', 'TEXT');
   ensureColumn(db, 'project_meetings', 'published_announcement_id', 'INTEGER');
   db.prepare("UPDATE status_workflow_states SET icon='●' WHERE system_key='progress' AND icon='◐'").run();
+}
+
+function migrateToV20(db) {
+  ensureColumn(db, 'project_meeting_items', 'meeting_priority', "TEXT NOT NULL DEFAULT 'Medium'");
+  ensureColumn(db, 'project_meeting_items', 'status_changed_by_user_id', 'INTEGER');
+  db.exec(`CREATE TABLE IF NOT EXISTS calendar_annotation_scopes (
+    annotation_id INTEGER NOT NULL REFERENCES calendar_annotations(id) ON DELETE CASCADE,
+    scope_type TEXT NOT NULL CHECK(scope_type IN ('project','group','controller')),
+    scope_id INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(annotation_id,scope_type,scope_id)
+  ) STRICT, WITHOUT ROWID;
+  CREATE INDEX IF NOT EXISTS idx_calendar_annotation_scopes ON calendar_annotation_scopes(scope_type,scope_id,annotation_id);
+  INSERT OR IGNORE INTO calendar_annotation_scopes(annotation_id,scope_type,scope_id)
+    SELECT id,'controller',controller_id FROM calendar_annotations WHERE controller_id IS NOT NULL;
+  INSERT OR IGNORE INTO calendar_annotation_scopes(annotation_id,scope_type,scope_id)
+    SELECT ca.id,'project',0 FROM calendar_annotations ca
+    WHERE NOT EXISTS (SELECT 1 FROM calendar_annotation_scopes cas WHERE cas.annotation_id=ca.id);`);
+  const notificationSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='notifications'").get()?.sql || '';
+  if (!notificationSql.includes("'meeting'")) {
+    db.exec(`
+      BEGIN IMMEDIATE;
+      CREATE TABLE notifications_v20 (
+        id INTEGER PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK(kind IN ('assignment','announcement','comment','handover','automation','meeting')),
+        entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point','goal','announcement','handover','meeting')),
+        entity_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        message TEXT NOT NULL DEFAULT '',
+        read_at TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      ) STRICT;
+      INSERT INTO notifications_v20(id,project_id,user_id,kind,entity_type,entity_id,title,message,read_at,created_at)
+        SELECT id,project_id,user_id,kind,entity_type,entity_id,title,message,read_at,created_at FROM notifications;
+      DROP TABLE notifications;
+      ALTER TABLE notifications_v20 RENAME TO notifications;
+      CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(project_id,user_id,read_at,created_at DESC);
+      COMMIT;
+    `);
+  }
 }
 
 function migrateSecurityFoundation(db) {
@@ -1791,6 +1836,12 @@ function createRepository(db, defaultProjectId) {
       VALUES(?,?,?,?,?,?,?)`).run(activeProjectId(), asId(userId), kind, entityType, entityId, clean(title), clean(message));
   }
 
+  function notifyProjectMeeting(meetingId, title, message) {
+    for (const member of all('SELECT user_id FROM project_memberships WHERE project_id=? AND active=1', activeProjectId())) {
+      createNotification(member.user_id, 'meeting', 'meeting', meetingId, title, message);
+    }
+  }
+
   function entityDisplayTitle(type, id) {
     const row = one(`SELECT * FROM ${TABLES[type]} WHERE id=? AND project_id=?`, id, activeProjectId());
     if (!row) return 'Element projektu';
@@ -1887,7 +1938,7 @@ function createRepository(db, defaultProjectId) {
   const dependencyTypes = new Set(['status', 'task', 'point']);
 
   function auditRowsForEntity(type, id, limit = 1000) {
-    return all(`SELECT al.changed_at,al.changes_json,u.display_name user_name
+    return all(`SELECT al.user_id,al.changed_at,al.changes_json,u.display_name user_name
       FROM audit_log al LEFT JOIN users u ON u.id=al.user_id
       WHERE al.project_id=? AND al.entity_type=? AND al.entity_id=?
       ORDER BY al.changed_at DESC,al.id DESC LIMIT ?`, activeProjectId(), type, asId(id), limit);
@@ -2596,7 +2647,7 @@ function createRepository(db, defaultProjectId) {
     ['task_checklist', 'task_id IN (SELECT id FROM tasks WHERE project_id=?)'],
     ['task_scope_checklist', 'task_id IN (SELECT id FROM tasks WHERE project_id=?)'],
     ['task_assignees', 'project_id=?'], ['project_user_areas', 'project_id=?'], ['planner_entries', 'project_id=?'], ['planner_requirements', 'project_id=?'], ['planner_holidays', 'project_id=?'], ['planner_absences', 'project_id=?'], ['planner_time_adjustments', 'project_id=?'],
-    ['calendar_annotations', 'project_id=?'], ['calendar_item_dates', 'project_id=?'],
+    ['calendar_annotations', 'project_id=?'], ['calendar_annotation_scopes', 'annotation_id IN (SELECT id FROM calendar_annotations WHERE project_id=?)'], ['calendar_item_dates', 'project_id=?'],
     ['open_points', 'project_id=?'], ['entity_dependencies', 'project_id=?'], ['daily_notes', 'project_id=?'], ['goals', 'project_id=?'],
     ['daily_note_sections', 'project_id=?'], ['daily_note_section_scopes', 'section_id IN (SELECT id FROM daily_note_sections WHERE project_id=?)'],
     ['daily_note_section_links', 'section_id IN (SELECT id FROM daily_note_sections WHERE project_id=?)'],
@@ -2627,7 +2678,7 @@ function createRepository(db, defaultProjectId) {
     'function_group_check_subcategories', 'status_groups', 'status_subgroups', 'status_columns', 'status_workflow_states', 'status_items', 'status_cell_values', 'status_assignees', 'tasks', 'task_dependencies', 'task_checklist', 'task_scope_checklist', 'task_assignees', 'open_points', 'entity_dependencies',
     'daily_notes', 'daily_note_sections', 'daily_note_section_scopes', 'daily_note_section_links', 'goals', 'goal_links', 'entity_mentions', 'entity_links', 'entity_requirements', 'entity_edit_locks', 'entity_comments', 'notifications', 'audit_log',
     'export_templates', 'project_sequences', 'project_user_areas', 'planner_entries', 'planner_requirements', 'planner_holidays', 'planner_absences', 'planner_time_adjustments',
-    'announcements', 'announcement_labels', 'announcement_scopes', 'announcement_users', 'announcement_links', 'announcement_label_links', 'announcement_reads', 'calendar_annotations', 'calendar_item_dates',
+    'announcements', 'announcement_labels', 'announcement_scopes', 'announcement_users', 'announcement_links', 'announcement_label_links', 'announcement_reads', 'calendar_annotations', 'calendar_annotation_scopes', 'calendar_item_dates',
     'shift_handovers', 'shift_handover_items', 'automation_rules', 'automation_rule_hits', 'saved_views',
     'project_meetings', 'project_meeting_items', 'project_meeting_item_assignees', 'project_meeting_item_workers', 'external_dependencies',
     'monthly_employee_reviews', 'monthly_employee_review_items', 'monthly_employee_review_audit'
@@ -2939,9 +2990,7 @@ function createRepository(db, defaultProjectId) {
         WHERE project_id=? AND plan_date BETWEEN ? AND ? ORDER BY plan_date,user_id`, activeProjectId(), calculationFrom, range.to);
       timeDetails = plannerTimeCalculation(calculationRange, projectUsers, calculationEntries, calculationAbsences, calculationHolidays, calculationAdjustments, range);
     }
-    const annotations = all(`SELECT ca.*,c.code controller,u.display_name assigned_user_name FROM calendar_annotations ca
-      LEFT JOIN controllers c ON c.id=ca.controller_id LEFT JOIN users u ON u.id=ca.assigned_user_id
-      WHERE ca.project_id=? AND ca.end_date>=? AND ca.start_date<=? ORDER BY ca.start_date,ca.id`, activeProjectId(), range.from, range.to);
+    const annotations = calendarAnnotationRows().filter(item => item.end_date >= range.from && item.start_date <= range.to);
     return { ...range, users, entries, cross_project_entries: crossProjectEntries, absences, holidays, annotations, overlap_reviews: overlapReviews, time_adjustments: canManageRequirements ? timeAdjustments : [], work, summary, area_summary, area_day_summary, shift_summary, mode_summary, areas: hierarchy.groups, requirements, time_details: timeDetails, can_manage_requirements: canManageRequirements, can_manage_time: canManageRequirements };
   }
 
@@ -3347,9 +3396,23 @@ function createRepository(db, defaultProjectId) {
     }
     if (types.has('goal')) for (const row of goalList) if (row.due_date && row.due_date >= range.from && row.due_date <= range.to) push({ entity_type: 'goal', entity_id: row.id, title: row.title, start_date: row.due_date, end_date: row.due_date, controller: row.controller, controller_label: row.controller_label, controller_id: row.controller_id, controller_group_id: row.controller_group_id, category: 'Cel', priority: row.priority, status: row.status, assigned_names: row.created_by_name, due_date: row.due_date, color: row.status === 'Done' ? 'green' : 'blue', related_to_me: row.created_by === currentUser.id });
     if (types.has('note')) for (const row of noteList) if (row.note_date >= range.from && row.note_date <= range.to) push({ entity_type: 'note', entity_id: row.id, title: `${row.type} · ${row.content.slice(0, 70)}`, start_date: row.note_date, end_date: row.note_date, controller: row.controller, controller_label: row.controller_label, controller_id: row.controller_id, category: row.type, status: row.shift, assigned_names: row.created_by_name || row.author, color: 'gray', related_to_me: row.created_by === currentUser.id || isMentioned('note', row.id) });
-    if (types.has('annotation')) for (const row of all(`SELECT ca.*,c.code controller,creator.display_name created_by_name,u.display_name assigned_user_name
-      FROM calendar_annotations ca LEFT JOIN controllers c ON c.id=ca.controller_id LEFT JOIN users creator ON creator.id=ca.created_by LEFT JOIN users u ON u.id=ca.assigned_user_id
-      WHERE ca.project_id=? AND ca.end_date>=? AND ca.start_date<=? ORDER BY ca.start_date,ca.id`, activeProjectId(), range.from, range.to)) push({ ...attachControllerMeta(row), entity_type: 'annotation', entity_id: row.id, category: 'Adnotacja', status: '', assigned_names: row.assigned_user_name || row.created_by_name, color: 'blue', related_to_me: row.assigned_user_id === currentUser.id || row.created_by === currentUser.id });
+    if (types.has('annotation')) {
+      const groupControllers = new Map();
+      const annotationHierarchy = hierarchyData();
+      const scopeMatches = scope => {
+        if (scope.scope_type === 'project') return true;
+        if (scope.scope_type === 'controller') return controllerIds.has(Number(scope.scope_id));
+        if (!groupControllers.has(Number(scope.scope_id))) {
+          const group = annotationHierarchy.groupMap.get(Number(scope.scope_id));
+          const ids = group ? annotationHierarchy.controllers.filter(item => item.group_path.slice(0, group.path_names.length).every((name, index) => name === group.path_names[index])).map(item => Number(item.id)) : [];
+          groupControllers.set(Number(scope.scope_id), ids);
+        }
+        return groupControllers.get(Number(scope.scope_id)).some(controllerId => controllerIds.has(controllerId));
+      };
+      for (const row of calendarAnnotationRows().filter(item => item.end_date >= range.from && item.start_date <= range.to && item.scopes.some(scopeMatches))) {
+        push({ ...row, controller_id: null, controller_group_id: null, controller_label: row.scope_label, entity_type: 'annotation', entity_id: row.id, category: 'Adnotacja', status: '', assigned_names: row.assigned_user_name || row.created_by_name, color: 'blue', related_to_me: row.assigned_user_id === currentUser.id || row.created_by === currentUser.id });
+      }
+    }
     const maps = {
       task: new Map(taskList.map(row => [row.id, row])), point: new Map(pointList.map(row => [row.id, row])),
       status: new Map(statusList.map(row => [row.id, row])), note: new Map(noteList.map(row => [row.id, row])), goal: new Map(goalList.map(row => [row.id, row]))
@@ -3384,15 +3447,50 @@ function createRepository(db, defaultProjectId) {
     return { added, calendar_date: calendarDate };
   }
 
+  function annotationScopeRows(annotationId, hierarchy = hierarchyData()) {
+    return all('SELECT scope_type,scope_id FROM calendar_annotation_scopes WHERE annotation_id=? ORDER BY scope_type,scope_id', annotationId).map(scope => {
+      const group = scope.scope_type === 'group' ? hierarchy.groupMap.get(Number(scope.scope_id)) : null;
+      const controllerItem = scope.scope_type === 'controller' ? hierarchy.controllers.find(item => Number(item.id) === Number(scope.scope_id)) : null;
+      const label = scope.scope_type === 'project' ? 'Cały projekt' : group?.path_label || controllerItem?.hierarchy_label || controllerItem?.display_name || 'Usunięty zakres';
+      return { ...scope, ref: `${scope.scope_type}:${scope.scope_id}`, label };
+    });
+  }
+
+  function normalizeAnnotationScopes(input) {
+    const raw = Array.isArray(input.scope_refs) ? input.scope_refs : Array.isArray(input.scopes) ? input.scopes.map(scope => scope.ref || `${scope.scope_type}:${scope.scope_id}`) : input.controller_id ? [`controller:${input.controller_id}`] : ['project:0'];
+    const parsed = [...new Map(raw.map(value => {
+      const [scopeType, rawId] = String(value).split(':');
+      const scopeId = scopeType === 'project' ? 0 : asId(rawId);
+      return [`${scopeType}:${scopeId || 0}`, { scope_type: scopeType, scope_id: scopeId || 0 }];
+    })).values()].filter(scope => ['project', 'group', 'controller'].includes(scope.scope_type) && (scope.scope_type === 'project' || scope.scope_id));
+    if (!parsed.length || parsed.some(scope => scope.scope_type === 'project')) return [{ scope_type: 'project', scope_id: 0 }];
+    for (const scope of parsed) {
+      if (scope.scope_type === 'group' && !one('SELECT 1 FROM controller_groups WHERE id=? AND project_id=?', scope.scope_id, activeProjectId())) throw appError('Wybrany obszar nie należy do projektu');
+      if (scope.scope_type === 'controller' && !one('SELECT 1 FROM controllers WHERE id=? AND project_id=?', scope.scope_id, activeProjectId())) throw appError('Wybrany sterownik nie należy do projektu');
+    }
+    return parsed;
+  }
+
+  function setCalendarAnnotationScopes(annotationId, scopes) {
+    db.prepare('DELETE FROM calendar_annotation_scopes WHERE annotation_id=?').run(annotationId);
+    const insert = db.prepare('INSERT INTO calendar_annotation_scopes(annotation_id,scope_type,scope_id) VALUES(?,?,?)');
+    scopes.forEach(scope => insert.run(annotationId, scope.scope_type, scope.scope_id));
+  }
+
+  function decorateCalendarAnnotation(row, hierarchy = hierarchyData()) {
+    const scopes = annotationScopeRows(row.id, hierarchy);
+    return { ...row, scopes, scope_refs: scopes.map(scope => scope.ref), scope_labels: scopes.map(scope => scope.label), scope_label: scopes.map(scope => scope.label).join(', ') || 'Cały projekt' };
+  }
+
   function saveCalendarAnnotation(id, input, currentUser) {
     const title = clean(input.title);
     const startDate = nullableDate(input.start_date);
     const endDate = nullableDate(input.end_date) || startDate;
     if (!title || !startDate) throw appError('Tytuł i data rozpoczęcia są wymagane');
     if (endDate < startDate) throw appError('Data końcowa nie może być wcześniejsza od początkowej');
-    const controllerId = asId(input.controller_id);
+    const scopes = normalizeAnnotationScopes(input);
+    const controllerId = scopes.length === 1 && scopes[0].scope_type === 'controller' ? scopes[0].scope_id : null;
     const assignedUserId = asId(input.assigned_user_id);
-    if (controllerId && !one('SELECT 1 FROM controllers WHERE id=? AND project_id=?', controllerId, activeProjectId())) throw appError('Sterownik nie należy do projektu');
     if (assignedUserId && !one('SELECT 1 FROM project_memberships WHERE project_id=? AND user_id=? AND active=1', activeProjectId(), assignedUserId)) throw appError('Użytkownik nie jest aktywny w projekcie');
     const color = 'blue';
     const backgroundColor = hexColor(input.background_color, '#dcfce7');
@@ -3402,14 +3500,16 @@ function createRepository(db, defaultProjectId) {
         .run(title, clean(input.description), startDate, endDate, controllerId, assignedUserId, color, backgroundColor, textColor, id, activeProjectId());
       if (!result.changes) throw appError('Nie znaleziono adnotacji', 404);
     } else id = insertRecord('calendar_annotations', { project_id: activeProjectId(), title, description: clean(input.description), start_date: startDate, end_date: endDate, controller_id: controllerId, assigned_user_id: assignedUserId, color, background_color: backgroundColor, text_color: textColor, created_by: currentUser.id });
-    return one('SELECT * FROM calendar_annotations WHERE id=? AND project_id=?', id, activeProjectId());
+    setCalendarAnnotationScopes(id, scopes);
+    return decorateCalendarAnnotation(one('SELECT * FROM calendar_annotations WHERE id=? AND project_id=?', id, activeProjectId()));
   }
 
   function calendarAnnotationRows() {
+    const hierarchy = hierarchyData();
     return all(`SELECT ca.*,c.code controller,c.leaf_code controller_name,u.display_name assigned_user_name,creator.display_name created_by_name
       FROM calendar_annotations ca LEFT JOIN controllers c ON c.id=ca.controller_id
       LEFT JOIN users u ON u.id=ca.assigned_user_id LEFT JOIN users creator ON creator.id=ca.created_by
-      WHERE ca.project_id=? ORDER BY ca.start_date,ca.end_date,ca.id`, activeProjectId());
+      WHERE ca.project_id=? ORDER BY ca.start_date,ca.end_date,ca.id`, activeProjectId()).map(row => decorateCalendarAnnotation(row, hierarchy));
   }
 
   function deleteCalendarAnnotation(id) {
@@ -3912,11 +4012,14 @@ function createRepository(db, defaultProjectId) {
           const entity = operationEntity(item.entity_type, item.entity_id, currentUser, hierarchy);
           const audit = auditRowsForEntity(item.entity_type, item.entity_id).filter(row => String(row.changed_at) >= String(meeting.created_at)).map(row => {
             let changes = {}; try { changes = JSON.parse(row.changes_json || '{}'); } catch {}
-            return { changed_at: row.changed_at, user_name: row.user_name, changes };
+            return { user_id: row.user_id, changed_at: row.changed_at, user_name: row.user_name, changes };
           }).filter(row => Object.keys(row.changes).length);
+          const comments = ['status', 'task', 'point', 'goal'].includes(item.entity_type) ? commentRows(item.entity_type, item.entity_id).filter(row => String(row.created_at) >= String(meeting.created_at)) : [];
+          const status_events = audit.filter(row => row.changes.status).map(row => ({ user_id: row.user_id, user_name: row.user_name, changed_at: row.changed_at, from: row.changes.status.from, to: row.changes.status.to }));
+          const statusChangedByUserId = asId(item.status_changed_by_user_id) || asId(status_events[0]?.user_id);
           const assignees = all(`SELECT pmia.user_id,u.display_name FROM project_meeting_item_assignees pmia JOIN users u ON u.id=pmia.user_id WHERE pmia.meeting_item_id=? ORDER BY u.display_name`, item.id);
           const workers = all(`SELECT pmiw.user_id,u.display_name FROM project_meeting_item_workers pmiw JOIN users u ON u.id=pmiw.user_id WHERE pmiw.meeting_item_id=? ORDER BY u.display_name`, item.id);
-          return { ...item, entity, assignee_user_ids: assignees.map(row => row.user_id), assignee_names: assignees.map(row => row.display_name), worker_user_ids: workers.map(row => row.user_id), worker_names: workers.map(row => row.display_name), changes: audit };
+          return { ...item, baseline: parseJson(item.baseline_json, {}), entity, assignee_user_ids: assignees.map(row => row.user_id), assignee_names: assignees.map(row => row.display_name), worker_user_ids: workers.map(row => row.user_id), worker_names: workers.map(row => row.display_name), changes: audit, comments, status_events, status_changed_by_user_id: statusChangedByUserId, status_changed_by_name: statusChangedByUserId ? userName(statusChangedByUserId) : '' };
         })
       }));
   }
@@ -3974,8 +4077,9 @@ function createRepository(db, defaultProjectId) {
   }
 
   function meetingSummaryRows(currentUser) {
-    return all(`SELECT pm.id,pm.title,COALESCE(pm.period_from,pm.meeting_date) period_from,
+    const summaries = all(`SELECT pm.id,pm.title,COALESCE(pm.period_from,pm.meeting_date) period_from,
       COALESCE(pm.period_to,pm.meeting_date) period_to,pm.status,pm.summary,pm.created_at,pm.closed_at,
+      pm.published_at,pm.published_announcement_id,
       creator.display_name created_by_name,closer.display_name closed_by_name,
       COUNT(pmi.id) item_count,
       COALESCE(SUM(pmi.item_status='open'),0) open_count,
@@ -3986,6 +4090,8 @@ function createRepository(db, defaultProjectId) {
       LEFT JOIN users closer ON closer.id=pm.closed_by
       LEFT JOIN project_meeting_items pmi ON pmi.meeting_id=pm.id
       WHERE pm.project_id=? GROUP BY pm.id ORDER BY pm.meeting_date DESC,pm.id DESC`, activeProjectId());
+    const details = new Map(projectMeetingRows(currentUser).map(meeting => [meeting.id, meeting]));
+    return summaries.map(summary => ({ ...summary, items: details.get(summary.id)?.items || [] }));
   }
 
   function setMeetingUsers(table, meetingItemId, userIds) {
@@ -3999,35 +4105,34 @@ function createRepository(db, defaultProjectId) {
     const entity = operationEntity(item.entity_type, item.entity_id, currentUser); if (!entity) return;
     const allowedUsers = new Set(all('SELECT user_id FROM project_memberships WHERE project_id=? AND active=1', activeProjectId()).map(row => Number(row.user_id)));
     const assigneeIds = (Array.isArray(item.assignee_user_ids) ? item.assignee_user_ids.map(Number).filter(Boolean) : (item.owner_user_id ? [Number(item.owner_user_id)] : [])).filter(userId => allowedUsers.has(userId));
-    const primary = assigneeIds[0] || null;
-    const userLabel = primary ? userName(primary) : '';
     const before = baseSnapshot(item.entity_type, item.entity_id);
     const targetStatus = clean(item.target_status);
+    const requestedDueDate = nullableDate(item.due_date);
     let savedThroughTaskWorkflow = false;
     if (item.entity_type === 'task') {
       const allowedTaskStatuses = new Set(['To do', 'In progress', 'Blocked', 'NOK / Retest required', 'Done']);
-      repository.saveTask(item.entity_id, {
-        ...before,
-        direct_assignee_user_ids: assigneeIds,
-        due_date: nullableDate(item.due_date) || before.due_date,
-        status: allowedTaskStatuses.has(targetStatus) ? targetStatus : before.status,
-        status_change_comment: ['Blocked', 'NOK / Retest required'].includes(targetStatus) ? clean(item.outcome_comment) || clean(item.decision) || `Zmiana ustalona podczas odprawy „${meeting.title}”.` : '',
-        recurrence_enabled: Number(before.recurrence_interval || 0) > 0 ? 1 : 0
-      }, currentUser);
-      savedThroughTaskWorkflow = true;
-    } else if (item.entity_type === 'status') {
-      db.prepare('DELETE FROM status_assignees WHERE project_id=? AND status_id=?').run(activeProjectId(), item.entity_id);
-      const insert = db.prepare('INSERT OR IGNORE INTO status_assignees(project_id,status_id,user_id) VALUES(?,?,?)'); assigneeIds.forEach(userId => insert.run(activeProjectId(), item.entity_id, userId));
-      db.prepare("UPDATE status_items SET responsible_user_id=?,responsible=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now'),progress_updated_at=strftime('%Y-%m-%d %H:%M:%f','now'),progress_updated_by=? WHERE id=? AND project_id=?").run(primary, userLabel, currentUser.id, item.entity_id, activeProjectId());
-    } else if (item.entity_type === 'point') db.prepare("UPDATE open_points SET owner_user_id=?,owner=?,due_date=COALESCE(?,due_date),updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?").run(primary, userLabel, nullableDate(item.due_date), item.entity_id, activeProjectId());
-    else if (item.entity_type === 'goal') db.prepare("UPDATE goals SET due_date=COALESCE(?,due_date),updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?").run(nullableDate(item.due_date), item.entity_id, activeProjectId());
+      const nextStatus = allowedTaskStatuses.has(targetStatus) ? targetStatus : before.status;
+      const nextDueDate = requestedDueDate || before.due_date;
+      if (nextStatus !== before.status || nextDueDate !== before.due_date) {
+        repository.saveTask(item.entity_id, {
+          ...before,
+          direct_assignee_user_ids: before.direct_assignee_user_ids || [],
+          due_date: nextDueDate,
+          status: nextStatus,
+          status_change_comment: ['Blocked', 'NOK / Retest required'].includes(nextStatus) ? clean(item.outcome_comment) || clean(item.decision) || `Zmiana ustalona podczas odprawy „${meeting.title}”.` : '',
+          recurrence_enabled: Number(before.recurrence_interval || 0) > 0 ? 1 : 0
+        }, currentUser);
+        savedThroughTaskWorkflow = true;
+      }
+    } else if (item.entity_type === 'point' && requestedDueDate && requestedDueDate !== before.due_date) db.prepare("UPDATE open_points SET due_date=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?").run(requestedDueDate, item.entity_id, activeProjectId());
+    else if (item.entity_type === 'goal' && requestedDueDate && requestedDueDate !== before.due_date) db.prepare("UPDATE goals SET due_date=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?").run(requestedDueDate, item.entity_id, activeProjectId());
     if (targetStatus && item.entity_type !== 'task') {
       const allowed = item.entity_type === 'status' ? statusWorkflowValueSet() : item.entity_type === 'task' ? new Set(['To do', 'In progress', 'Blocked', 'NOK / Retest required', 'Done']) : item.entity_type === 'point' ? new Set(['Open', 'Waiting', 'In progress', 'Closed']) : new Set(['Open', 'In progress', 'Done']);
-      if (allowed.has(targetStatus)) db.prepare(`UPDATE ${TABLES[item.entity_type]} SET status=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?`).run(targetStatus, item.entity_id, activeProjectId());
+      if (allowed.has(targetStatus) && targetStatus !== before.status) db.prepare(`UPDATE ${TABLES[item.entity_type]} SET status=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?`).run(targetStatus, item.entity_id, activeProjectId());
     }
     const after = baseSnapshot(item.entity_type, item.entity_id);
     if (!savedThroughTaskWorkflow && JSON.stringify(before) !== JSON.stringify(after)) writeAudit(item.entity_type, item.entity_id, 'update', currentUser, before, after);
-    const decisionChanged = clean(item.decision) && clean(item.decision) !== clean(previous?.decision);
+    const decisionChanged = Boolean(previous) && clean(item.decision) && clean(item.decision) !== clean(previous.decision);
     const outcomeChanged = clean(item.outcome_comment) && clean(item.outcome_comment) !== clean(previous?.outcome_comment);
     if (decisionChanged || (closing && outcomeChanged)) {
       const workers = all(`SELECT u.display_name FROM project_meeting_item_workers pmiw JOIN users u ON u.id=pmiw.user_id WHERE pmiw.meeting_item_id=? ORDER BY u.display_name`, item.id).map(row => row.display_name);
@@ -4045,6 +4150,7 @@ function createRepository(db, defaultProjectId) {
     if (periodTo < periodFrom) throw appError('Koniec zakresu odprawy nie może być wcześniejszy niż początek');
     const values = { project_id: activeProjectId(), meeting_date: periodFrom, period_from: periodFrom, period_to: periodTo, title, summary: clean(input.summary), status: clean(input.status) === 'closed' ? 'closed' : 'open' };
     let recordId = asId(id);
+    const isNew = !recordId;
     if (recordId && !one('SELECT 1 FROM project_meetings WHERE id=? AND project_id=?', recordId, activeProjectId())) throw appError('Nie znaleziono rekordu odprawy', 404);
     const scope = clean(input.scope) || 'all';
     const scoped = scope === 'all' ? {} : operationCollections(currentUser, scope);
@@ -4067,13 +4173,16 @@ function createRepository(db, defaultProjectId) {
       else recordId = insertRecord('project_meetings', { ...values, created_by: currentUser.id });
       const existing = new Map(all('SELECT * FROM project_meeting_items WHERE meeting_id=?', recordId).map(item => [`${item.entity_type}:${item.entity_id}`, item]));
       const requestedKeys = new Set();
-      const upsert = db.prepare(`INSERT INTO project_meeting_items(meeting_id,entity_type,entity_id,decision,objective,outcome_comment,target_status,baseline_json,owner_user_id,due_date,item_status,sort_order)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(meeting_id,entity_type,entity_id) DO UPDATE SET decision=excluded.decision,objective=excluded.objective,outcome_comment=excluded.outcome_comment,target_status=excluded.target_status,owner_user_id=excluded.owner_user_id,due_date=excluded.due_date,item_status=excluded.item_status,sort_order=excluded.sort_order`);
+      const upsert = db.prepare(`INSERT INTO project_meeting_items(meeting_id,entity_type,entity_id,decision,objective,outcome_comment,target_status,meeting_priority,baseline_json,owner_user_id,status_changed_by_user_id,due_date,item_status,sort_order)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(meeting_id,entity_type,entity_id) DO UPDATE SET decision=excluded.decision,objective=excluded.objective,outcome_comment=excluded.outcome_comment,target_status=excluded.target_status,meeting_priority=excluded.meeting_priority,owner_user_id=excluded.owner_user_id,status_changed_by_user_id=excluded.status_changed_by_user_id,due_date=excluded.due_date,item_status=excluded.item_status,sort_order=excluded.sort_order`);
+      const projectUserIds = new Set(all('SELECT user_id FROM project_memberships WHERE project_id=? AND active=1', activeProjectId()).map(row => Number(row.user_id)));
       prepared.forEach(({ item, entity }, index) => {
         const key = `${item.entity_type}:${Number(item.entity_id)}`; requestedKeys.add(key);
         const itemStatus = ['open', 'decided', 'deferred'].includes(item.item_status) ? item.item_status : 'open';
+        const meetingPriority = ['Low', 'Medium', 'High', 'Critical'].includes(clean(item.meeting_priority)) ? clean(item.meeting_priority) : ['Low', 'Medium', 'High', 'Critical'].includes(entity.priority) ? entity.priority : 'Medium';
         const assignmentIds = Array.isArray(item.assignee_user_ids) ? item.assignee_user_ids : (item.owner_user_id ? [item.owner_user_id] : entity.assignee_user_ids || []);
-        upsert.run(recordId, item.entity_type, asId(item.entity_id), clean(item.decision), clean(item.objective) || 'Kontynuacja', clean(item.outcome_comment), clean(item.target_status), JSON.stringify(entity), asId(item.owner_user_id || assignmentIds[0]), nullableDate(item.due_date), itemStatus, index);
+        const statusChangedByUserId = asId(item.status_changed_by_user_id); if (statusChangedByUserId && !projectUserIds.has(statusChangedByUserId)) throw appError('Osoba zmieniająca status nie należy do projektu');
+        upsert.run(recordId, item.entity_type, asId(item.entity_id), clean(item.decision), clean(item.objective) || 'Kontynuacja', clean(item.outcome_comment), clean(item.target_status), meetingPriority, JSON.stringify(entity), asId(item.owner_user_id || assignmentIds[0]), statusChangedByUserId, nullableDate(item.due_date), itemStatus, index);
         const savedItem = one('SELECT * FROM project_meeting_items WHERE meeting_id=? AND entity_type=? AND entity_id=?', recordId, item.entity_type, asId(item.entity_id));
         setMeetingUsers('project_meeting_item_assignees', savedItem.id, assignmentIds);
         setMeetingUsers('project_meeting_item_workers', savedItem.id, item.worker_user_ids || []);
@@ -4088,6 +4197,7 @@ function createRepository(db, defaultProjectId) {
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
     const saved = projectMeetingRows(currentUser).find(item => item.id === recordId);
+    notifyProjectMeeting(recordId, isNew ? `Utworzono plan odprawy: ${values.title}` : values.status === 'closed' ? `Podsumowano odprawę: ${values.title}` : `Zaktualizowano plan odprawy: ${values.title}`, `${currentUser.display_name} · ${values.period_from}–${values.period_to}`);
     return scope === 'all' ? saved : { ...saved, items: saved.items.filter(item => inScope(item.entity_type, item.entity_id)) };
   }
 
@@ -4095,20 +4205,24 @@ function createRepository(db, defaultProjectId) {
     const meeting = projectMeetingRows(currentUser).find(item => item.id === asId(id));
     if (!meeting) throw appError('Nie znaleziono odprawy', 404);
     if (!meeting.items.length) throw appError('Dodaj co najmniej jeden element przed opublikowaniem odprawy');
+    const typeNames = { status: 'Punkt statusu', task: 'Zadanie', point: 'Otwarty punkt', goal: 'Cel', note: 'Przekazanie statusu' };
+    const priorityNames = { Critical: 'Krytyczny', High: 'Wysoki', Medium: 'Średni', Low: 'Niski' };
     const lines = [
-      `Plan działania: ${meeting.period_from}–${meeting.period_to}.`,
-      meeting.summary ? `Agenda: ${meeting.summary}` : '',
+      `Plan i priorytety: ${meeting.period_from}–${meeting.period_to}.`,
+      meeting.summary ? `Cel / agenda: ${meeting.summary}` : '',
       '',
-      ...meeting.items.map((item, index) => `${index + 1}. ${item.entity?.title || 'Element projektu'} — ${item.objective || 'Kontynuacja'}${item.due_date ? `; termin: ${item.due_date}` : ''}${item.assignee_names?.length ? `; zespół: ${item.assignee_names.join(', ')}` : ''}${item.decision ? `; plan: ${item.decision}` : ''}`)
+      'Lp. | Priorytet | Typ | Temat | Obszar | Odpowiedzialni | Deadline',
+      ...meeting.items.map((item, index) => `${index + 1}. | ${priorityNames[item.meeting_priority] || 'Średni'} | ${typeNames[item.entity_type] || item.entity_type} | ${item.entity?.title || 'Element projektu'} | ${item.entity?.scope_label || 'Cały projekt'} | ${item.assignee_names?.join(', ') || 'Nieprzypisane'} | ${item.due_date || item.entity?.due_date || 'bez terminu'}${item.decision ? `\n   Plan: ${item.decision}` : ''}`)
     ].filter((line, index, list) => line || list[index - 1]);
     const announcement = saveAnnouncement(asId(meeting.published_announcement_id), {
-      title: `Plan z odprawy: ${meeting.title}`,
+      title: `Plan i priorytety: ${meeting.title}`,
       content: lines.join('\n'),
       importance: 'Normalna', entry_type: 'message', decision_status: 'published',
       effective_date: meeting.period_from, links: meeting.items.map(item => ({ entity_type: item.entity_type, entity_id: item.entity_id }))
     }, currentUser);
     db.prepare("UPDATE project_meetings SET published_at=strftime('%Y-%m-%d %H:%M:%f','now'),published_announcement_id=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?")
       .run(announcement.id, meeting.id, activeProjectId());
+    notifyProjectMeeting(meeting.id, `Opublikowano plan odprawy: ${meeting.title}`, `${currentUser.display_name} udostępnił(a) plan w sekcji „Plany i priorytety”.`);
     return { meeting: projectMeetingRows(currentUser).find(item => item.id === meeting.id), announcement };
   }
 
