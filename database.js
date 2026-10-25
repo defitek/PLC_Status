@@ -76,6 +76,7 @@ export function openDatabase(databasePath) {
   migrateToV18(db);
   migrateToV19(db);
   migrateToV20(db);
+  migrateToV21(db);
   migrateSecurityFoundation(db);
   migrateStatusWorkflow(db);
   migrateEntityDependencies(db);
@@ -110,6 +111,7 @@ export function openDatabase(databasePath) {
   migrateToV18(db);
   migrateToV19(db);
   migrateToV20(db);
+  migrateToV21(db);
   migrateSecurityFoundation(db);
   migrateStatusWorkflow(db);
   migrateEntityDependencies(db);
@@ -153,6 +155,7 @@ function ensureProjectMeetingFeatures(db) {
   ensureColumn(db, 'project_meeting_items', 'meeting_priority', "TEXT NOT NULL DEFAULT 'Medium'");
   ensureColumn(db, 'project_meeting_items', 'baseline_json', "TEXT NOT NULL DEFAULT '{}'");
   ensureColumn(db, 'project_meeting_items', 'status_changed_by_user_id', 'INTEGER');
+  ensureColumn(db, 'project_meeting_items', 'group_name', "TEXT NOT NULL DEFAULT ''");
   ensureColumn(db, 'project_meetings', 'published_at', 'TEXT');
   ensureColumn(db, 'project_meetings', 'published_announcement_id', 'INTEGER');
   db.exec(`CREATE TABLE IF NOT EXISTS project_meeting_item_assignees (
@@ -398,6 +401,49 @@ function migrateToV20(db) {
         SELECT id,project_id,user_id,kind,entity_type,entity_id,title,message,read_at,created_at FROM notifications;
       DROP TABLE notifications;
       ALTER TABLE notifications_v20 RENAME TO notifications;
+      CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(project_id,user_id,read_at,created_at DESC);
+      COMMIT;
+    `);
+  }
+}
+
+function migrateToV21(db) {
+  ensureColumn(db, 'project_meeting_items', 'group_name', "TEXT NOT NULL DEFAULT ''");
+  db.exec(`CREATE TABLE IF NOT EXISTS daily_note_section_recipients (
+    section_id INTEGER NOT NULL REFERENCES daily_note_sections(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    PRIMARY KEY(section_id,user_id)
+  ) STRICT, WITHOUT ROWID;
+  CREATE INDEX IF NOT EXISTS idx_daily_note_section_recipients_user ON daily_note_section_recipients(user_id,section_id);`);
+  const usedNames = new Set();
+  for (const meeting of db.prepare('SELECT id,project_id,title FROM project_meetings ORDER BY project_id,id').all()) {
+    const base = String(meeting.title || '').trim() || `Odprawa ${meeting.id}`;
+    let title = base; let suffix = 2;
+    while (usedNames.has(`${meeting.project_id}:${title.toLocaleLowerCase('pl-PL')}`)) title = `${base} (${suffix++})`;
+    usedNames.add(`${meeting.project_id}:${title.toLocaleLowerCase('pl-PL')}`);
+    if (title !== meeting.title) db.prepare('UPDATE project_meetings SET title=? WHERE id=?').run(title, meeting.id);
+  }
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_project_meetings_unique_title ON project_meetings(project_id,title COLLATE NOCASE)');
+  const notificationSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='notifications'").get()?.sql || '';
+  if (!notificationSql.includes("'mention'") || !notificationSql.includes("'note'")) {
+    db.exec(`
+      BEGIN IMMEDIATE;
+      CREATE TABLE notifications_v21 (
+        id INTEGER PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK(kind IN ('assignment','announcement','comment','handover','automation','meeting','mention')),
+        entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point','goal','note','announcement','handover','meeting')),
+        entity_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        message TEXT NOT NULL DEFAULT '',
+        read_at TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      ) STRICT;
+      INSERT INTO notifications_v21(id,project_id,user_id,kind,entity_type,entity_id,title,message,read_at,created_at)
+        SELECT id,project_id,user_id,kind,entity_type,entity_id,title,message,read_at,created_at FROM notifications;
+      DROP TABLE notifications;
+      ALTER TABLE notifications_v21 RENAME TO notifications;
       CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(project_id,user_id,read_at,created_at DESC);
       COMMIT;
     `);
@@ -2244,7 +2290,10 @@ function createRepository(db, defaultProjectId) {
     return all('SELECT * FROM daily_note_sections WHERE project_id=? AND note_id=? ORDER BY sort_order,id', activeProjectId(), noteId).map(section => ({
       ...section,
       scopes: all('SELECT * FROM daily_note_section_scopes WHERE section_id=? ORDER BY scope_type,scope_id', section.id).map(scope => ({ ...scope, label: noteScopeLabel(scope.scope_type, scope.scope_id) })),
-      links: all('SELECT * FROM daily_note_section_links WHERE section_id=? ORDER BY sort_order,entity_type,entity_id', section.id)
+      links: all('SELECT * FROM daily_note_section_links WHERE section_id=? ORDER BY sort_order,entity_type,entity_id', section.id),
+      recipient_user_ids: all('SELECT user_id FROM daily_note_section_recipients WHERE section_id=? ORDER BY user_id', section.id).map(row => row.user_id),
+      recipient_names: all(`SELECT u.display_name FROM daily_note_section_recipients r JOIN users u ON u.id=r.user_id
+        WHERE r.section_id=? ORDER BY u.sort_order,u.display_name`, section.id).map(row => row.display_name)
     }));
   }
 
@@ -2260,6 +2309,7 @@ function createRepository(db, defaultProjectId) {
       })).values()].filter(scope => scope.scope_type && (scope.scope_type === 'project' || scope.scope_id)),
       links: [...new Map((Array.isArray(section.links) ? section.links : []).map(link => [`${clean(link.entity_type)}:${asId(link.entity_id)}`, { entity_type: clean(link.entity_type), entity_id: asId(link.entity_id) }])).values()]
         .filter(link => TABLES[link.entity_type] && link.entity_id),
+      recipient_user_ids: [...new Set((Array.isArray(section.recipient_user_ids) ? section.recipient_user_ids : []).map(asId).filter(Boolean))],
       sort_order: index
     })).filter(section => section.content);
     if (!sections.length) throw appError('Przekazanie statusu musi zawierać co najmniej jedną notatkę');
@@ -2267,6 +2317,7 @@ function createRepository(db, defaultProjectId) {
     const insertSection = db.prepare('INSERT INTO daily_note_sections(project_id,note_id,information_type,content,sort_order) VALUES(?,?,?,?,?)');
     const insertScope = db.prepare('INSERT OR IGNORE INTO daily_note_section_scopes(section_id,scope_type,scope_id) VALUES(?,?,?)');
     const insertLink = db.prepare('INSERT OR IGNORE INTO daily_note_section_links(section_id,entity_type,entity_id,sort_order) VALUES(?,?,?,?)');
+    const insertRecipient = db.prepare('INSERT OR IGNORE INTO daily_note_section_recipients(section_id,user_id) VALUES(?,?)');
     for (const section of sections) {
       if (!one("SELECT 1 FROM options WHERE project_id=? AND kind='note_type' AND value=? AND active=1", activeProjectId(), section.information_type)) section.information_type = fallbackType;
       const sectionId = Number(insertSection.run(activeProjectId(), noteId, section.information_type, section.content, section.sort_order).lastInsertRowid);
@@ -2279,6 +2330,11 @@ function createRepository(db, defaultProjectId) {
       section.links.forEach((link, index) => {
         if (!one(`SELECT 1 FROM ${TABLES[link.entity_type]} WHERE id=? AND project_id=?`, link.entity_id, activeProjectId())) throw appError('Powiązany element przekazania nie należy do projektu');
         insertLink.run(sectionId, link.entity_type, link.entity_id, index);
+      });
+      section.recipient_user_ids.forEach(userId => {
+        if (!one(`SELECT 1 FROM users u JOIN project_memberships pm ON pm.user_id=u.id
+          WHERE u.id=? AND u.active=1 AND pm.project_id=? AND pm.active=1`, userId, activeProjectId())) throw appError('Wybrany odbiorca przekazania nie należy do projektu');
+        insertRecipient.run(sectionId, userId);
       });
     }
     db.prepare('DELETE FROM entity_links WHERE project_id=? AND ((source_type=\'note\' AND source_id=?) OR (target_type=\'note\' AND target_id=?))').run(activeProjectId(), noteId, noteId);
@@ -2651,6 +2707,7 @@ function createRepository(db, defaultProjectId) {
     ['open_points', 'project_id=?'], ['entity_dependencies', 'project_id=?'], ['daily_notes', 'project_id=?'], ['goals', 'project_id=?'],
     ['daily_note_sections', 'project_id=?'], ['daily_note_section_scopes', 'section_id IN (SELECT id FROM daily_note_sections WHERE project_id=?)'],
     ['daily_note_section_links', 'section_id IN (SELECT id FROM daily_note_sections WHERE project_id=?)'],
+    ['daily_note_section_recipients', 'section_id IN (SELECT id FROM daily_note_sections WHERE project_id=?)'],
     ['goal_links', 'project_id=?'], ['entity_mentions', 'project_id=?'], ['entity_links', 'project_id=?'], ['entity_requirements', 'project_id=?'], ['entity_comments', 'project_id=?'], ['notifications', 'project_id=?'],
     ['entity_edit_locks', 'project_id=?'],
     ['announcements', 'project_id=?'],
@@ -2676,7 +2733,7 @@ function createRepository(db, defaultProjectId) {
     'controller_groups', 'controllers', 'categories', 'subcategories', 'task_categories', 'task_subcategories',
     'options', 'settings', 'completion_requirements', 'function_groups', 'function_group_elements', 'function_group_subcategories', 'function_group_checks',
     'function_group_check_subcategories', 'status_groups', 'status_subgroups', 'status_columns', 'status_workflow_states', 'status_items', 'status_cell_values', 'status_assignees', 'tasks', 'task_dependencies', 'task_checklist', 'task_scope_checklist', 'task_assignees', 'open_points', 'entity_dependencies',
-    'daily_notes', 'daily_note_sections', 'daily_note_section_scopes', 'daily_note_section_links', 'goals', 'goal_links', 'entity_mentions', 'entity_links', 'entity_requirements', 'entity_edit_locks', 'entity_comments', 'notifications', 'audit_log',
+    'daily_notes', 'daily_note_sections', 'daily_note_section_scopes', 'daily_note_section_links', 'daily_note_section_recipients', 'goals', 'goal_links', 'entity_mentions', 'entity_links', 'entity_requirements', 'entity_edit_locks', 'entity_comments', 'notifications', 'audit_log',
     'export_templates', 'project_sequences', 'project_user_areas', 'planner_entries', 'planner_requirements', 'planner_holidays', 'planner_absences', 'planner_time_adjustments',
     'announcements', 'announcement_labels', 'announcement_scopes', 'announcement_users', 'announcement_links', 'announcement_label_links', 'announcement_reads', 'calendar_annotations', 'calendar_annotation_scopes', 'calendar_item_dates',
     'shift_handovers', 'shift_handover_items', 'automation_rules', 'automation_rule_hits', 'saved_views',
@@ -3529,8 +3586,9 @@ function createRepository(db, defaultProjectId) {
       const projectAudienceIds = all(`SELECT pm.user_id FROM project_memberships pm JOIN users u ON u.id=pm.user_id
         WHERE pm.project_id=? AND pm.active=1 AND u.active=1 ORDER BY u.sort_order,u.display_name`, activeProjectId()).map(item => Number(item.user_id));
       const audienceIds = recipientIds.length ? recipientIds.map(Number) : projectAudienceIds;
-      const audienceSet = new Set(audienceIds);
-      const audienceReads = reads.filter(item => audienceSet.has(Number(item.user_id)));
+      const acknowledgementAudience = audienceIds.filter(userId => Number(userId) !== Number(row.created_by));
+      const acknowledgementSet = new Set(acknowledgementAudience);
+      const audienceReads = reads.filter(item => acknowledgementSet.has(Number(item.user_id)));
       const labels = all(`SELECT al.* FROM announcement_label_links allk JOIN announcement_labels al ON al.id=allk.label_id
         WHERE allk.announcement_id=? AND al.active=1 ORDER BY al.sort_order,al.name`, row.id);
       return {
@@ -3544,9 +3602,9 @@ function createRepository(db, defaultProjectId) {
         links: all('SELECT entity_type,entity_id FROM announcement_links WHERE announcement_id=? ORDER BY entity_type,entity_id', row.id),
         accepted_by_me: reads.some(item => item.user_id === currentUser?.id),
         accepted_at: reads.find(item => item.user_id === currentUser?.id)?.read_at || null,
-        requires_ack: audienceSet.has(Number(currentUser?.id)),
+        requires_ack: acknowledgementSet.has(Number(currentUser?.id)),
         targeted_audience: recipientIds.length > 0,
-        accepted_count: audienceReads.length, audience_count: audienceIds.length,
+        accepted_count: audienceReads.length, audience_count: acknowledgementAudience.length,
         accepted_users: ['system_admin', 'project_admin', 'moderator'].includes(currentUser?.role) ? audienceReads : [],
         can_edit: ['system_admin', 'project_admin', 'moderator'].includes(currentUser?.role),
         can_delete: ['system_admin', 'project_admin'].includes(currentUser?.role)
@@ -3599,7 +3657,7 @@ function createRepository(db, defaultProjectId) {
       links.forEach(link => insertLink.run(recordId, link.entity_type, link.entity_id));
       labelIds.forEach(labelId => insertLabel.run(recordId, labelId));
       if (isNew) {
-        const notificationIds = recipientIds.length ? [...new Set([...recipientIds, currentUser.id])] : all('SELECT user_id FROM project_memberships WHERE project_id=? AND active=1', activeProjectId()).map(item => item.user_id);
+        const notificationIds = (recipientIds.length ? recipientIds : all('SELECT user_id FROM project_memberships WHERE project_id=? AND active=1', activeProjectId()).map(item => item.user_id)).filter(userId => Number(userId) !== Number(currentUser.id));
         const notificationAudience = notificationIds.map(user_id => ({ user_id }));
         for (const member of notificationAudience) {
           createNotification(member.user_id, 'announcement', 'announcement', recordId, `Nowa wiadomość (${importance}): ${title}`, content.slice(0, 240));
@@ -3736,8 +3794,10 @@ function createRepository(db, defaultProjectId) {
     }));
     const totals = { added: 0, closed: 0, changed: 0, removed: 0, total: 0 };
     Object.values(modules).forEach(module => { totals.total += module.total; for (const key of ['added', 'closed', 'changed', 'removed']) totals[key] += module.counts[key]; });
-    const priority_notifications = currentUser ? notificationsData(currentUser, 100).filter(item => !item.read_at && ['assignment', 'comment', 'automation', 'handover'].includes(item.kind)) : [];
-    return { ...range, totals, modules, priority_notifications };
+    const priority_notifications = currentUser ? notificationsData(currentUser, 100).filter(item => !item.read_at && ['assignment', 'comment', 'automation', 'handover', 'mention'].includes(item.kind)) : [];
+    const meetingAnnouncementIds = new Set(all('SELECT published_announcement_id id FROM project_meetings WHERE project_id=? AND published_announcement_id IS NOT NULL', activeProjectId()).map(row => Number(row.id)));
+    const pending_announcements = currentUser ? announcementRows(currentUser).filter(item => item.requires_ack && !item.accepted_by_me && !meetingAnnouncementIds.has(Number(item.id))) : [];
+    return { ...range, totals, modules, pending_announcements, priority_notifications };
   }
 
   function parseJson(value, fallback) {
@@ -4077,7 +4137,8 @@ function createRepository(db, defaultProjectId) {
   }
 
   function meetingSummaryRows(currentUser) {
-    const summaries = all(`SELECT pm.id,pm.title,COALESCE(pm.period_from,pm.meeting_date) period_from,
+    const canCoordinateMeetings = ['system_admin', 'project_admin', 'moderator'].includes(currentUser?.role);
+    const summaries = all(`SELECT pm.id,pm.title,pm.created_by,COALESCE(pm.period_from,pm.meeting_date) period_from,
       COALESCE(pm.period_to,pm.meeting_date) period_to,pm.status,pm.summary,pm.created_at,pm.closed_at,
       pm.published_at,pm.published_announcement_id,
       creator.display_name created_by_name,closer.display_name closed_by_name,
@@ -4089,7 +4150,8 @@ function createRepository(db, defaultProjectId) {
       LEFT JOIN users creator ON creator.id=pm.created_by
       LEFT JOIN users closer ON closer.id=pm.closed_by
       LEFT JOIN project_meeting_items pmi ON pmi.meeting_id=pm.id
-      WHERE pm.project_id=? GROUP BY pm.id ORDER BY pm.meeting_date DESC,pm.id DESC`, activeProjectId());
+      WHERE pm.project_id=? AND (?=1 OR pm.published_at IS NOT NULL)
+      GROUP BY pm.id ORDER BY pm.meeting_date DESC,pm.id DESC`, activeProjectId(), canCoordinateMeetings ? 1 : 0);
     const details = new Map(projectMeetingRows(currentUser).map(meeting => [meeting.id, meeting]));
     return summaries.map(summary => ({ ...summary, items: details.get(summary.id)?.items || [] }));
   }
@@ -4151,7 +4213,9 @@ function createRepository(db, defaultProjectId) {
     const values = { project_id: activeProjectId(), meeting_date: periodFrom, period_from: periodFrom, period_to: periodTo, title, summary: clean(input.summary), status: clean(input.status) === 'closed' ? 'closed' : 'open' };
     let recordId = asId(id);
     const isNew = !recordId;
-    if (recordId && !one('SELECT 1 FROM project_meetings WHERE id=? AND project_id=?', recordId, activeProjectId())) throw appError('Nie znaleziono rekordu odprawy', 404);
+    const existingMeeting = recordId ? one('SELECT * FROM project_meetings WHERE id=? AND project_id=?', recordId, activeProjectId()) : null;
+    if (recordId && !existingMeeting) throw appError('Nie znaleziono rekordu odprawy', 404);
+    if (one('SELECT 1 FROM project_meetings WHERE project_id=? AND title=? COLLATE NOCASE AND id!=?', activeProjectId(), title, recordId || 0)) throw appError('W tym projekcie istnieje już odprawa o tej nazwie');
     const scope = clean(input.scope) || 'all';
     const scoped = scope === 'all' ? {} : operationCollections(currentUser, scope);
     const scopedIds = new Map(Object.entries(scoped).map(([type, rows]) => [type, new Set(rows.map(row => Number(row.id)))]));
@@ -4171,10 +4235,15 @@ function createRepository(db, defaultProjectId) {
     try {
       if (recordId) updateRecord('project_meetings', recordId, values, Object.keys(values));
       else recordId = insertRecord('project_meetings', { ...values, created_by: currentUser.id });
+      if (existingMeeting?.published_announcement_id) {
+        db.prepare("DELETE FROM notifications WHERE project_id=? AND entity_type='announcement' AND entity_id=?").run(activeProjectId(), existingMeeting.published_announcement_id);
+        db.prepare('DELETE FROM announcements WHERE id=? AND project_id=?').run(existingMeeting.published_announcement_id, activeProjectId());
+        db.prepare('UPDATE project_meetings SET published_at=NULL,published_announcement_id=NULL WHERE id=?').run(recordId);
+      }
       const existing = new Map(all('SELECT * FROM project_meeting_items WHERE meeting_id=?', recordId).map(item => [`${item.entity_type}:${item.entity_id}`, item]));
       const requestedKeys = new Set();
-      const upsert = db.prepare(`INSERT INTO project_meeting_items(meeting_id,entity_type,entity_id,decision,objective,outcome_comment,target_status,meeting_priority,baseline_json,owner_user_id,status_changed_by_user_id,due_date,item_status,sort_order)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(meeting_id,entity_type,entity_id) DO UPDATE SET decision=excluded.decision,objective=excluded.objective,outcome_comment=excluded.outcome_comment,target_status=excluded.target_status,meeting_priority=excluded.meeting_priority,owner_user_id=excluded.owner_user_id,status_changed_by_user_id=excluded.status_changed_by_user_id,due_date=excluded.due_date,item_status=excluded.item_status,sort_order=excluded.sort_order`);
+      const upsert = db.prepare(`INSERT INTO project_meeting_items(meeting_id,entity_type,entity_id,decision,objective,outcome_comment,target_status,meeting_priority,baseline_json,owner_user_id,status_changed_by_user_id,group_name,due_date,item_status,sort_order)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(meeting_id,entity_type,entity_id) DO UPDATE SET decision=excluded.decision,objective=excluded.objective,outcome_comment=excluded.outcome_comment,target_status=excluded.target_status,meeting_priority=excluded.meeting_priority,owner_user_id=excluded.owner_user_id,status_changed_by_user_id=excluded.status_changed_by_user_id,group_name=excluded.group_name,due_date=excluded.due_date,item_status=excluded.item_status,sort_order=excluded.sort_order`);
       const projectUserIds = new Set(all('SELECT user_id FROM project_memberships WHERE project_id=? AND active=1', activeProjectId()).map(row => Number(row.user_id)));
       prepared.forEach(({ item, entity }, index) => {
         const key = `${item.entity_type}:${Number(item.entity_id)}`; requestedKeys.add(key);
@@ -4182,7 +4251,7 @@ function createRepository(db, defaultProjectId) {
         const meetingPriority = ['Low', 'Medium', 'High', 'Critical'].includes(clean(item.meeting_priority)) ? clean(item.meeting_priority) : ['Low', 'Medium', 'High', 'Critical'].includes(entity.priority) ? entity.priority : 'Medium';
         const assignmentIds = Array.isArray(item.assignee_user_ids) ? item.assignee_user_ids : (item.owner_user_id ? [item.owner_user_id] : entity.assignee_user_ids || []);
         const statusChangedByUserId = asId(item.status_changed_by_user_id); if (statusChangedByUserId && !projectUserIds.has(statusChangedByUserId)) throw appError('Osoba zmieniająca status nie należy do projektu');
-        upsert.run(recordId, item.entity_type, asId(item.entity_id), clean(item.decision), clean(item.objective) || 'Kontynuacja', clean(item.outcome_comment), clean(item.target_status), meetingPriority, JSON.stringify(entity), asId(item.owner_user_id || assignmentIds[0]), statusChangedByUserId, nullableDate(item.due_date), itemStatus, index);
+        upsert.run(recordId, item.entity_type, asId(item.entity_id), clean(item.decision), clean(item.objective) || 'Kontynuacja', clean(item.outcome_comment), clean(item.target_status), meetingPriority, JSON.stringify(entity), asId(item.owner_user_id || assignmentIds[0]), statusChangedByUserId, clean(item.group_name).slice(0, 120), nullableDate(item.due_date), itemStatus, index);
         const savedItem = one('SELECT * FROM project_meeting_items WHERE meeting_id=? AND entity_type=? AND entity_id=?', recordId, item.entity_type, asId(item.entity_id));
         setMeetingUsers('project_meeting_item_assignees', savedItem.id, assignmentIds);
         setMeetingUsers('project_meeting_item_workers', savedItem.id, item.worker_user_ids || []);
@@ -4227,8 +4296,18 @@ function createRepository(db, defaultProjectId) {
   }
 
   function deleteProjectMeeting(id) {
-    const result = db.prepare('DELETE FROM project_meetings WHERE id=? AND project_id=?').run(asId(id), activeProjectId());
-    if (!result.changes) throw appError('Nie znaleziono odprawy', 404);
+    const meeting = one('SELECT id,published_announcement_id FROM project_meetings WHERE id=? AND project_id=?', asId(id), activeProjectId());
+    if (!meeting) throw appError('Nie znaleziono odprawy', 404);
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare("DELETE FROM notifications WHERE project_id=? AND entity_type='meeting' AND entity_id=?").run(activeProjectId(), meeting.id);
+      if (meeting.published_announcement_id) {
+        db.prepare("DELETE FROM notifications WHERE project_id=? AND entity_type='announcement' AND entity_id=?").run(activeProjectId(), meeting.published_announcement_id);
+        db.prepare('DELETE FROM announcements WHERE id=? AND project_id=?').run(meeting.published_announcement_id, activeProjectId());
+      }
+      db.prepare('DELETE FROM project_meetings WHERE id=? AND project_id=?').run(meeting.id, activeProjectId());
+      db.exec('COMMIT');
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
   }
 
   function externalDependencyRows(currentUser) {
@@ -6069,6 +6148,18 @@ function createRepository(db, defaultProjectId) {
       else recordId = insertRecord('daily_notes', { ...values, author: currentUser.display_name, created_by: currentUser.id });
       setMentions('note', recordId, input.mentioned_user_ids);
       saveNoteSections(recordId, requestedSections, currentUser);
+      const savedSections = noteSectionRows(recordId);
+      const globalRecipients = new Set((Array.isArray(input.mentioned_user_ids) ? input.mentioned_user_ids : []).map(asId).filter(Boolean));
+      const sectionAssignments = new Map();
+      savedSections.forEach((section, index) => section.recipient_user_ids.forEach(userId => {
+        if (!sectionAssignments.has(Number(userId))) sectionAssignments.set(Number(userId), []);
+        sectionAssignments.get(Number(userId)).push(`${index + 1}. ${section.information_type}`);
+      }));
+      const recipients = new Set([...globalRecipients, ...sectionAssignments.keys()]);
+      recipients.delete(Number(currentUser.id));
+      recipients.forEach(userId => createNotification(userId, 'mention', 'note', recordId,
+        `${id ? 'Zaktualizowano' : 'Dodano'} przekazanie statusu: ${values.title}`,
+        globalRecipients.has(userId) ? 'Zwrócono Twoją uwagę na wszystkie informacje w tym przekazaniu.' : `Dotyczy informacji: ${sectionAssignments.get(userId).join(', ')}.`));
       const after = baseSnapshot('note', recordId);
       writeAudit('note', recordId, id ? 'update' : 'create', currentUser, before, after);
       const row = one(`SELECT n.*,c.code controller,creator.display_name created_by_name FROM daily_notes n LEFT JOIN controllers c ON c.id=n.controller_id LEFT JOIN users creator ON creator.id=n.created_by WHERE n.id=?`, recordId);

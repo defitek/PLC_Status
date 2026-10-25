@@ -154,6 +154,62 @@ test('V20 supports hierarchical annotations, meeting priorities and review histo
   }
 });
 
+test('V21 keeps meeting drafts private, groups plan items and targets status-transfer notifications', () => {
+  const temporary = temporaryDatabase();
+  const repository = openDatabase(temporary.path);
+  try {
+    const admin = repository.me(repository.authenticate('admin').id);
+    const workerOne = repository.me(repository.saveUser(null, { username: 'v21worker1', display_name: 'V21 Worker One', password: 'secret123', role: 'user' }).id);
+    const workerTwo = repository.me(repository.saveUser(null, { username: 'v21worker2', display_name: 'V21 Worker Two', password: 'secret123', role: 'user' }).id);
+    const controller = repository.controllers()[0];
+    const task = repository.saveTask(null, { controller: controller.code, title: 'Grouped commissioning task', status: 'To do' }, admin);
+
+    const meeting = repository.saveProjectMeeting(null, {
+      period_from: '2026-10-25', period_to: '2026-10-31', title: 'V21 private plan', status: 'open',
+      items: [{ entity_type: 'task', entity_id: task.id, group_name: 'Rozruch linii', objective: 'Ukończenie', meeting_priority: 'High', item_status: 'open' }]
+    }, admin);
+    assert.equal(meeting.items[0].group_name, 'Rozruch linii');
+    assert.ok(repository.meetingSummaries(admin).some(item => item.id === meeting.id), 'a manager should see a draft');
+    assert.equal(repository.meetingSummaries(workerOne).some(item => item.id === meeting.id), false, 'a worker should not see a draft');
+    assert.throws(() => repository.saveProjectMeeting(null, {
+      period_from: '2026-10-25', period_to: '2026-10-25', title: 'v21 PRIVATE PLAN', items: []
+    }, admin), /istnieje już odprawa/);
+
+    const firstPublication = repository.publishProjectMeeting(meeting.id, admin);
+    assert.ok(repository.meetingSummaries(workerOne).some(item => item.id === meeting.id), 'publishing should expose the plan');
+    const renamed = repository.saveProjectMeeting(meeting.id, { ...meeting, title: 'V21 renamed plan', items: meeting.items }, admin);
+    assert.equal(renamed.title, 'V21 renamed plan');
+    assert.equal(repository.meetingSummaries(workerOne).some(item => item.id === meeting.id), false, 'editing a published plan should require republishing');
+    assert.equal(repository.announcements(workerOne).some(item => item.id === firstPublication.announcement.id), false, 'an unpublished plan must not remain as a regular Informator item');
+    const secondPublication = repository.publishProjectMeeting(meeting.id, admin);
+    assert.equal(repository.meetingSummaries(workerOne).find(item => item.id === meeting.id).title, 'V21 renamed plan');
+
+    const note = repository.saveNote(null, {
+      title: 'Zmiana zakresu rozruchu', note_date: '2026-10-25', shift: 'Dzień', mentioned_user_ids: [workerOne.id],
+      sections: [{ information_type: 'Postęp', content: 'Sprawdź nowy zakres.', scopes: [{ scope_type: 'project', scope_id: 0 }], recipient_user_ids: [workerTwo.id], links: [] }]
+    }, admin);
+    assert.deepEqual(note.mentioned_user_ids, [workerOne.id]);
+    assert.deepEqual(note.sections[0].recipient_user_ids, [workerTwo.id]);
+    assert.ok(repository.notifications(workerOne).some(item => item.kind === 'mention' && item.entity_type === 'note' && item.entity_id === note.id));
+    assert.ok(repository.notifications(workerTwo).some(item => item.kind === 'mention' && item.entity_type === 'note' && item.entity_id === note.id));
+
+    const announcement = repository.saveAnnouncement(null, { title: 'Potwierdź V21', content: 'Wymaga odczytania.', recipient_user_ids: [workerOne.id] }, admin);
+    assert.equal(announcement.requires_ack, false, 'the author should not acknowledge their own message');
+    const workerAnnouncement = repository.announcements(workerOne).find(item => item.id === announcement.id);
+    assert.equal(workerAnnouncement.requires_ack, true);
+    const notification = repository.notifications(workerOne).find(item => item.entity_type === 'announcement' && item.entity_id === announcement.id);
+    repository.markNotificationRead(notification.id, workerOne);
+    assert.ok(repository.dailySummary('2026-10-25', '2026-10-25', workerOne).pending_announcements.some(item => item.id === announcement.id), 'reading a notification should not acknowledge the Informator item');
+    repository.acknowledgeAnnouncement(announcement.id, workerOne);
+    assert.equal(repository.dailySummary('2026-10-25', '2026-10-25', workerOne).pending_announcements.some(item => item.id === announcement.id), false);
+    repository.deleteProjectMeeting(meeting.id);
+    assert.equal(repository.announcements(workerOne).some(item => item.id === secondPublication.announcement.id), false, 'deleting a meeting should remove its published plan');
+  } finally {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
 test('V2 database is migrated to V3 without losing records', () => {
   const temporary = temporaryDatabase();
   const legacy = new DatabaseSync(temporary.path);
@@ -888,7 +944,7 @@ test('V9 supports guarded duplication, comments, pushes, calendar ranges and wor
       const announcement = repository.saveAnnouncement(null, {
         title: 'Komunikat V9', content: 'Wymagane potwierdzenie odczytu.', scope_group_ids: [root.id], recipient_user_ids: [worker.id]
       }, admin);
-      assert.ok(repository.notifications(admin, 50).some(item => item.kind === 'announcement' && item.entity_id === announcement.id));
+      assert.equal(repository.notifications(admin, 50).some(item => item.kind === 'announcement' && item.entity_id === announcement.id), false, 'the author should not receive an unread notification for their own message');
       assert.ok(repository.notifications(worker, 50).some(item => item.kind === 'announcement' && item.entity_id === announcement.id));
       repository.acknowledgeAnnouncement(announcement.id, worker);
       assert.equal(repository.announcements(admin).find(item => item.id === announcement.id).accepted_users.some(item => item.user_id === worker.id), true);

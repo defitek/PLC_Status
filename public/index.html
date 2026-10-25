@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#172554">
   <title>PLC Commissioning Hub</title>
   <link rel="icon" type="image/png" href="/assets/favicon.png">
-  <link rel="stylesheet" href="/styles.css?v=1.0.0">
-  <script type="module" src="/app.js?v=1.0.0"></script>
+  <link rel="stylesheet" href="/styles.css?v=1.1.0">
+  <script type="module" src="/app.js?v=1.1.0"></script>
 </head>
 <body class="sidebar-collapsed">
   <header class="topbar">
@@ -26,7 +26,7 @@
         <span class="sidebar-pin-icon" aria-hidden="true">»</span><span class="sidebar-pin-label">Rozwiń menu</span>
       </button>
       <label class="select-label"><span>Zakres danych</span>
-        <select id="controller"><option value="all">Cały projekt</option></select>
+        <div id="controller-picker-host"><input type="hidden" id="controller" value="all"></div>
       </label>
       <nav id="nav">
         <button data-view="mine" class="active"><span>◉</span><span>Moje podsumowanie</span></button>
@@ -191,6 +191,7 @@
     <form id="status-transfer-form">
       <header class="dialog-head"><div><h2>Przekazanie statusu</h2><p>Jeden wpis może zawierać wiele niezależnych informacji dla wielu obszarów.</p></div><button type="button" class="x" id="status-transfer-close">×</button></header>
       <div class="status-transfer-head"><label class="field"><span>Tytuł *</span><input id="status-transfer-title" required></label><label class="field"><span>Data *</span><input id="status-transfer-date" type="date" required></label><label class="field"><span>Zmiana *</span><select id="status-transfer-shift"></select></label></div>
+      <section class="status-transfer-global"><span><b>Powiadom o całym przekazaniu</b><small>Wybrane osoby otrzymają powiadomienie dotyczące wszystkich informacji.</small></span><div id="status-transfer-global-recipients"></div></section>
       <div id="status-transfer-sections" class="status-transfer-sections"></div>
       <button type="button" id="status-transfer-add-section" class="secondary">+ Dodaj kolejną informację</button>
       <button type="button" id="status-transfer-audit" class="secondary audit-toggle" hidden>Pokaż historię edycji</button>

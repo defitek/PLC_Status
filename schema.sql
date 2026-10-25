@@ -605,8 +605,8 @@ CREATE TABLE IF NOT EXISTS notifications (
   id INTEGER PRIMARY KEY,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL CHECK(kind IN ('assignment','announcement','comment','handover','automation','meeting')),
-  entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point','goal','announcement','handover','meeting')),
+  kind TEXT NOT NULL CHECK(kind IN ('assignment','announcement','comment','handover','automation','meeting','mention')),
+  entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point','goal','note','announcement','handover','meeting')),
   entity_id INTEGER NOT NULL,
   title TEXT NOT NULL,
   message TEXT NOT NULL DEFAULT '',
@@ -917,6 +917,12 @@ CREATE TABLE IF NOT EXISTS daily_note_section_links (
   PRIMARY KEY(section_id,entity_type,entity_id)
 ) STRICT, WITHOUT ROWID;
 
+CREATE TABLE IF NOT EXISTS daily_note_section_recipients (
+  section_id INTEGER NOT NULL REFERENCES daily_note_sections(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY(section_id,user_id)
+) STRICT, WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS project_meetings (
   id INTEGER PRIMARY KEY,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -948,6 +954,7 @@ CREATE TABLE IF NOT EXISTS project_meeting_items (
   baseline_json TEXT NOT NULL DEFAULT '{}',
   owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
   status_changed_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  group_name TEXT NOT NULL DEFAULT '',
   due_date TEXT,
   item_status TEXT NOT NULL DEFAULT 'open' CHECK(item_status IN ('open','decided','deferred')),
   sort_order INTEGER NOT NULL DEFAULT 0,
@@ -1025,6 +1032,7 @@ CREATE INDEX IF NOT EXISTS idx_calendar_annotation_scopes ON calendar_annotation
 CREATE INDEX IF NOT EXISTS idx_calendar_item_dates ON calendar_item_dates(project_id,calendar_date,entity_type);
 CREATE INDEX IF NOT EXISTS idx_comments_entity ON entity_comments(project_id,entity_type,entity_id,created_at);
 CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(project_id,user_id,read_at,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_daily_note_section_recipients_user ON daily_note_section_recipients(user_id,section_id);
 CREATE INDEX IF NOT EXISTS idx_entity_requirements_entity ON entity_requirements(project_id,entity_type,entity_id);
 CREATE INDEX IF NOT EXISTS idx_planner_holidays_date ON planner_holidays(project_id,holiday_date);
 CREATE INDEX IF NOT EXISTS idx_planner_absences_date ON planner_absences(project_id,absence_date,user_id);
