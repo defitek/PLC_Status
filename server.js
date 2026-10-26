@@ -240,6 +240,10 @@ function requireRole(user, role = 'user') {
   const hierarchy = { user: 1, moderator: 2, project_admin: 3, system_admin: 4 };
   if (!user || Number(hierarchy[user.role] || 0) < Number(hierarchy[role] || 1)) throw Object.assign(new Error(user ? 'Brak uprawnień' : 'Zaloguj się'), { statusCode: user ? 403 : 401 });
 }
+function requireExternalDependencyAccess(user) {
+  const allowedByRole = ['moderator', 'project_admin', 'system_admin'].includes(user?.role);
+  if (!allowedByRole && !Number(user?.current_project?.can_manage_external_dependencies)) throw Object.assign(new Error('Brak uprawnień do modyfikowania zależności zewnętrznych'), { statusCode: 403 });
+}
 function numericId(pathname, prefix) { const match = pathname.match(new RegExp(`^${prefix}/(\\d+)$`)); return match ? Number(match[1]) : null; }
 function projectFilename(project, suffix, extension) { return `${project.code}_${suffix}_${new Date().toISOString().slice(0, 10)}.${extension}`; }
 function openEventStream(request, response, projectId, userId, clientId) {
@@ -320,10 +324,11 @@ async function handleProjectApi(request, response, url, user) {
   }
   const meetingPublish = path.match(/^\/api\/project-meetings\/(\d+)\/publish$/);
   if (meetingPublish && method === 'POST') { requireRole(user, 'moderator'); return json(response, 200, repository.publishProjectMeeting(Number(meetingPublish[1]), user)); }
-  if (method === 'POST' && path === '/api/external-dependencies') { requireRole(user, 'moderator'); return json(response, 201, repository.saveExternalDependency(null, await readJson(request), user)); }
+  if (method === 'GET' && path === '/api/external-dependencies') return json(response, 200, repository.externalDependencies(user));
+  if (method === 'POST' && path === '/api/external-dependencies') { requireExternalDependencyAccess(user); return json(response, 201, repository.saveExternalDependency(null, await readJson(request), user)); }
   const externalDependencyId = numericId(path, '/api/external-dependencies');
   if (externalDependencyId !== null) {
-    requireRole(user, 'moderator');
+    requireExternalDependencyAccess(user);
     if (method === 'PATCH') return json(response, 200, repository.saveExternalDependency(externalDependencyId, await readJson(request), user));
     if (method === 'DELETE') { repository.deleteExternalDependency(externalDependencyId); response.writeHead(204); return response.end(); }
   }
@@ -492,9 +497,9 @@ async function handleProjectApi(request, response, url, user) {
     if (method === 'PATCH') {
       const input = await readJson(request);
       const target = repository.users().find(item => item.id === id);
-      const protectedProjectFields = new Set(['planner_enabled', 'assignable']);
-      if (user.role !== 'system_admin' && (target?.system_role === 'system_admin' || target?.project_role === 'project_admin') && Object.keys(input).some(key => !protectedProjectFields.has(key))) throw Object.assign(new Error('Dla administratora możesz tutaj zmienić wyłącznie udział w Plannerze i widoczność na listach wyboru'), { statusCode: 403 });
-      const safe = user.role === 'system_admin' ? input : (target?.system_role === 'system_admin' || target?.project_role === 'project_admin') ? { planner_enabled: input.planner_enabled, assignable: input.assignable } : { project_role: input.project_role, project_active: input.project_active, planner_enabled: input.planner_enabled, assignable: input.assignable };
+      const protectedProjectFields = new Set(['planner_enabled', 'assignable', 'can_manage_external_dependencies']);
+      if (user.role !== 'system_admin' && (target?.system_role === 'system_admin' || target?.project_role === 'project_admin') && Object.keys(input).some(key => !protectedProjectFields.has(key))) throw Object.assign(new Error('Dla administratora możesz tutaj zmienić wyłącznie ustawienia udziału w modułach projektu'), { statusCode: 403 });
+      const safe = user.role === 'system_admin' ? input : (target?.system_role === 'system_admin' || target?.project_role === 'project_admin') ? { planner_enabled: input.planner_enabled, assignable: input.assignable, can_manage_external_dependencies: input.can_manage_external_dependencies } : { project_role: input.project_role, project_active: input.project_active, planner_enabled: input.planner_enabled, assignable: input.assignable, can_manage_external_dependencies: input.can_manage_external_dependencies };
       if (user.role !== 'system_admin' && Object.hasOwn(safe, 'project_role') && !['user', 'moderator'].includes(safe.project_role)) throw Object.assign(new Error('Administrator projektu może przydzielać wyłącznie role managera projektu i użytkownika'), { statusCode: 403 });
       const result = repository.saveUser(id, safe);
       if (Object.hasOwn(safe, 'password') || Number(safe.active) === 0) await revokeUserSessions(id);

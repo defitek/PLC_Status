@@ -134,7 +134,7 @@ test('V20 supports hierarchical annotations, meeting priorities and review histo
     repository.saveTask(retest.id, { ...retest, status: 'Done' }, admin);
     repository.addComment({ entity_type: 'task', entity_id: retest.id, content: 'Retest zakończony prawidłowo' }, admin);
     const closedMeeting = repository.saveProjectMeeting(meeting.id, {
-      ...meeting, status: 'closed', items: [{ ...meeting.items[0], meeting_priority: 'Critical', item_status: 'decided', status_changed_by_user_id: admin.id, worker_user_ids: [admin.id] }]
+      ...meeting, status: 'closed', items: [{ ...meeting.items[0], meeting_priority: 'Critical', item_status: 'decided', review_confirmed: 1, status_changed_by_user_id: admin.id, worker_user_ids: [admin.id] }]
     }, admin);
     assert.equal(closedMeeting.items[0].meeting_priority, '1');
     assert.equal(closedMeeting.items[0].baseline.status, 'NOK / Retest required');
@@ -213,6 +213,56 @@ test('V23 publishes meeting snapshots, supports unnamed groups and targets statu
     assert.equal(repository.dailySummary('2026-10-25', '2026-10-25', workerOne).pending_announcements.some(item => item.id === announcement.id), false);
     repository.deleteProjectMeeting(meeting.id);
     assert.equal(repository.announcements(workerOne).some(item => item.id === secondPublication.announcement.id), false, 'deleting a meeting should remove its published plan');
+  } finally {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
+test('V24 links configured open points with external dependencies and requires item review confirmation', () => {
+  const temporary = temporaryDatabase();
+  const repository = openDatabase(temporary.path);
+  try {
+    const admin = repository.me(repository.authenticate('admin').id);
+    const controller = repository.controllers()[0];
+    const waiting = repository.saveOption(null, {
+      kind: 'waiting_for', value: 'V24 Design partner', description: 'External design response', external_dependency_enabled: 1
+    });
+    assert.equal(waiting.external_dependency_enabled, 1);
+
+    const point = repository.savePoint(null, {
+      controller: controller.code, title: 'V24 drawing approval', status: 'Waiting', waiting_for: waiting.value, due_date: '2026-11-05'
+    }, admin);
+    let dependency = repository.externalDependencies(admin).find(item => item.entity_id === point.id);
+    assert.ok(dependency, 'configured waiting-for value should create a dependency');
+    assert.equal(dependency.configuration_pending, 1);
+    assert.equal(dependency.auto_created, 1);
+    assert.equal(dependency.party, waiting.value);
+
+    dependency = repository.saveExternalDependency(dependency.id, {
+      entity_type: 'point', entity_id: point.id, party: waiting.value, contact_person: 'Anna Projektant',
+      contact_email: 'anna@example.test', dependency_status: 'waiting', requested_at: '2026-10-26', expected_date: '2026-11-01'
+    }, admin);
+    assert.equal(dependency.configuration_pending, 0);
+    assert.equal(dependency.contact_person, 'Anna Projektant');
+
+    const meeting = repository.saveProjectMeeting(null, {
+      period_from: '2026-10-26', period_to: '2026-10-30', title: 'V24 point review',
+      items: [{ entity_type: 'point', entity_id: point.id, item_status: 'decided' }]
+    }, admin);
+    assert.throws(() => repository.saveProjectMeeting(meeting.id, {
+      ...meeting, status: 'closed', items: [{ ...meeting.items[0], item_status: 'decided' }]
+    }, admin), /Zatwierdź podsumowanie/);
+    const closed = repository.saveProjectMeeting(meeting.id, {
+      ...meeting, status: 'closed', items: [{ ...meeting.items[0], item_status: 'decided', review_confirmed: 1 }]
+    }, admin);
+    assert.equal(closed.status, 'closed');
+    assert.equal(closed.items[0].review_confirmed, 1);
+
+    const worker = repository.saveUser(null, {
+      username: 'v24-worker', display_name: 'V24 Worker', password: 'secret123', project_role: 'user', can_manage_external_dependencies: 1
+    });
+    assert.equal(repository.availableProjects(worker.id)[0].can_manage_external_dependencies, 1);
   } finally {
     repository.close();
     rmSync(temporary.directory, { recursive: true, force: true });
@@ -1263,13 +1313,13 @@ test('status handovers support meetings, risk and historical suggestions', () =>
       assert.equal(repository.meetingSummaries(manager).some(item => item.id === meeting.id), false, 'a draft meeting stays outside the Informator');
 
       assert.throws(() => repository.saveProjectMeeting(meeting.id, {
-        ...meeting, status: 'closed', items: [{ ...meeting.items[0], item_status: 'deferred', outcome_comment: '' }]
+        ...meeting, status: 'closed', items: [{ ...meeting.items[0], item_status: 'deferred', review_confirmed: 1, outcome_comment: '' }]
       }, manager), /uzasadnienie/i);
       assert.equal(repository.operations(manager).meetings.find(item => item.id === meeting.id).status, 'open');
 
       meeting = repository.saveProjectMeeting(meeting.id, {
         ...meeting, status: 'closed', items: [{ ...meeting.items[0], item_status: 'deferred', target_status: 'Waiting', due_date: '2026-10-20',
-          outcome_comment: 'Oczekujemy na ponowną próbę komunikacji.', assignee_user_ids: [workerRecord.id], worker_user_ids: [workerRecord.id] }]
+          outcome_comment: 'Oczekujemy na ponowną próbę komunikacji.', review_confirmed: 1, assignee_user_ids: [workerRecord.id], worker_user_ids: [workerRecord.id] }]
       }, manager);
       assert.equal(meeting.status, 'closed');
       assert.equal(meeting.items[0].item_status, 'deferred');
@@ -1289,9 +1339,9 @@ test('status handovers support meetings, risk and historical suggestions', () =>
       assert.equal(followupMeeting.items.length, 0, 'new meetings start empty and only contain explicitly selected topics');
 
       const dependency = repository.saveExternalDependency(null, {
-        entity_type: 'task', entity_id: task.id, party: 'Dostawca sieci', dependency_status: 'waiting', expected_date: '2026-10-10', next_followup: '2026-10-09', owner_user_id: workerRecord.id
+        entity_type: 'point', entity_id: riskPoint.id, party: 'Dostawca sieci', contact_person: 'Anna Dostawca', dependency_status: 'waiting', expected_date: '2026-10-10', next_followup: '2026-10-09', owner_user_id: workerRecord.id
       }, admin);
-      assert.equal(dependency.entity.entity_id, task.id);
+      assert.equal(dependency.entity.entity_id, riskPoint.id);
 
       assert.ok(repository.similarHistory('task', 'Diagnostyka komunikacji Profinet', admin).some(item => item.entity_id === task.id && item.similarity > 0));
       assert.ok(repository.operations(admin).risk_radar.some(item => item.entity_type === 'point' && item.entity_id === riskPoint.id));

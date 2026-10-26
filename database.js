@@ -79,6 +79,7 @@ export function openDatabase(databasePath) {
   migrateToV21(db);
   migrateToV22(db);
   migrateToV23(db);
+  migrateToV24(db);
   migrateSecurityFoundation(db);
   migrateStatusWorkflow(db);
   migrateEntityDependencies(db);
@@ -116,6 +117,7 @@ export function openDatabase(databasePath) {
   migrateToV21(db);
   migrateToV22(db);
   migrateToV23(db);
+  migrateToV24(db);
   migrateSecurityFoundation(db);
   migrateStatusWorkflow(db);
   migrateEntityDependencies(db);
@@ -161,6 +163,7 @@ function ensureProjectMeetingFeatures(db) {
   ensureColumn(db, 'project_meeting_items', 'status_changed_by_user_id', 'INTEGER');
   ensureColumn(db, 'project_meeting_items', 'group_name', "TEXT NOT NULL DEFAULT ''");
   ensureColumn(db, 'project_meeting_items', 'group_key', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, 'project_meeting_items', 'review_confirmed', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(db, 'project_meetings', 'published_at', 'TEXT');
   ensureColumn(db, 'project_meetings', 'published_announcement_id', 'INTEGER');
   ensureColumn(db, 'project_meetings', 'published_snapshot_json', "TEXT NOT NULL DEFAULT '{}'");
@@ -484,6 +487,19 @@ function migrateToV22(db) {
 function migrateToV23(db) {
   ensureColumn(db, 'project_meeting_items', 'group_key', "TEXT NOT NULL DEFAULT ''");
   db.exec("UPDATE project_meeting_items SET group_key='legacy:'||group_name WHERE group_key='' AND group_name!=''");
+}
+
+function migrateToV24(db) {
+  ensureColumn(db, 'project_meeting_items', 'review_confirmed', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'options', 'external_dependency_enabled', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'project_memberships', 'can_manage_external_dependencies', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'external_dependencies', 'contact_person', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, 'external_dependencies', 'contact_email', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, 'external_dependencies', 'contact_phone', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, 'external_dependencies', 'configuration_pending', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'external_dependencies', 'auto_created', 'INTEGER NOT NULL DEFAULT 0');
+  db.exec(`UPDATE project_meeting_items SET review_confirmed=1
+    WHERE review_confirmed=0 AND meeting_id IN (SELECT id FROM project_meetings WHERE status='closed')`);
 }
 
 function migrateSecurityFoundation(db) {
@@ -2834,10 +2850,11 @@ function createRepository(db, defaultProjectId) {
       for (const table of projectRestoreOrder) insertBackupRows(table, payload.tables[table], projectId);
       for (const membership of Array.isArray(payload.memberships) ? payload.memberships : []) {
         if (!one('SELECT 1 FROM users WHERE id=?', membership.user_id)) continue;
-        db.prepare(`INSERT INTO project_memberships(project_id,user_id,role,active,planner_enabled,assignable,summary_area_source,created_at) VALUES(?,?,?,?,?,?,?,?)
-          ON CONFLICT(project_id,user_id) DO UPDATE SET role=excluded.role,active=excluded.active,planner_enabled=excluded.planner_enabled,assignable=excluded.assignable,summary_area_source=excluded.summary_area_source`).run(
+        db.prepare(`INSERT INTO project_memberships(project_id,user_id,role,active,planner_enabled,assignable,can_manage_external_dependencies,summary_area_source,created_at) VALUES(?,?,?,?,?,?,?,?,?)
+          ON CONFLICT(project_id,user_id) DO UPDATE SET role=excluded.role,active=excluded.active,planner_enabled=excluded.planner_enabled,assignable=excluded.assignable,can_manage_external_dependencies=excluded.can_manage_external_dependencies,summary_area_source=excluded.summary_area_source`).run(
           projectId, membership.user_id, membership.role, membership.active, Number(membership.planner_enabled ?? 1) ? 1 : 0,
-          Number(membership.assignable ?? 1) ? 1 : 0, membership.summary_area_source === 'planner' ? 'planner' : 'configuration', membership.created_at || new Date().toISOString()
+          Number(membership.assignable ?? 1) ? 1 : 0, Number(membership.can_manage_external_dependencies ?? 0) ? 1 : 0,
+          membership.summary_area_source === 'planner' ? 'planner' : 'configuration', membership.created_at || new Date().toISOString()
         );
       }
       db.prepare(`INSERT OR IGNORE INTO task_assignees(project_id,task_id,user_id,assigned_directly)
@@ -4220,7 +4237,7 @@ function createRepository(db, defaultProjectId) {
     [...new Set((Array.isArray(userIds) ? userIds : []).map(Number).filter(id => allowed.has(id)))].forEach(userId => insert.run(meetingItemId, userId));
   }
 
-  function applyMeetingDecision(item, previous, meeting, currentUser, closing) {
+  function applyMeetingDecision(item, previous, meeting, currentUser) {
     const entity = operationEntity(item.entity_type, item.entity_id, currentUser); if (!entity) return;
     const allowedUsers = new Set(all('SELECT user_id FROM project_memberships WHERE project_id=? AND active=1', activeProjectId()).map(row => Number(row.user_id)));
     const assigneeIds = (Array.isArray(item.assignee_user_ids) ? item.assignee_user_ids.map(Number).filter(Boolean) : (item.owner_user_id ? [Number(item.owner_user_id)] : [])).filter(userId => allowedUsers.has(userId));
@@ -4253,7 +4270,7 @@ function createRepository(db, defaultProjectId) {
     if (!savedThroughTaskWorkflow && JSON.stringify(before) !== JSON.stringify(after)) writeAudit(item.entity_type, item.entity_id, 'update', currentUser, before, after);
     const decisionChanged = Boolean(previous) && clean(item.decision) && clean(item.decision) !== clean(previous.decision);
     const outcomeChanged = clean(item.outcome_comment) && clean(item.outcome_comment) !== clean(previous?.outcome_comment);
-    if (decisionChanged || (closing && outcomeChanged)) {
+    if (decisionChanged || (Number(item.review_confirmed) && outcomeChanged)) {
       const workers = all(`SELECT u.display_name FROM project_meeting_item_workers pmiw JOIN users u ON u.id=pmiw.user_id WHERE pmiw.meeting_item_id=? ORDER BY u.display_name`, item.id).map(row => row.display_name);
       const lines = [`Komentarz z odprawy „${meeting.title}” (${meeting.period_from}–${meeting.period_to}).`, `Decyzję podjął(a): ${currentUser.display_name}.`, `Osoby faktycznie realizujące: ${workers.join(', ') || assigneeIds.map(userName).filter(Boolean).join(', ') || 'nie wskazano'}.`];
       if (decisionChanged) lines.push(`Ustalenie: ${clean(item.decision)}`);
@@ -4283,8 +4300,10 @@ function createRepository(db, defaultProjectId) {
       requested = [...requested, ...hiddenExisting];
     }
     const prepared = requested.map(item => ({ item, entity: operationEntity(item.entity_type, item.entity_id, currentUser) })).filter(row => row.entity);
+    if (values.status === 'closed' && !prepared.length) throw appError('Dodaj i zatwierdź co najmniej jeden element przed zamknięciem odprawy');
     if (values.status === 'closed') for (const { item, entity } of prepared) {
       const itemStatus = ['open', 'decided', 'deferred'].includes(item.item_status) ? item.item_status : 'open';
+      if (!Number(item.review_confirmed)) throw appError(`Zatwierdź podsumowanie pozycji „${entity.title}” przed zamknięciem odprawy`);
       if (values.status === 'closed' && ['open', 'deferred'].includes(itemStatus) && !clean(item.outcome_comment)) throw appError(`Dodaj uzasadnienie dla pozycji „${entity.title}” pozostawionej jako otwarta lub odłożona`);
     }
     db.exec('BEGIN IMMEDIATE');
@@ -4293,8 +4312,8 @@ function createRepository(db, defaultProjectId) {
       else recordId = insertRecord('project_meetings', { ...values, created_by: currentUser.id });
       const existing = new Map(all('SELECT * FROM project_meeting_items WHERE meeting_id=?', recordId).map(item => [`${item.entity_type}:${item.entity_id}`, item]));
       const requestedKeys = new Set();
-      const upsert = db.prepare(`INSERT INTO project_meeting_items(meeting_id,entity_type,entity_id,decision,objective,outcome_comment,target_status,meeting_priority,baseline_json,owner_user_id,status_changed_by_user_id,group_name,group_key,due_date,item_status,sort_order)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(meeting_id,entity_type,entity_id) DO UPDATE SET decision=excluded.decision,objective=excluded.objective,outcome_comment=excluded.outcome_comment,target_status=excluded.target_status,meeting_priority=excluded.meeting_priority,owner_user_id=excluded.owner_user_id,status_changed_by_user_id=excluded.status_changed_by_user_id,group_name=excluded.group_name,group_key=excluded.group_key,due_date=excluded.due_date,item_status=excluded.item_status,sort_order=excluded.sort_order`);
+      const upsert = db.prepare(`INSERT INTO project_meeting_items(meeting_id,entity_type,entity_id,decision,objective,outcome_comment,target_status,meeting_priority,baseline_json,owner_user_id,status_changed_by_user_id,group_name,group_key,due_date,item_status,review_confirmed,sort_order)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(meeting_id,entity_type,entity_id) DO UPDATE SET decision=excluded.decision,objective=excluded.objective,outcome_comment=excluded.outcome_comment,target_status=excluded.target_status,meeting_priority=excluded.meeting_priority,owner_user_id=excluded.owner_user_id,status_changed_by_user_id=excluded.status_changed_by_user_id,group_name=excluded.group_name,group_key=excluded.group_key,due_date=excluded.due_date,item_status=excluded.item_status,review_confirmed=excluded.review_confirmed,sort_order=excluded.sort_order`);
       const projectUserIds = new Set(all('SELECT user_id FROM project_memberships WHERE project_id=? AND active=1', activeProjectId()).map(row => Number(row.user_id)));
       prepared.forEach(({ item, entity }, index) => {
         const key = `${item.entity_type}:${Number(item.entity_id)}`; requestedKeys.add(key);
@@ -4303,15 +4322,14 @@ function createRepository(db, defaultProjectId) {
         const legacyPriority = ({ Critical: 1, High: 3, Medium: 5, Low: 8 })[clean(item.meeting_priority)];
         const entityPriority = ({ Critical: 1, High: 3, Medium: 5, Low: 8 })[entity.priority] || 5;
         const meetingPriority = String(Number.isInteger(requestedPriority) && requestedPriority >= 1 && requestedPriority <= 10 ? requestedPriority : legacyPriority || entityPriority);
-        const groupName = clean(item.group_name).slice(0, 120);
-        const groupKey = clean(item.group_key || (groupName ? `legacy:${groupName}` : '')).slice(0, 160);
+        const groupKey = clean(item.group_key || (clean(item.group_name) ? `legacy:${clean(item.group_name)}` : '')).slice(0, 160);
         const assignmentIds = Array.isArray(item.assignee_user_ids) ? item.assignee_user_ids : (item.owner_user_id ? [item.owner_user_id] : entity.assignee_user_ids || []);
         const statusChangedByUserId = asId(item.status_changed_by_user_id); if (statusChangedByUserId && !projectUserIds.has(statusChangedByUserId)) throw appError('Osoba zmieniająca status nie należy do projektu');
-        upsert.run(recordId, item.entity_type, asId(item.entity_id), clean(item.decision), clean(item.objective) || 'Kontynuacja', clean(item.outcome_comment), clean(item.target_status), meetingPriority, JSON.stringify(entity), asId(item.owner_user_id || assignmentIds[0]), statusChangedByUserId, groupName, groupKey, nullableDate(item.due_date), itemStatus, index);
+        upsert.run(recordId, item.entity_type, asId(item.entity_id), clean(item.decision), clean(item.objective) || 'Kontynuacja', clean(item.outcome_comment), clean(item.target_status), meetingPriority, JSON.stringify(entity), asId(item.owner_user_id || assignmentIds[0]), statusChangedByUserId, '', groupKey, nullableDate(item.due_date), itemStatus, Number(item.review_confirmed) ? 1 : 0, index);
         const savedItem = one('SELECT * FROM project_meeting_items WHERE meeting_id=? AND entity_type=? AND entity_id=?', recordId, item.entity_type, asId(item.entity_id));
         setMeetingUsers('project_meeting_item_assignees', savedItem.id, assignmentIds);
         setMeetingUsers('project_meeting_item_workers', savedItem.id, item.worker_user_ids || []);
-        applyMeetingDecision({ ...item, id: savedItem.id, assignee_user_ids: assignmentIds }, existing.get(key), values, currentUser, values.status === 'closed');
+        applyMeetingDecision({ ...item, id: savedItem.id, assignee_user_ids: assignmentIds }, existing.get(key), values, currentUser);
         if (!existing.has(key)) writeAuditChanges(item.entity_type, Number(item.entity_id), currentUser, {
           meeting_assignment: { from: null, to: { meeting_id: recordId, title: values.title, period_from: values.period_from, period_to: values.period_to } }
         });
@@ -4335,7 +4353,7 @@ function createRepository(db, defaultProjectId) {
       meeting.summary ? `Cel / agenda: ${meeting.summary}` : '',
       '',
       'Lp. | Priorytet | Typ | Temat | Obszar | Odpowiedzialni | Deadline',
-      ...meeting.items.map((item, index) => `${index + 1}. | ${item.meeting_priority || '5'} | ${typeNames[item.entity_type] || item.entity_type} | ${item.entity?.title || 'Element projektu'} | ${item.entity?.scope_label || 'Cały projekt'} | ${item.assignee_names?.join(', ') || 'Nieprzypisane'} | ${item.due_date || item.entity?.due_date || 'bez terminu'}${item.group_name ? ` | Grupa: ${item.group_name}` : ''}${item.decision ? `\n   Plan: ${item.decision}` : ''}`)
+      ...meeting.items.map((item, index) => `${index + 1}. | ${item.meeting_priority || '5'} | ${typeNames[item.entity_type] || item.entity_type} | ${item.entity?.title || 'Element projektu'} | ${item.entity?.scope_label || 'Cały projekt'} | ${item.assignee_names?.join(', ') || 'Nieprzypisane'} | ${item.due_date || item.entity?.due_date || 'bez terminu'}${item.decision ? `\n   Plan: ${item.decision}` : ''}`)
     ].filter((line, index, list) => line || list[index - 1]);
     const wasPublished = Boolean(meeting.published_at);
     const announcement = saveAnnouncement(asId(meeting.published_announcement_id), {
@@ -4367,21 +4385,64 @@ function createRepository(db, defaultProjectId) {
     } catch (error) { db.exec('ROLLBACK'); throw error; }
   }
 
+  function syncExternalDependencyForPoint(pointId, currentUser = null) {
+    const point = one('SELECT id,status,waiting_for,created_by FROM open_points WHERE id=? AND project_id=?', asId(pointId), activeProjectId());
+    if (!point) return;
+    const configured = point.status !== 'Closed' && point.waiting_for && one(`SELECT 1 FROM options
+      WHERE project_id=? AND kind='waiting_for' AND value=? AND active=1 AND external_dependency_enabled=1`, activeProjectId(), point.waiting_for);
+    const existing = one("SELECT * FROM external_dependencies WHERE project_id=? AND entity_type='point' AND entity_id=? ORDER BY id LIMIT 1", activeProjectId(), point.id);
+    if (point.status === 'Closed' && existing && existing.dependency_status !== 'resolved') {
+      db.prepare("UPDATE external_dependencies SET dependency_status='resolved',configuration_pending=0,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(existing.id);
+    } else if (configured && !existing) {
+      insertRecord('external_dependencies', {
+        project_id: activeProjectId(), entity_type: 'point', entity_id: point.id, party: point.waiting_for,
+        contact: '', contact_person: '', contact_email: '', contact_phone: '', dependency_status: 'waiting',
+        configuration_pending: 1, auto_created: 1, requested_at: new Date().toISOString().slice(0, 10),
+        expected_date: null, next_followup: null, owner_user_id: null, note: '', created_by: currentUser?.id || point.created_by || null
+      });
+    } else if (configured && existing?.auto_created && existing.party !== point.waiting_for) {
+      db.prepare('UPDATE external_dependencies SET party=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(point.waiting_for, existing.id);
+    } else if (!configured && existing?.auto_created && existing.configuration_pending) {
+      db.prepare('DELETE FROM external_dependencies WHERE id=?').run(existing.id);
+    }
+  }
+
   function externalDependencyRows(currentUser) {
-    return all(`SELECT ed.*,u.display_name owner_name,creator.display_name created_by_name FROM external_dependencies ed
+    return all(`SELECT ed.*,u.display_name owner_name,creator.display_name created_by_name,
+      p.title point_title,p.status point_status,p.waiting_for,p.due_date point_due_date,p.created_at point_created_at
+      FROM external_dependencies ed
+      JOIN open_points p ON p.id=ed.entity_id AND p.project_id=ed.project_id AND ed.entity_type='point'
       LEFT JOIN users u ON u.id=ed.owner_user_id LEFT JOIN users creator ON creator.id=ed.created_by
-      WHERE ed.project_id=? ORDER BY ed.dependency_status='resolved',ed.next_followup IS NULL,ed.next_followup,ed.id DESC`, activeProjectId()).map(row => ({ ...row, entity: operationEntity(row.entity_type, row.entity_id, currentUser) }));
+      WHERE ed.project_id=? ORDER BY ed.configuration_pending DESC,ed.dependency_status='resolved',ed.next_followup IS NULL,ed.next_followup,ed.id DESC`, activeProjectId())
+      .map(row => ({ ...row, entity: operationEntity('point', row.entity_id, currentUser) }));
   }
 
   function saveExternalDependency(id, input, currentUser) {
-    const entityType = clean(input.entity_type); const entityId = asId(input.entity_id);
-    if (!operationEntity(entityType, entityId, currentUser)) throw appError('Wybierz istniejący element projektu');
-    const party = clean(input.party); if (!party) throw appError('Nazwa zewnętrznej strony jest wymagana');
-    const values = { project_id: activeProjectId(), entity_type: entityType, entity_id: entityId, party, contact: clean(input.contact), dependency_status: ['waiting', 'responded', 'resolved'].includes(clean(input.dependency_status)) ? clean(input.dependency_status) : 'waiting', requested_at: nullableDate(input.requested_at) || new Date().toISOString().slice(0, 10), expected_date: nullableDate(input.expected_date), next_followup: nullableDate(input.next_followup), owner_user_id: asId(input.owner_user_id), note: clean(input.note) };
-    let recordId = asId(id);
-    if (recordId) updateRecord('external_dependencies', recordId, values, Object.keys(values));
-    else recordId = insertRecord('external_dependencies', { ...values, created_by: currentUser.id });
-    return externalDependencyRows(currentUser).find(item => item.id === recordId);
+    const entityId = asId(input.entity_id);
+    const point = one("SELECT * FROM open_points WHERE id=? AND project_id=? AND status!='Closed'", entityId, activeProjectId());
+    if (!point) throw appError('Wybierz istniejący, nieukończony otwarty punkt');
+    const recordId = asId(id);
+    const previous = recordId ? one("SELECT * FROM external_dependencies WHERE id=? AND project_id=? AND entity_type='point'", recordId, activeProjectId()) : null;
+    if (recordId && !previous) throw appError('Nie znaleziono zależności zewnętrznej', 404);
+    if (!recordId && one("SELECT 1 FROM external_dependencies WHERE project_id=? AND entity_type='point' AND entity_id=?", activeProjectId(), entityId)) throw appError('Ten otwarty punkt jest już widoczny w zależnościach zewnętrznych');
+    const party = clean(input.party || point.waiting_for); if (!party) throw appError('Wskaż dział lub stronę, na którą czekamy');
+    const contactPerson = clean(input.contact_person); if (!contactPerson) throw appError('Wskaż osobę kontaktową dla zależności');
+    const contactEmail = clean(input.contact_email);
+    const contactPhone = clean(input.contact_phone);
+    const values = {
+      project_id: activeProjectId(), entity_type: 'point', entity_id: entityId, party,
+      contact: [contactPerson, contactEmail, contactPhone].filter(Boolean).join(' · '), contact_person: contactPerson,
+      contact_email: contactEmail, contact_phone: contactPhone,
+      dependency_status: ['waiting', 'responded', 'resolved'].includes(clean(input.dependency_status)) ? clean(input.dependency_status) : 'waiting',
+      configuration_pending: 0, auto_created: Number(previous?.auto_created || 0),
+      requested_at: nullableDate(input.requested_at) || previous?.requested_at || new Date().toISOString().slice(0, 10),
+      expected_date: nullableDate(input.expected_date), next_followup: nullableDate(input.next_followup),
+      owner_user_id: asId(input.owner_user_id), note: clean(input.note)
+    };
+    let savedId = recordId;
+    if (savedId) updateRecord('external_dependencies', savedId, values, Object.keys(values));
+    else savedId = insertRecord('external_dependencies', { ...values, created_by: currentUser.id });
+    return externalDependencyRows(currentUser).find(item => item.id === savedId);
   }
 
   function deleteExternalDependency(id) {
@@ -4850,10 +4911,10 @@ function createRepository(db, defaultProjectId) {
     availableProjects(userId) {
       const account = one('SELECT system_role FROM users WHERE id=? AND active=1', userId);
       if (!account) return [];
-      if (account.system_role === 'system_admin') return all(`SELECT p.*,COALESCE(pm.role,'project_admin') project_role,1 project_active
+      if (account.system_role === 'system_admin') return all(`SELECT p.*,COALESCE(pm.role,'project_admin') project_role,1 project_active,1 can_manage_external_dependencies
         FROM projects p LEFT JOIN project_memberships pm ON pm.project_id=p.id AND pm.user_id=?
         WHERE p.active=1 ORDER BY p.sort_order,p.name`, userId);
-      return all(`SELECT p.*,pm.role project_role,pm.active project_active FROM projects p
+      return all(`SELECT p.*,pm.role project_role,pm.active project_active,pm.can_manage_external_dependencies FROM projects p
         JOIN project_memberships pm ON pm.project_id=p.id AND pm.user_id=?
         WHERE p.active=1 AND pm.active=1 ORDER BY p.sort_order,p.name`, userId);
     },
@@ -4937,7 +4998,7 @@ function createRepository(db, defaultProjectId) {
     users() {
       return all(`SELECT u.id,u.username,u.display_name,u.system_role,u.theme,u.active,u.sort_order,u.created_at,
         pm.role project_role,COALESCE(pm.role,'user') role,COALESCE(pm.active,0) project_active,
-        COALESCE(pm.planner_enabled,0) planner_enabled,COALESCE(pm.assignable,0) assignable,COALESCE(pm.summary_area_source,'configuration') summary_area_source
+        COALESCE(pm.planner_enabled,0) planner_enabled,COALESCE(pm.assignable,0) assignable,COALESCE(pm.can_manage_external_dependencies,0) can_manage_external_dependencies,COALESCE(pm.summary_area_source,'configuration') summary_area_source
         FROM users u LEFT JOIN project_memberships pm ON pm.user_id=u.id AND pm.project_id=?
         ORDER BY u.sort_order,u.display_name`, activeProjectId()).map(user => ({
           ...user,
@@ -4950,7 +5011,7 @@ function createRepository(db, defaultProjectId) {
         WHERE pm.project_id=? AND pm.active=1 AND u.active=1
         ORDER BY u.sort_order,u.display_name`, activeProjectId());
       return all(`SELECT u.id,u.username,u.display_name,u.system_role,1 active,
-        pm.role project_role,pm.role role,1 project_active,pm.planner_enabled,pm.assignable,pm.summary_area_source
+        pm.role project_role,pm.role role,1 project_active,pm.planner_enabled,pm.assignable,pm.can_manage_external_dependencies,pm.summary_area_source
         FROM project_memberships pm JOIN users u ON u.id=pm.user_id
         WHERE pm.project_id=? AND pm.active=1 AND u.active=1
         ORDER BY u.sort_order,u.display_name`, activeProjectId()).map(user => ({
@@ -4974,14 +5035,15 @@ function createRepository(db, defaultProjectId) {
         if (Object.hasOwn(values, 'system_role')) fields.push('role');
         if (clean(input.password)) { values.password_hash = hashPassword(input.password); fields.push('password_hash'); }
         if (fields.length) db.prepare(`UPDATE users SET ${fields.map(field => `${field}=?`).join(',')} WHERE id=?`).run(...fields.map(field => values[field]), id);
-        if (['project_role', 'project_active', 'role', 'planner_enabled', 'assignable', 'summary_area_source'].some(field => Object.hasOwn(input, field))) {
+        if (['project_role', 'project_active', 'role', 'planner_enabled', 'assignable', 'can_manage_external_dependencies', 'summary_area_source'].some(field => Object.hasOwn(input, field))) {
           const current = one('SELECT * FROM project_memberships WHERE project_id=? AND user_id=?', activeProjectId(), id) || {};
           const summarySource = clean(input.summary_area_source || current.summary_area_source) === 'planner' ? 'planner' : 'configuration';
           const projectRole = ['project_admin', 'moderator', 'user'].includes(clean(input.project_role || input.role)) ? clean(input.project_role || input.role) : current.role || 'user';
-          db.prepare(`INSERT INTO project_memberships(project_id,user_id,role,active,planner_enabled,assignable,summary_area_source) VALUES(?,?,?,?,?,?,?)
-            ON CONFLICT(project_id,user_id) DO UPDATE SET role=excluded.role,active=excluded.active,planner_enabled=excluded.planner_enabled,assignable=excluded.assignable,summary_area_source=excluded.summary_area_source`).run(
+          db.prepare(`INSERT INTO project_memberships(project_id,user_id,role,active,planner_enabled,assignable,can_manage_external_dependencies,summary_area_source) VALUES(?,?,?,?,?,?,?,?)
+            ON CONFLICT(project_id,user_id) DO UPDATE SET role=excluded.role,active=excluded.active,planner_enabled=excluded.planner_enabled,assignable=excluded.assignable,can_manage_external_dependencies=excluded.can_manage_external_dependencies,summary_area_source=excluded.summary_area_source`).run(
             activeProjectId(), id, projectRole, Number(input.project_active ?? current.active ?? 1) ? 1 : 0,
-            Number(input.planner_enabled ?? current.planner_enabled ?? 1) ? 1 : 0, Number(input.assignable ?? current.assignable ?? 1) ? 1 : 0, summarySource
+            Number(input.planner_enabled ?? current.planner_enabled ?? 1) ? 1 : 0, Number(input.assignable ?? current.assignable ?? 1) ? 1 : 0,
+            Number(input.can_manage_external_dependencies ?? current.can_manage_external_dependencies ?? 0) ? 1 : 0, summarySource
           );
         }
         return this.users().find(user => user.id === id);
@@ -4992,7 +5054,7 @@ function createRepository(db, defaultProjectId) {
       const nextOrder = one('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM users').value;
       const systemRole = clean(input.system_role) === 'system_admin' ? 'system_admin' : 'user';
       const userId = insertRecord('users', { username: clean(input.username), display_name: clean(input.display_name), password_hash: hashPassword(input.password), role: systemRole === 'system_admin' ? 'admin' : 'user', system_role: systemRole, active: 1, sort_order: nextOrder });
-      const insertMembership = db.prepare('INSERT INTO project_memberships(project_id,user_id,role,active,planner_enabled,assignable,summary_area_source) VALUES(?,?,?,?,?,?,?)');
+      const insertMembership = db.prepare('INSERT INTO project_memberships(project_id,user_id,role,active,planner_enabled,assignable,can_manage_external_dependencies,summary_area_source) VALUES(?,?,?,?,?,?,?,?)');
       for (const project of all('SELECT id FROM projects WHERE active=1 ORDER BY id')) {
         const current = Number(project.id) === Number(activeProjectId());
         insertMembership.run(project.id, userId,
@@ -5000,6 +5062,7 @@ function createRepository(db, defaultProjectId) {
           systemRole === 'system_admin' ? 1 : current ? (Number(input.project_active ?? 1) ? 1 : 0) : 0,
           systemRole === 'system_admin' ? 0 : current ? (Number(input.planner_enabled ?? 1) ? 1 : 0) : 0,
           systemRole === 'system_admin' ? 0 : current ? (Number(input.assignable ?? 1) ? 1 : 0) : 0,
+          systemRole === 'system_admin' ? 1 : current ? (Number(input.can_manage_external_dependencies ?? 0) ? 1 : 0) : 0,
           current && clean(input.summary_area_source) === 'planner' ? 'planner' : 'configuration');
       }
       return this.users().find(user => user.id === userId);
@@ -5543,13 +5606,18 @@ function createRepository(db, defaultProjectId) {
       const value = clean(input.value);
       const kind = clean(input.kind);
       const description = clean(input.description).slice(0, 1000);
+      const externalDependencyEnabled = kind === 'waiting_for' && Number(input.external_dependency_enabled) ? 1 : 0;
       if (!value || value.length > 100) throw appError('Wartość słownika musi mieć od 1 do 100 znaków');
       if (!['shift', 'note_type', 'waiting_for', 'announcement_importance', 'meeting_goal'].includes(kind)) throw appError('Nieznany typ słownika');
       if (id) {
         const previous = one('SELECT * FROM options WHERE id=? AND project_id=?', id, activeProjectId());
         if (!previous) throw appError('Nie znaleziono pozycji słownika', 404);
-        db.prepare('UPDATE options SET value=?,kind=?,description=? WHERE id=?').run(value, kind, description, id);
-        if (previous.kind === 'waiting_for') db.prepare('UPDATE open_points SET waiting_for=? WHERE project_id=? AND waiting_for=?').run(value, activeProjectId(), previous.value);
+        db.prepare('UPDATE options SET value=?,kind=?,description=?,external_dependency_enabled=? WHERE id=?').run(value, kind, description, externalDependencyEnabled, id);
+        if (previous.kind === 'waiting_for') {
+          db.prepare('UPDATE open_points SET waiting_for=? WHERE project_id=? AND waiting_for=?').run(value, activeProjectId(), previous.value);
+          db.prepare("UPDATE external_dependencies SET party=? WHERE project_id=? AND entity_type='point' AND auto_created=1 AND party=?").run(value, activeProjectId(), previous.value);
+          for (const point of all('SELECT id FROM open_points WHERE project_id=? AND waiting_for=?', activeProjectId(), value)) syncExternalDependencyForPoint(point.id);
+        }
         if (previous.kind === 'shift') db.prepare('UPDATE daily_notes SET shift=? WHERE project_id=? AND shift=?').run(value, activeProjectId(), previous.value);
         if (previous.kind === 'note_type') {
           db.prepare('UPDATE daily_notes SET type=? WHERE project_id=? AND type=?').run(value, activeProjectId(), previous.value);
@@ -5558,7 +5626,8 @@ function createRepository(db, defaultProjectId) {
         return one('SELECT * FROM options WHERE id=?', id);
       }
       const nextOrder = one('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM options WHERE project_id=? AND kind=?', activeProjectId(), kind).value;
-      const optionId = insertRecord('options', { project_id: activeProjectId(), kind, value, description, sort_order: nextOrder, active: 1 });
+      const optionId = insertRecord('options', { project_id: activeProjectId(), kind, value, description, external_dependency_enabled: externalDependencyEnabled, sort_order: nextOrder, active: 1 });
+      if (kind === 'waiting_for') for (const point of all('SELECT id FROM open_points WHERE project_id=? AND waiting_for=?', activeProjectId(), value)) syncExternalDependencyForPoint(point.id);
       return one('SELECT * FROM options WHERE id=?', optionId);
     },
     saveStatusWorkflowState(id, input) {
@@ -5624,6 +5693,11 @@ function createRepository(db, defaultProjectId) {
           ? one('SELECT 1 FROM task_subcategories s JOIN task_categories c ON c.id=s.category_id WHERE s.id=? AND c.project_id=?', id, activeProjectId())
           : one(`SELECT 1 FROM ${table} WHERE id=? AND project_id=?`, id, activeProjectId());
       if (!belongs) throw appError('Nie znaleziono elementu konfiguracji', 404);
+      if (kind === 'option') {
+        const option = one('SELECT * FROM options WHERE id=? AND project_id=?', id, activeProjectId());
+        if (option?.kind === 'waiting_for') db.prepare(`DELETE FROM external_dependencies
+          WHERE project_id=? AND entity_type='point' AND auto_created=1 AND configuration_pending=1 AND party=?`).run(activeProjectId(), option.value);
+      }
       db.prepare(`DELETE FROM ${table} WHERE id=?`).run(id);
     },
     saveSetting(key, value) {
@@ -5727,6 +5801,7 @@ function createRepository(db, defaultProjectId) {
     meetingCandidates(from, to, currentUser) { return meetingCandidateRows(from, to, currentUser); },
     meetingSummaries(currentUser) { return meetingSummaryRows(currentUser); },
     deleteProjectMeeting(id) { return deleteProjectMeeting(id); },
+    externalDependencies(currentUser) { return externalDependencyRows(currentUser); },
     saveExternalDependency(id, input, currentUser) { return saveExternalDependency(id, input, currentUser); },
     deleteExternalDependency(id) { return deleteExternalDependency(id); },
     similarHistory(type, query, currentUser) { return similarHistory(type, query, currentUser); },
@@ -6158,6 +6233,7 @@ function createRepository(db, defaultProjectId) {
       setEntityRequirements('point', recordId, input.requirement_ids);
       if (Array.isArray(input.links)) setEntityLinks('point', recordId, input.links, currentUser);
       setEntityDependencies('point', recordId, requestedDependencies, currentUser);
+      syncExternalDependencyForPoint(recordId, currentUser);
       const after = baseSnapshot('point', recordId);
       writeAudit('point', recordId, id ? 'update' : 'create', currentUser, before, after);
       refreshDependentStatusItems('point', recordId, currentUser);

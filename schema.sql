@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS project_memberships (
   active INTEGER NOT NULL DEFAULT 1,
   planner_enabled INTEGER NOT NULL DEFAULT 1,
   assignable INTEGER NOT NULL DEFAULT 1,
+  can_manage_external_dependencies INTEGER NOT NULL DEFAULT 0,
   summary_area_source TEXT NOT NULL DEFAULT 'configuration' CHECK(summary_area_source IN ('configuration','planner')),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY(project_id,user_id)
@@ -127,6 +128,7 @@ CREATE TABLE IF NOT EXISTS options (
   kind TEXT NOT NULL,
   value TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
+  external_dependency_enabled INTEGER NOT NULL DEFAULT 0,
   sort_order INTEGER NOT NULL DEFAULT 0,
   active INTEGER NOT NULL DEFAULT 1,
   UNIQUE(project_id,kind,value)
@@ -959,6 +961,7 @@ CREATE TABLE IF NOT EXISTS project_meeting_items (
   group_key TEXT NOT NULL DEFAULT '',
   due_date TEXT,
   item_status TEXT NOT NULL DEFAULT 'open' CHECK(item_status IN ('open','decided','deferred')),
+  review_confirmed INTEGER NOT NULL DEFAULT 0,
   sort_order INTEGER NOT NULL DEFAULT 0,
   UNIQUE(meeting_id,entity_type,entity_id)
 ) STRICT;
@@ -982,7 +985,12 @@ CREATE TABLE IF NOT EXISTS external_dependencies (
   entity_id INTEGER NOT NULL,
   party TEXT NOT NULL,
   contact TEXT NOT NULL DEFAULT '',
+  contact_person TEXT NOT NULL DEFAULT '',
+  contact_email TEXT NOT NULL DEFAULT '',
+  contact_phone TEXT NOT NULL DEFAULT '',
   dependency_status TEXT NOT NULL DEFAULT 'waiting' CHECK(dependency_status IN ('waiting','responded','resolved')),
+  configuration_pending INTEGER NOT NULL DEFAULT 0,
+  auto_created INTEGER NOT NULL DEFAULT 0,
   requested_at TEXT NOT NULL,
   expected_date TEXT,
   next_followup TEXT,
