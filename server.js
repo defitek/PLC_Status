@@ -326,6 +326,8 @@ async function handleProjectApi(request, response, url, user) {
   if (meetingPublish && method === 'POST') { requireRole(user, 'moderator'); return json(response, 200, repository.publishProjectMeeting(Number(meetingPublish[1]), user)); }
   if (method === 'GET' && path === '/api/external-dependencies') return json(response, 200, repository.externalDependencies(user));
   if (method === 'POST' && path === '/api/external-dependencies') { requireExternalDependencyAccess(user); return json(response, 201, repository.saveExternalDependency(null, await readJson(request), user)); }
+  const externalDependencyUpdate = path.match(/^\/api\/external-dependencies\/(\d+)\/updates$/);
+  if (externalDependencyUpdate && method === 'POST') { requireExternalDependencyAccess(user); return json(response, 201, repository.saveExternalDependencyUpdate(Number(externalDependencyUpdate[1]), await readJson(request), user)); }
   const externalDependencyId = numericId(path, '/api/external-dependencies');
   if (externalDependencyId !== null) {
     requireExternalDependencyAccess(user);

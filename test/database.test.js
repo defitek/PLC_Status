@@ -219,7 +219,7 @@ test('V23 publishes meeting snapshots, supports unnamed groups and targets statu
   }
 });
 
-test('V24 links configured open points with external dependencies and requires item review confirmation', () => {
+test('V25 tracks external dependency communication and requires meeting item review confirmation', () => {
   const temporary = temporaryDatabase();
   const repository = openDatabase(temporary.path);
   try {
@@ -238,6 +238,7 @@ test('V24 links configured open points with external dependencies and requires i
     assert.equal(dependency.configuration_pending, 1);
     assert.equal(dependency.auto_created, 1);
     assert.equal(dependency.party, waiting.value);
+    assert.equal(dependency.requested_at, '');
 
     dependency = repository.saveExternalDependency(dependency.id, {
       entity_type: 'point', entity_id: point.id, party: waiting.value, contact_person: 'Anna Projektant',
@@ -245,6 +246,29 @@ test('V24 links configured open points with external dependencies and requires i
     }, admin);
     assert.equal(dependency.configuration_pending, 0);
     assert.equal(dependency.contact_person, 'Anna Projektant');
+    assert.equal(dependency.updates.length, 1);
+    assert.equal(dependency.updates[0].update_type, 'reported');
+
+    dependency = repository.saveExternalDependencyUpdate(dependency.id, {
+      dependency_status: 'responded', response_context: 'Otrzymano poprawiony schemat', response_date: '2026-10-28'
+    }, admin);
+    assert.equal(dependency.dependency_status, 'responded');
+    assert.equal(dependency.updates.length, 2);
+    assert.equal(dependency.updates[1].previous_status, 'waiting');
+    assert.equal(dependency.updates[1].response_context, 'Otrzymano poprawiony schemat');
+    assert.equal(dependency.updates[1].response_date, '2026-10-28');
+
+    dependency = repository.saveExternalDependencyUpdate(dependency.id, {
+      dependency_status: 'waiting', response_context: 'Wysłano uwagi do kolejnej wersji',
+      our_response_date: '2026-10-29', expected_date: '2026-11-02', next_followup: '2026-11-03',
+      contact_person: 'Anna Projektant'
+    }, admin);
+    assert.equal(dependency.dependency_status, 'waiting');
+    assert.equal(dependency.expected_date, '2026-11-02');
+    assert.equal(dependency.next_followup, '2026-11-03');
+    assert.equal(dependency.updates.length, 3);
+    assert.equal(dependency.updates[2].previous_status, 'responded');
+    assert.equal(dependency.updates[2].our_response_date, '2026-10-29');
 
     const meeting = repository.saveProjectMeeting(null, {
       period_from: '2026-10-26', period_to: '2026-10-30', title: 'V24 point review',
@@ -1353,7 +1377,7 @@ test('status handovers support meetings, risk and historical suggestions', () =>
 
       const backup = repository.projectBackup();
       assert.equal(backup.version, 1);
-      for (const table of ['daily_note_sections', 'project_meetings', 'project_meeting_item_assignees', 'external_dependencies', 'status_workflow_states']) assert.ok(Array.isArray(backup.tables[table]));
+      for (const table of ['daily_note_sections', 'project_meetings', 'project_meeting_item_assignees', 'external_dependencies', 'external_dependency_updates', 'status_workflow_states']) assert.ok(Array.isArray(backup.tables[table]));
       const taskCount = repository.tasks('all', admin).length;
       repository.saveTask(null, { controller: controller.code, title: 'Tymczasowy rekord V13' }, admin);
       repository.restoreProjectBackup(backup);

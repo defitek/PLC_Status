@@ -1001,6 +1001,23 @@ CREATE TABLE IF NOT EXISTS external_dependencies (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS external_dependency_updates (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  dependency_id INTEGER NOT NULL REFERENCES external_dependencies(id) ON DELETE CASCADE,
+  update_type TEXT NOT NULL DEFAULT 'communication' CHECK(update_type IN ('reported','communication')),
+  previous_status TEXT NOT NULL DEFAULT '',
+  dependency_status TEXT NOT NULL CHECK(dependency_status IN ('waiting','responded')),
+  response_context TEXT NOT NULL DEFAULT '',
+  response_date TEXT,
+  our_response_date TEXT,
+  expected_date TEXT,
+  next_followup TEXT,
+  contact_person TEXT NOT NULL DEFAULT '',
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS entity_edit_locks (
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point','goal')),
@@ -1022,6 +1039,7 @@ CREATE INDEX IF NOT EXISTS idx_status_columns_scope ON status_columns(status_gro
 CREATE INDEX IF NOT EXISTS idx_status_workflow_project ON status_workflow_states(project_id,included,sort_order);
 CREATE INDEX IF NOT EXISTS idx_tasks_controller_status ON tasks(controller_id,status);
 CREATE INDEX IF NOT EXISTS idx_points_controller_status ON open_points(controller_id,status);
+CREATE INDEX IF NOT EXISTS idx_external_dependency_updates ON external_dependency_updates(dependency_id,created_at,id);
 CREATE INDEX IF NOT EXISTS idx_notes_controller_date ON daily_notes(controller_id,note_date DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type,entity_id,changed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_log(user_id,changed_at DESC);

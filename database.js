@@ -80,6 +80,7 @@ export function openDatabase(databasePath) {
   migrateToV22(db);
   migrateToV23(db);
   migrateToV24(db);
+  migrateToV25(db);
   migrateSecurityFoundation(db);
   migrateStatusWorkflow(db);
   migrateEntityDependencies(db);
@@ -118,6 +119,7 @@ export function openDatabase(databasePath) {
   migrateToV22(db);
   migrateToV23(db);
   migrateToV24(db);
+  migrateToV25(db);
   migrateSecurityFoundation(db);
   migrateStatusWorkflow(db);
   migrateEntityDependencies(db);
@@ -500,6 +502,38 @@ function migrateToV24(db) {
   ensureColumn(db, 'external_dependencies', 'auto_created', 'INTEGER NOT NULL DEFAULT 0');
   db.exec(`UPDATE project_meeting_items SET review_confirmed=1
     WHERE review_confirmed=0 AND meeting_id IN (SELECT id FROM project_meetings WHERE status='closed')`);
+}
+
+function migrateToV25(db) {
+  db.exec(`CREATE TABLE IF NOT EXISTS external_dependency_updates (
+    id INTEGER PRIMARY KEY,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    dependency_id INTEGER NOT NULL REFERENCES external_dependencies(id) ON DELETE CASCADE,
+    update_type TEXT NOT NULL DEFAULT 'communication' CHECK(update_type IN ('reported','communication')),
+    previous_status TEXT NOT NULL DEFAULT '',
+    dependency_status TEXT NOT NULL CHECK(dependency_status IN ('waiting','responded')),
+    response_context TEXT NOT NULL DEFAULT '',
+    response_date TEXT,
+    our_response_date TEXT,
+    expected_date TEXT,
+    next_followup TEXT,
+    contact_person TEXT NOT NULL DEFAULT '',
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  ) STRICT;
+  CREATE INDEX IF NOT EXISTS idx_external_dependency_updates ON external_dependency_updates(dependency_id,created_at,id);
+  UPDATE external_dependencies SET requested_at='' WHERE configuration_pending=1;
+  INSERT INTO external_dependency_updates(
+    project_id,dependency_id,update_type,previous_status,dependency_status,response_context,response_date,
+    our_response_date,expected_date,next_followup,contact_person,created_by,created_at
+  )
+  SELECT ed.project_id,ed.id,'reported','unreported',
+    CASE WHEN ed.dependency_status IN ('responded','resolved') THEN 'responded' ELSE 'waiting' END,
+    CASE WHEN TRIM(ed.note)!='' THEN ed.note ELSE 'Stan początkowy zależności przeniesiony do historii komunikacji.' END,
+    NULL,ed.requested_at,ed.expected_date,ed.next_followup,ed.contact_person,ed.created_by,ed.created_at
+  FROM external_dependencies ed
+  WHERE ed.configuration_pending=0
+    AND NOT EXISTS (SELECT 1 FROM external_dependency_updates edu WHERE edu.dependency_id=ed.id);`);
 }
 
 function migrateSecurityFoundation(db) {
@@ -2775,7 +2809,7 @@ function createRepository(db, defaultProjectId) {
     ['project_meetings', 'project_id=?'], ['project_meeting_items', 'meeting_id IN (SELECT id FROM project_meetings WHERE project_id=?)'],
     ['project_meeting_item_assignees', 'meeting_item_id IN (SELECT pmi.id FROM project_meeting_items pmi JOIN project_meetings pm ON pm.id=pmi.meeting_id WHERE pm.project_id=?)'],
     ['project_meeting_item_workers', 'meeting_item_id IN (SELECT pmi.id FROM project_meeting_items pmi JOIN project_meetings pm ON pm.id=pmi.meeting_id WHERE pm.project_id=?)'],
-    ['external_dependencies', 'project_id=?'],
+    ['external_dependencies', 'project_id=?'], ['external_dependency_updates', 'project_id=?'],
     ['monthly_employee_reviews', 'project_id=?'], ['monthly_employee_review_items', 'project_id=?'],
     ['monthly_employee_review_audit', 'review_id IN (SELECT id FROM monthly_employee_reviews WHERE project_id=?)'],
     ['audit_log', 'project_id=?'], ['export_templates', 'project_id=?'], ['project_sequences', 'project_id=?']
@@ -2789,7 +2823,7 @@ function createRepository(db, defaultProjectId) {
     'export_templates', 'project_sequences', 'project_user_areas', 'planner_entries', 'planner_requirements', 'planner_holidays', 'planner_absences', 'planner_time_adjustments',
     'announcements', 'announcement_labels', 'announcement_scopes', 'announcement_users', 'announcement_links', 'announcement_label_links', 'announcement_reads', 'calendar_annotations', 'calendar_annotation_scopes', 'calendar_item_dates',
     'shift_handovers', 'shift_handover_items', 'automation_rules', 'automation_rule_hits', 'saved_views',
-    'project_meetings', 'project_meeting_items', 'project_meeting_item_assignees', 'project_meeting_item_workers', 'external_dependencies',
+    'project_meetings', 'project_meeting_items', 'project_meeting_item_assignees', 'project_meeting_item_workers', 'external_dependencies', 'external_dependency_updates',
     'monthly_employee_reviews', 'monthly_employee_review_items', 'monthly_employee_review_audit'
   ];
 
@@ -4397,7 +4431,7 @@ function createRepository(db, defaultProjectId) {
       insertRecord('external_dependencies', {
         project_id: activeProjectId(), entity_type: 'point', entity_id: point.id, party: point.waiting_for,
         contact: '', contact_person: '', contact_email: '', contact_phone: '', dependency_status: 'waiting',
-        configuration_pending: 1, auto_created: 1, requested_at: new Date().toISOString().slice(0, 10),
+        configuration_pending: 1, auto_created: 1, requested_at: '',
         expected_date: null, next_followup: null, owner_user_id: null, note: '', created_by: currentUser?.id || point.created_by || null
       });
     } else if (configured && existing?.auto_created && existing.party !== point.waiting_for) {
@@ -4414,7 +4448,13 @@ function createRepository(db, defaultProjectId) {
       JOIN open_points p ON p.id=ed.entity_id AND p.project_id=ed.project_id AND ed.entity_type='point'
       LEFT JOIN users u ON u.id=ed.owner_user_id LEFT JOIN users creator ON creator.id=ed.created_by
       WHERE ed.project_id=? ORDER BY ed.configuration_pending DESC,ed.dependency_status='resolved',ed.next_followup IS NULL,ed.next_followup,ed.id DESC`, activeProjectId())
-      .map(row => ({ ...row, entity: operationEntity('point', row.entity_id, currentUser) }));
+      .map(row => ({ ...row, entity: operationEntity('point', row.entity_id, currentUser), updates: externalDependencyUpdateRows(row.id) }));
+  }
+
+  function externalDependencyUpdateRows(dependencyId) {
+    return all(`SELECT edu.*,u.display_name created_by_name FROM external_dependency_updates edu
+      LEFT JOIN users u ON u.id=edu.created_by
+      WHERE edu.project_id=? AND edu.dependency_id=? ORDER BY edu.created_at,edu.id`, activeProjectId(), asId(dependencyId));
   }
 
   function saveExternalDependency(id, input, currentUser) {
@@ -4429,11 +4469,14 @@ function createRepository(db, defaultProjectId) {
     const contactPerson = clean(input.contact_person); if (!contactPerson) throw appError('Wskaż osobę kontaktową dla zależności');
     const contactEmail = clean(input.contact_email);
     const contactPhone = clean(input.contact_phone);
+    const requestedStatus = clean(input.dependency_status);
+    const dependencyStatus = ['waiting', 'responded'].includes(requestedStatus) ? requestedStatus : previous?.dependency_status === 'responded' ? 'responded' : 'waiting';
+    const firstReport = !previous || Number(previous.configuration_pending) !== 0;
     const values = {
       project_id: activeProjectId(), entity_type: 'point', entity_id: entityId, party,
       contact: [contactPerson, contactEmail, contactPhone].filter(Boolean).join(' · '), contact_person: contactPerson,
       contact_email: contactEmail, contact_phone: contactPhone,
-      dependency_status: ['waiting', 'responded', 'resolved'].includes(clean(input.dependency_status)) ? clean(input.dependency_status) : 'waiting',
+      dependency_status: dependencyStatus,
       configuration_pending: 0, auto_created: Number(previous?.auto_created || 0),
       requested_at: nullableDate(input.requested_at) || previous?.requested_at || new Date().toISOString().slice(0, 10),
       expected_date: nullableDate(input.expected_date), next_followup: nullableDate(input.next_followup),
@@ -4442,7 +4485,41 @@ function createRepository(db, defaultProjectId) {
     let savedId = recordId;
     if (savedId) updateRecord('external_dependencies', savedId, values, Object.keys(values));
     else savedId = insertRecord('external_dependencies', { ...values, created_by: currentUser.id });
+    if (firstReport) insertRecord('external_dependency_updates', {
+      project_id: activeProjectId(), dependency_id: savedId, update_type: 'reported', previous_status: 'unreported', dependency_status: dependencyStatus,
+      response_context: clean(input.note) || 'Zależność została zgłoszona do osoby kontaktowej.', response_date: null,
+      our_response_date: values.requested_at, expected_date: values.expected_date, next_followup: values.next_followup,
+      contact_person: contactPerson, created_by: currentUser?.id || null
+    });
     return externalDependencyRows(currentUser).find(item => item.id === savedId);
+  }
+
+  function saveExternalDependencyUpdate(id, input, currentUser) {
+    const dependency = one("SELECT * FROM external_dependencies WHERE id=? AND project_id=? AND entity_type='point' AND configuration_pending=0", asId(id), activeProjectId());
+    if (!dependency) throw appError('Najpierw skonfiguruj i zgłoś zależność zewnętrzną', 404);
+    const dependencyStatus = ['waiting', 'responded'].includes(clean(input.dependency_status)) ? clean(input.dependency_status) : null;
+    if (!dependencyStatus) throw appError('Wybierz status aktualizacji zależności');
+    const context = clean(input.response_context); if (!context) throw appError('Dodaj kontekst aktualizacji lub odpowiedzi');
+    const waiting = dependencyStatus === 'waiting';
+    const contactPerson = waiting ? clean(input.contact_person || dependency.contact_person) : dependency.contact_person;
+    if (waiting && !contactPerson) throw appError('Wskaż osobę kontaktową uwzględnioną w kolejnych krokach');
+    const responseDate = dependencyStatus === 'responded' ? nullableDate(input.response_date) || new Date().toISOString().slice(0, 10) : null;
+    const ourResponseDate = waiting ? nullableDate(input.our_response_date) : null;
+    const expectedDate = waiting ? nullableDate(input.expected_date) : null;
+    const nextFollowup = waiting ? nullableDate(input.next_followup) : null;
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      insertRecord('external_dependency_updates', {
+        project_id: activeProjectId(), dependency_id: dependency.id, update_type: 'communication', previous_status: dependency.dependency_status,
+        dependency_status: dependencyStatus, response_context: context, response_date: responseDate, our_response_date: ourResponseDate,
+        expected_date: expectedDate, next_followup: nextFollowup, contact_person: contactPerson, created_by: currentUser.id
+      });
+      const contact = [contactPerson, dependency.contact_email, dependency.contact_phone].filter(Boolean).join(' · ');
+      db.prepare(`UPDATE external_dependencies SET dependency_status=?,contact_person=?,contact=?,expected_date=?,next_followup=?,updated_at=CURRENT_TIMESTAMP
+        WHERE id=? AND project_id=?`).run(dependencyStatus, contactPerson, contact, expectedDate, nextFollowup, dependency.id, activeProjectId());
+      db.exec('COMMIT');
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
+    return externalDependencyRows(currentUser).find(item => item.id === dependency.id);
   }
 
   function deleteExternalDependency(id) {
@@ -5803,6 +5880,7 @@ function createRepository(db, defaultProjectId) {
     deleteProjectMeeting(id) { return deleteProjectMeeting(id); },
     externalDependencies(currentUser) { return externalDependencyRows(currentUser); },
     saveExternalDependency(id, input, currentUser) { return saveExternalDependency(id, input, currentUser); },
+    saveExternalDependencyUpdate(id, input, currentUser) { return saveExternalDependencyUpdate(id, input, currentUser); },
     deleteExternalDependency(id) { return deleteExternalDependency(id); },
     similarHistory(type, query, currentUser) { return similarHistory(type, query, currentUser); },
     handovers(currentUser) { return handoverRows(currentUser); },
