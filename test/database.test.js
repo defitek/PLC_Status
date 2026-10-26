@@ -1377,7 +1377,7 @@ test('status handovers support meetings, risk and historical suggestions', () =>
 
       const backup = repository.projectBackup();
       assert.equal(backup.version, 1);
-      for (const table of ['daily_note_sections', 'project_meetings', 'project_meeting_item_assignees', 'external_dependencies', 'external_dependency_updates', 'status_workflow_states']) assert.ok(Array.isArray(backup.tables[table]));
+      for (const table of ['daily_note_sections', 'project_meetings', 'project_meeting_item_assignees', 'external_dependencies', 'external_dependency_updates', 'planner_overlap_reviews', 'status_workflow_states']) assert.ok(Array.isArray(backup.tables[table]));
       const taskCount = repository.tasks('all', admin).length;
       repository.saveTask(null, { controller: controller.code, title: 'Tymczasowy rekord V13' }, admin);
       repository.restoreProjectBackup(backup);
