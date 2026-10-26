@@ -155,7 +155,7 @@ test('V20 supports hierarchical annotations, meeting priorities and review histo
   }
 });
 
-test('V22 publishes explicit meeting snapshots, groups numbered priorities and targets status-transfer notifications', () => {
+test('V23 publishes meeting snapshots, supports unnamed groups and targets status-transfer notifications', () => {
   const temporary = temporaryDatabase();
   const repository = openDatabase(temporary.path);
   try {
@@ -167,9 +167,10 @@ test('V22 publishes explicit meeting snapshots, groups numbered priorities and t
 
     const meeting = repository.saveProjectMeeting(null, {
       period_from: '2026-10-25', period_to: '2026-10-31', title: 'V21 private plan', status: 'open',
-      items: [{ entity_type: 'task', entity_id: task.id, group_name: 'Rozruch linii', objective: 'Ukończenie', meeting_priority: 2, item_status: 'open' }]
+      items: [{ entity_type: 'task', entity_id: task.id, group_name: '', group_key: 'group:v23-commissioning', objective: 'Ukończenie', meeting_priority: 2, item_status: 'open' }]
     }, admin);
-    assert.equal(meeting.items[0].group_name, 'Rozruch linii');
+    assert.equal(meeting.items[0].group_name, '');
+    assert.equal(meeting.items[0].group_key, 'group:v23-commissioning');
     assert.equal(meeting.items[0].meeting_priority, '2');
     assert.equal(repository.meetingSummaries(admin).some(item => item.id === meeting.id), false, 'a draft should not appear in the manager Informator');
     assert.equal(repository.meetingSummaries(workerOne).some(item => item.id === meeting.id), false, 'a worker should not see a draft');
@@ -180,6 +181,7 @@ test('V22 publishes explicit meeting snapshots, groups numbered priorities and t
 
     const firstPublication = repository.publishProjectMeeting(meeting.id, admin);
     assert.ok(repository.meetingSummaries(workerOne).some(item => item.id === meeting.id), 'publishing should expose the plan');
+    assert.equal(repository.meetingSummaries(workerOne).find(item => item.id === meeting.id).items[0].group_key, 'group:v23-commissioning');
     const meetingNotificationsAfterPublish = repository.notifications(workerOne).filter(item => item.kind === 'meeting' && item.entity_id === meeting.id).length;
     const renamed = repository.saveProjectMeeting(meeting.id, { ...meeting, title: 'V21 renamed plan', items: meeting.items }, admin);
     assert.equal(renamed.title, 'V21 renamed plan');

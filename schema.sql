@@ -956,6 +956,7 @@ CREATE TABLE IF NOT EXISTS project_meeting_items (
   owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
   status_changed_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
   group_name TEXT NOT NULL DEFAULT '',
+  group_key TEXT NOT NULL DEFAULT '',
   due_date TEXT,
   item_status TEXT NOT NULL DEFAULT 'open' CHECK(item_status IN ('open','decided','deferred')),
   sort_order INTEGER NOT NULL DEFAULT 0,

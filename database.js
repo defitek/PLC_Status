@@ -78,6 +78,7 @@ export function openDatabase(databasePath) {
   migrateToV20(db);
   migrateToV21(db);
   migrateToV22(db);
+  migrateToV23(db);
   migrateSecurityFoundation(db);
   migrateStatusWorkflow(db);
   migrateEntityDependencies(db);
@@ -114,6 +115,7 @@ export function openDatabase(databasePath) {
   migrateToV20(db);
   migrateToV21(db);
   migrateToV22(db);
+  migrateToV23(db);
   migrateSecurityFoundation(db);
   migrateStatusWorkflow(db);
   migrateEntityDependencies(db);
@@ -158,6 +160,7 @@ function ensureProjectMeetingFeatures(db) {
   ensureColumn(db, 'project_meeting_items', 'baseline_json', "TEXT NOT NULL DEFAULT '{}'");
   ensureColumn(db, 'project_meeting_items', 'status_changed_by_user_id', 'INTEGER');
   ensureColumn(db, 'project_meeting_items', 'group_name', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, 'project_meeting_items', 'group_key', "TEXT NOT NULL DEFAULT ''");
   ensureColumn(db, 'project_meetings', 'published_at', 'TEXT');
   ensureColumn(db, 'project_meetings', 'published_announcement_id', 'INTEGER');
   ensureColumn(db, 'project_meetings', 'published_snapshot_json', "TEXT NOT NULL DEFAULT '{}'");
@@ -476,6 +479,11 @@ function migrateToV22(db) {
     const { published_snapshot_json: ignored, ...snapshot } = meeting;
     saveSnapshot.run(JSON.stringify({ ...snapshot, period_from: meeting.period_from || meeting.meeting_date, period_to: meeting.period_to || meeting.meeting_date, items }), meeting.id);
   });
+}
+
+function migrateToV23(db) {
+  ensureColumn(db, 'project_meeting_items', 'group_key', "TEXT NOT NULL DEFAULT ''");
+  db.exec("UPDATE project_meeting_items SET group_key='legacy:'||group_name WHERE group_key='' AND group_name!=''");
 }
 
 function migrateSecurityFoundation(db) {
@@ -4190,6 +4198,7 @@ function createRepository(db, defaultProjectId) {
         period_to: source.period_to || meeting.period_to || meeting.meeting_date,
         status: source.status || meeting.status,
         summary: source.summary ?? meeting.summary,
+        updated_at: source.updated_at || meeting.published_at,
         closed_at: source.closed_at || null,
         closed_by_name: source.closed_by_name || '',
         created_by_name: source.created_by_name || meeting.created_by_name
@@ -4284,8 +4293,8 @@ function createRepository(db, defaultProjectId) {
       else recordId = insertRecord('project_meetings', { ...values, created_by: currentUser.id });
       const existing = new Map(all('SELECT * FROM project_meeting_items WHERE meeting_id=?', recordId).map(item => [`${item.entity_type}:${item.entity_id}`, item]));
       const requestedKeys = new Set();
-      const upsert = db.prepare(`INSERT INTO project_meeting_items(meeting_id,entity_type,entity_id,decision,objective,outcome_comment,target_status,meeting_priority,baseline_json,owner_user_id,status_changed_by_user_id,group_name,due_date,item_status,sort_order)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(meeting_id,entity_type,entity_id) DO UPDATE SET decision=excluded.decision,objective=excluded.objective,outcome_comment=excluded.outcome_comment,target_status=excluded.target_status,meeting_priority=excluded.meeting_priority,owner_user_id=excluded.owner_user_id,status_changed_by_user_id=excluded.status_changed_by_user_id,group_name=excluded.group_name,due_date=excluded.due_date,item_status=excluded.item_status,sort_order=excluded.sort_order`);
+      const upsert = db.prepare(`INSERT INTO project_meeting_items(meeting_id,entity_type,entity_id,decision,objective,outcome_comment,target_status,meeting_priority,baseline_json,owner_user_id,status_changed_by_user_id,group_name,group_key,due_date,item_status,sort_order)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(meeting_id,entity_type,entity_id) DO UPDATE SET decision=excluded.decision,objective=excluded.objective,outcome_comment=excluded.outcome_comment,target_status=excluded.target_status,meeting_priority=excluded.meeting_priority,owner_user_id=excluded.owner_user_id,status_changed_by_user_id=excluded.status_changed_by_user_id,group_name=excluded.group_name,group_key=excluded.group_key,due_date=excluded.due_date,item_status=excluded.item_status,sort_order=excluded.sort_order`);
       const projectUserIds = new Set(all('SELECT user_id FROM project_memberships WHERE project_id=? AND active=1', activeProjectId()).map(row => Number(row.user_id)));
       prepared.forEach(({ item, entity }, index) => {
         const key = `${item.entity_type}:${Number(item.entity_id)}`; requestedKeys.add(key);
@@ -4294,9 +4303,11 @@ function createRepository(db, defaultProjectId) {
         const legacyPriority = ({ Critical: 1, High: 3, Medium: 5, Low: 8 })[clean(item.meeting_priority)];
         const entityPriority = ({ Critical: 1, High: 3, Medium: 5, Low: 8 })[entity.priority] || 5;
         const meetingPriority = String(Number.isInteger(requestedPriority) && requestedPriority >= 1 && requestedPriority <= 10 ? requestedPriority : legacyPriority || entityPriority);
+        const groupName = clean(item.group_name).slice(0, 120);
+        const groupKey = clean(item.group_key || (groupName ? `legacy:${groupName}` : '')).slice(0, 160);
         const assignmentIds = Array.isArray(item.assignee_user_ids) ? item.assignee_user_ids : (item.owner_user_id ? [item.owner_user_id] : entity.assignee_user_ids || []);
         const statusChangedByUserId = asId(item.status_changed_by_user_id); if (statusChangedByUserId && !projectUserIds.has(statusChangedByUserId)) throw appError('Osoba zmieniająca status nie należy do projektu');
-        upsert.run(recordId, item.entity_type, asId(item.entity_id), clean(item.decision), clean(item.objective) || 'Kontynuacja', clean(item.outcome_comment), clean(item.target_status), meetingPriority, JSON.stringify(entity), asId(item.owner_user_id || assignmentIds[0]), statusChangedByUserId, clean(item.group_name).slice(0, 120), nullableDate(item.due_date), itemStatus, index);
+        upsert.run(recordId, item.entity_type, asId(item.entity_id), clean(item.decision), clean(item.objective) || 'Kontynuacja', clean(item.outcome_comment), clean(item.target_status), meetingPriority, JSON.stringify(entity), asId(item.owner_user_id || assignmentIds[0]), statusChangedByUserId, groupName, groupKey, nullableDate(item.due_date), itemStatus, index);
         const savedItem = one('SELECT * FROM project_meeting_items WHERE meeting_id=? AND entity_type=? AND entity_id=?', recordId, item.entity_type, asId(item.entity_id));
         setMeetingUsers('project_meeting_item_assignees', savedItem.id, assignmentIds);
         setMeetingUsers('project_meeting_item_workers', savedItem.id, item.worker_user_ids || []);
