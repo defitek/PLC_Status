@@ -353,6 +353,7 @@ test('configured controller order survives a database restart', () => {
     const duplicate = corrupted.prepare('INSERT INTO controller_groups(project_id,parent_id,name,sort_order) VALUES(?,NULL,?,?)');
     duplicate.run(root.project_id, root.name, root.sort_order);
     duplicate.run(root.project_id, root.name, root.sort_order);
+    corrupted.prepare("DELETE FROM schema_migrations WHERE id='039-remove-duplicate-controller-roots'").run();
     corrupted.close();
     repository = openDatabase(temporary.path);
     assert.deepEqual(repository.controllers().map(item => item.id), reversed);
@@ -369,6 +370,27 @@ test('configured controller order survives a database restart', () => {
     }, countsBeforeRestart);
   } finally {
     repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
+test('migration ledger applies every migration only once', () => {
+  const temporary = temporaryDatabase();
+  let repository = openDatabase(temporary.path);
+  repository.close();
+  const first = new DatabaseSync(temporary.path);
+  const applied = first.prepare('SELECT id,applied_at FROM schema_migrations ORDER BY id').all();
+  first.close();
+  assert.ok(applied.length >= 46);
+  assert.equal(new Set(applied.map(item => item.id)).size, applied.length);
+
+  repository = openDatabase(temporary.path);
+  repository.close();
+  const reopened = new DatabaseSync(temporary.path);
+  try {
+    assert.deepEqual(reopened.prepare('SELECT id,applied_at FROM schema_migrations ORDER BY id').all(), applied);
+  } finally {
+    reopened.close();
     rmSync(temporary.directory, { recursive: true, force: true });
   }
 });
@@ -561,6 +583,7 @@ test('existing status text columns migrate to identifying basic columns', () => 
 
     const legacy = new DatabaseSync(temporary.path);
     legacy.exec('ALTER TABLE status_columns DROP COLUMN column_role');
+    legacy.prepare("DELETE FROM schema_migrations WHERE id='029-status-matrix-columns'").run();
     legacy.close();
 
     repository = openDatabase(temporary.path);
@@ -1568,6 +1591,7 @@ test('retired commissioning and Definition of Done workflow are removed from exi
     CREATE TABLE readiness_gates(id INTEGER PRIMARY KEY);
     CREATE TABLE entity_requirement_status(id INTEGER PRIMARY KEY);
   `);
+  legacy.prepare("DELETE FROM schema_migrations WHERE id IN ('035-remove-commissioning-module','036-remove-definition-of-done')").run();
   legacy.close();
 
   const repository = openDatabase(temporary.path);

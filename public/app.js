@@ -1,13 +1,22 @@
 import { createTableTools } from './modules/table-tools.js?v=1.7.0';
+import {
+  DEFAULT_STATUS_WORKFLOW_STATES,
+  PRIORITY_DEFINITIONS,
+  PRIORITY_VALUES,
+  statusDefinitions,
+  statusValues,
+  workflowLabel,
+  workflowTone
+} from './modules/workflow-model.js?v=1.0.0';
 
 const state = {
   view: 'mine', controller: 'all', me: null, projects: [], controllerGroups: [], controllers: [], users: [],
   config: { categories: [], task_categories: [], function_groups: [], status_groups: [], options: [], announcement_labels: [], requirements: [], settings: {} },
   overview: null, announcements: [], meetingSummaries: [], notifications: [], navigationCounts: {}, mine: null, dashboard: {}, status: [], tasks: [], points: [], externalDependencies: [], notes: [], goals: [], planner: null, calendar: null, history: [], savedViews: [], operations: null, employeeReviews: [], securityEvents: [], reviewPeriod: new Date().toISOString().slice(0, 7), loadSequence: 0,
-  dialog: null, dialogInitial: '', dirtyCloseAttempt: new WeakSet(), goalDraftLinks: [], goalPickerCollections: null, linkDraft: [], statusMode: 'list', taskMode: 'board', taskShowCompleted: false, pointMode: 'list', pointSection: 'points', trendPeriod: 'week',
+  dialog: null, dialogStack: [], dialogInitial: '', dirtyCloseAttempt: new WeakSet(), goalDraftLinks: [], goalPickerCollections: null, linkDraft: [], statusMode: 'list', taskMode: 'board', taskShowCompleted: false, pointMode: 'list', pointSection: 'points', trendPeriod: 'week',
   functionGroupController: '', functionPointGroup: null, functionPointDraft: [],
   notesFrom: '', notesTo: '', notesWeek: '', draggingTask: false, plannerFrom: '', plannerDays: 14, plannerShowHours: false,
-  plannerCell: null, plannerClipboard: null, plannerDragEntry: null, plannerDragDay: null, plannerDragging: false, plannerSelection: new Set(), plannerEntrySelection: new Set(), plannerSelectionAbort: null, calendarFrom: '', calendarTo: '', calendarMode: 'week', calendarTypes: ['task', 'point', 'status', 'goal', 'note', 'annotation'], calendarPriorities: ['Low', 'Medium', 'High', 'Critical'], calendarOnlyMine: false, calendarCategory: '', calendarPlanner: null, calendarPlanningVisible: false, calendarRequirementEdit: false,
+  plannerCell: null, plannerClipboard: null, plannerDragEntry: null, plannerDragDay: null, plannerDragging: false, plannerSelection: new Set(), plannerEntrySelection: new Set(), plannerSelectionAbort: null, calendarFrom: '', calendarTo: '', calendarMode: 'week', calendarTypes: ['task', 'point', 'status', 'goal', 'note', 'annotation'], calendarPriorities: [...PRIORITY_VALUES], calendarOnlyMine: false, calendarCategory: '', calendarPlanner: null, calendarPlanningVisible: false, calendarRequirementEdit: false,
   plannerRequirementEdit: false, requirementProjectId: null, requirementLevel: 'areas', requirementFrom: '', requirementDays: 14, requirementData: null, requirementDraft: new Map(), requirementBaseline: new Map(), requirementDirty: new Set(), requirementSelection: null, requirementCollapsedGroups: new Set(), requirementGridAbort: null, requirementPointerSelecting: false, requirementFill: null,
   kpiModules: ['status', 'tasks', 'points', 'goals'], globalTrendMode: 'combined', overviewDetailed: false, detailedKpiMode: 'combined', detailedKpiPeriod: 'week', linkPickerAllowed: [], linkPickerDraft: [], linkPickerCollections: null, actionResolve: null, actionDialogGeneration: 0, actionClosingGeneration: 0, configPanel: null, configScroll: 0, hierarchySelection: null, dailySummaryOpening: false,
   selectionContext: null, selectionDraft: [], selectionCollections: null, duplicateSource: null, checklistTask: null, notificationSeen: new Set(),
@@ -52,24 +61,15 @@ const pageCopy = {
   settings: ['Konfiguracja', 'Kolejność, sterowniki, użytkownicy, kategorie i słowniki', '']
 };
 
+const sharedWorkflowDefinitions = [...DEFAULT_STATUS_WORKFLOW_STATES, ...statusDefinitions('task'), ...statusDefinitions('point'), ...statusDefinitions('goal'), ...PRIORITY_DEFINITIONS];
 const badgeMap = {
-  Done: ['Gotowe', 'green'], 'In progress': ['W trakcie', 'blue'], 'Ready to test': ['Gotowe do sprawdzenia', 'amber'],
-  'Never checked': ['Nigdy nie sprawdzone', 'gray'],
-  Blocked: ['Zablokowany', 'red'], 'NOK / Retest required': ['NOK / wymagany retest', 'red'], 'NOK / Rework': ['NOK / wymagany retest', 'red'], 'Retest required': ['NOK / wymagany retest', 'red'],
-  'Not started': ['Nie rozpoczęto', 'gray'], 'N/A': ['N/A', 'gray'], 'To do': ['Do zrobienia', 'gray'],
-  Open: ['Otwarte', 'red'], Waiting: ['Oczekiwanie', 'amber'], Closed: ['Zamknięte', 'green'],
-  Critical: ['Krytyczny', 'red'], High: ['Wysoki', 'amber'], Medium: ['Średni', 'blue'], Low: ['Niski', 'green'],
+  ...Object.fromEntries(sharedWorkflowDefinitions.map(item => [item.value, [workflowLabel(item.value), workflowTone(item.value)]])),
+  'NOK / Rework': [workflowLabel('NOK / Retest required', 'status'), workflowTone('NOK / Retest required', 'status')],
+  'Retest required': [workflowLabel('NOK / Retest required', 'status'), workflowTone('NOK / Retest required', 'status')],
+  'Not started': [workflowLabel('Ready to test', 'status'), 'gray'],
   published: ['Opublikowana', 'green'], draft: ['Wersja robocza', 'gray'], archived: ['Archiwalna', 'gray']
 };
-const fallbackStatusWorkflowStates = [
-  { value: 'Never checked', label: 'Nigdy nie sprawdzone', icon: '◎', description: 'Nikt jeszcze nie zweryfikował tego punktu.', system_key: 'never_checked', included: 1 },
-  { value: 'Ready to test', label: 'Gotowe do sprawdzenia', icon: '○', description: 'Można rozpocząć lub kontynuować pracę.', system_key: 'ready', included: 1 },
-  { value: 'In progress', label: 'W trakcie', icon: '●', description: 'Praca nad punktem trwa.', system_key: 'progress', included: 1 },
-  { value: 'Blocked', label: 'Zablokowany', icon: '⊘', description: 'Praca oczekuje na zależność albo wskazaną przyczynę.', system_key: 'blocked', included: 1 },
-  { value: 'NOK / Retest required', label: 'NOK / wymagany retest', icon: '↻', description: 'Test trzeba powtórzyć po usunięciu przyczyny.', system_key: 'retest', included: 1 },
-  { value: 'Done', label: 'Gotowe', icon: '✓', description: 'Punkt został ukończony.', system_key: 'done', included: 1 },
-  { value: 'N/A', label: 'N/A', icon: '—', description: 'Punkt nie jest już istotny.', system_key: 'na', included: 1 }
-];
+const fallbackStatusWorkflowStates = DEFAULT_STATUS_WORKFLOW_STATES.map(item => ({ ...item }));
 function allStatusWorkflowStates() { return state.config?.status_workflow_states?.length ? state.config.status_workflow_states : fallbackStatusWorkflowStates; }
 function statusWorkflowOptions(currentValue = '') {
   return allStatusWorkflowStates()
@@ -419,8 +419,19 @@ function bindShell() {
   updateNavigationToggle();
   $('#controller-picker-host').addEventListener('change', async event => { if (event.target.id !== 'controller') return; state.controller = event.target.value; await loadData(); });
   $('#add').addEventListener('click', () => state.view === 'calendar' ? openCalendarAnnotation() : state.view === 'notes' ? openStatusTransferEditor() : openRecord(state.view));
-  $('#close').addEventListener('click', () => $('#modal').close());
-  $('#cancel').addEventListener('click', () => $('#modal').close());
+  $('#close').addEventListener('click', closeOrReturnRecordDialog);
+  $('#cancel').addEventListener('click', closeOrReturnRecordDialog);
+  $('#record-back').addEventListener('click', restoreRecordDialog);
+  $('#modal').addEventListener('cancel', event => {
+    if (!state.dialogStack.length) return;
+    event.preventDefault();
+    restoreRecordDialog();
+  });
+  $('#modal').addEventListener('close', () => {
+    state.dialogStack = [];
+    state.dialog = null;
+    updateRecordBackButton();
+  });
   $('#form').addEventListener('submit', saveRecord);
   $('#remove').addEventListener('click', deleteRecord);
   $('#skip-recurrence').addEventListener('click', skipRecurringTask);
@@ -603,7 +614,8 @@ function openProjectDialog(mandatory = false) {
       clearPlannerSelections(false);
       state.plannerRequirementEdit = false; state.requirementProjectId = null; state.requirementDirty = new Set();
       updateIdentity();
-      dialog.close();
+      if (dialog.id === 'modal') closeOrReturnRecordDialog();
+      else dialog.close();
       await loadData();
       startLiveSync();
       toast(`Wybrano projekt ${state.me.current_project.code}`);
@@ -653,7 +665,7 @@ function updateExportFields() {
   $$('.export-status-field').forEach(field => field.hidden = type !== 'status');
   $$('.export-filter-field').forEach(field => field.hidden = type === 'project');
   $('#export-scope').closest('.field').hidden = type === 'project';
-  const statuses = type === 'points' ? ['Open', 'Waiting', 'In progress', 'Closed'] : statusWorkflowOptions();
+  const statuses = type === 'points' ? statusDefinitions('point') : statusWorkflowOptions();
   $('#export-status-filter').innerHTML = selectOptions(statuses, '', 'Wszystkie');
 }
 async function runExport(event) {
@@ -902,7 +914,7 @@ function startLiveSync() {
             const fresh = openDialog.type === 'announcements' ? state.announcements.find(item => item.id === Number(openDialog.id)) : entityType ? entity(entityType, openDialog.id) : null;
             if (fresh && fresh.updated_at !== openDialog.updated_at) {
               if (openDialog.dirty) toast('Ten otwarty element został zmieniony przez inną osobę. Twoje pola pozostają bez zmian; zapis wymaga ponownego otwarcia najnowszej wersji.', true);
-              else { $('#modal').close(); await openRecord(openDialog.type, fresh); toast('Otwarty element zaktualizowano na żywo'); }
+              else { await openRecord(openDialog.type, fresh, null, null, true); toast('Otwarty element zaktualizowano na żywo'); }
             }
           }
         }
@@ -1535,7 +1547,7 @@ async function runTriageBatch(action) {
     result = await uiForm({ title: 'Zbiorcze przypisanie', description: `Wybrano ${items.length} pozycji. Cele zostaną pominięte, ponieważ nie mają pola odpowiedzialnego.`, submitLabel: 'Przypisz', fields: [{ name: 'owner_user_id', label: 'Osoba odpowiedzialna', type: 'select', options: [{ value: '', label: 'Usuń przypisanie' }, ...assignableUsers().map(user => ({ value: user.id, label: user.display_name }))] }] });
     if (!result) return; patch = { owner_user_id: Number(result.owner_user_id) || null };
   } else if (action === 'priority') {
-    result = await uiForm({ title: 'Zbiorcza zmiana priorytetu', description: `Wybrano ${items.length} pozycji.`, submitLabel: 'Zmień priorytet', fields: [{ name: 'priority', label: 'Priorytet', type: 'select', options: ['Low', 'Medium', 'High', 'Critical'] }] });
+    result = await uiForm({ title: 'Zbiorcza zmiana priorytetu', description: `Wybrano ${items.length} pozycji.`, submitLabel: 'Zmień priorytet', fields: [{ name: 'priority', label: 'Priorytet', type: 'select', options: PRIORITY_DEFINITIONS }] });
     if (!result) return; patch = { priority: result.priority };
   } else {
     result = await uiForm({ title: 'Zbiorczy termin', description: 'Punkty statusu nie mają deadline’u i zostaną pominięte.', submitLabel: 'Ustaw termin', fields: [{ name: 'due_date', label: 'Deadline', type: 'date', required: true }] });
@@ -1721,7 +1733,7 @@ function meetingUsersHtml(attribute, selectedIds = [], emptyLabel = 'Wybierz oso
 }
 
 function meetingTargetStatuses(type, current = '') {
-  const values = type === 'status' ? statusWorkflowOptions(current) : type === 'task' ? ['To do', 'In progress', 'Blocked', 'NOK / Retest required', 'Done'] : type === 'point' ? ['Open', 'Waiting', 'In progress', 'Closed'] : ['Open', 'In progress', 'Done'];
+  const values = type === 'status' ? statusWorkflowOptions(current) : statusDefinitions(type);
   return selectOptions(values, current, 'Nie zmieniaj statusu');
 }
 
@@ -1914,7 +1926,7 @@ async function openAutomationEditor(existing = null) {
     { name: 'days_offset', label: 'Liczba dni dla warunku czasowego', type: 'number', value: existing?.days_offset ?? 3 },
     { name: 'entity_types', label: 'Typy elementów', type: 'multiselect', value: [...enabled], options: ['status', 'task', 'point', 'goal'].map(type => ({ value: type, label: operationTypeNames[type] })), full: true, className: 'automation-editor-types' },
     { name: 'actions', label: 'Działania', type: 'multiselect', value: existing?.actions || [existing?.action_type || 'notify_assignees'], options: [{ value: 'notify_assignees', label: 'Powiadom odpowiedzialnych' }, { value: 'notify_managers', label: 'Powiadom managerów' }, { value: 'escalate_priority', label: 'Podnieś priorytet' }], full: true, className: 'automation-editor-actions', hint: 'Możesz uruchomić kilka działań jednocześnie.' },
-    { name: 'target_priority', label: 'Priorytet po eskalacji', type: 'select', value: existing?.target_priority || 'High', options: ['Low', 'Medium', 'High', 'Critical'], full: true, className: 'automation-editor-priority' },
+    { name: 'target_priority', label: 'Priorytet po eskalacji', type: 'select', value: existing?.target_priority || 'High', options: PRIORITY_DEFINITIONS, full: true, className: 'automation-editor-priority' },
     { name: 'active', label: 'Reguła aktywna', type: 'checkbox', value: existing ? Boolean(existing.active) : true, full: true, className: 'automation-editor-active' }
   ] });
   const priorityField = $('#action-fields .automation-editor-priority');
@@ -3147,12 +3159,12 @@ async function reloadCalendar() {
 
 function openCalendarFilters() {
   const labels = { task: 'Zadania', point: 'Otwarte punkty', status: 'Status', goal: 'Cele', note: 'Przekazanie statusu', annotation: 'Adnotacje' };
-  $('#calendar-filter-fields').innerHTML = `<section class="calendar-filter-section full"><header><b>Typy informacji</b><small>Zaznacz moduły widoczne na osi czasu.</small></header><div class="calendar-choice-grid">${Object.entries(labels).map(([type, label]) => `<label class="calendar-choice"><input type="checkbox" name="type" value="${type}" ${state.calendarTypes.includes(type) ? 'checked' : ''}><span>${label}</span></label>`).join('')}</div></section><section class="calendar-filter-section full"><header><b>Priorytety</b><small>Dotyczy zadań, statusu, punktów i celów.</small></header><div class="calendar-choice-grid four">${['Low', 'Medium', 'High', 'Critical'].map(priority => `<label class="calendar-choice"><input type="checkbox" name="priority" value="${priority}" ${state.calendarPriorities.includes(priority) ? 'checked' : ''}><span>${badgeText(priority)}</span></label>`).join('')}</div></section><label class="field calendar-filter-text"><span>Kategoria / branża zawiera</span><input name="category" value="${escapeHtml(state.calendarCategory)}" placeholder="np. Elektryka"></label><label class="calendar-own-filter"><input name="only_mine" type="checkbox" value="1" ${state.calendarOnlyMine ? 'checked' : ''}><span><b>Tylko moje elementy</b><small>Utworzone przeze mnie lub takie, do których jestem przypisany / wspomniany.</small></span></label>`;
+  $('#calendar-filter-fields').innerHTML = `<section class="calendar-filter-section full"><header><b>Typy informacji</b><small>Zaznacz moduły widoczne na osi czasu.</small></header><div class="calendar-choice-grid">${Object.entries(labels).map(([type, label]) => `<label class="calendar-choice"><input type="checkbox" name="type" value="${type}" ${state.calendarTypes.includes(type) ? 'checked' : ''}><span>${label}</span></label>`).join('')}</div></section><section class="calendar-filter-section full"><header><b>Priorytety</b><small>Dotyczy zadań, statusu, punktów i celów.</small></header><div class="calendar-choice-grid four">${PRIORITY_VALUES.map(priority => `<label class="calendar-choice"><input type="checkbox" name="priority" value="${priority}" ${state.calendarPriorities.includes(priority) ? 'checked' : ''}><span>${badgeText(priority)}</span></label>`).join('')}</div></section><label class="field calendar-filter-text"><span>Kategoria / branża zawiera</span><input name="category" value="${escapeHtml(state.calendarCategory)}" placeholder="np. Elektryka"></label><label class="calendar-own-filter"><input name="only_mine" type="checkbox" value="1" ${state.calendarOnlyMine ? 'checked' : ''}><span><b>Tylko moje elementy</b><small>Utworzone przeze mnie lub takie, do których jestem przypisany / wspomniany.</small></span></label>`;
   $('#calendar-filter-dialog').showModal();
 }
 
 async function applyCalendarFilters(event) {
-  event.preventDefault(); const form = new FormData(event.currentTarget); state.calendarTypes = form.getAll('type'); if (!state.calendarTypes.length) state.calendarTypes = ['task']; state.calendarPriorities = form.getAll('priority'); if (!state.calendarPriorities.length) state.calendarPriorities = ['Low', 'Medium', 'High', 'Critical']; state.calendarCategory = String(form.get('category') || ''); state.calendarOnlyMine = form.get('only_mine') === '1'; $('#calendar-filter-dialog').close(); await reloadCalendar();
+  event.preventDefault(); const form = new FormData(event.currentTarget); state.calendarTypes = form.getAll('type'); if (!state.calendarTypes.length) state.calendarTypes = ['task']; state.calendarPriorities = form.getAll('priority'); if (!state.calendarPriorities.length) state.calendarPriorities = [...PRIORITY_VALUES]; state.calendarCategory = String(form.get('category') || ''); state.calendarOnlyMine = form.get('only_mine') === '1'; $('#calendar-filter-dialog').close(); await reloadCalendar();
 }
 
 function calendarAnnotationScopeOptions() {
@@ -3303,20 +3315,20 @@ function positionInlinePopover(root, button) {
 
 const inlineEditDefinitions = {
   tasks: { endpoint: '/api/tasks', fields: {
-    status: { label: 'Status', kind: 'select', values: ['To do', 'In progress', 'Blocked', 'NOK / Retest required', 'Done'] },
+    status: { label: 'Status', kind: 'select', values: statusValues('task') },
     start_date: { label: 'Start', kind: 'date' }, due_date: { label: 'Deadline', kind: 'date' },
     direct_assignee_user_ids: { label: 'Odpowiedzialni', kind: 'users' }, requirement_ids: { label: 'Zapotrzebowanie', kind: 'requirements' },
-    priority: { label: 'Priorytet', kind: 'select', values: ['Low', 'Medium', 'High', 'Critical'] }
+    priority: { label: 'Priorytet', kind: 'select', values: PRIORITY_VALUES }
   } },
   points: { endpoint: '/api/open-points', fields: {
-    status: { label: 'Status', kind: 'select', values: ['Open', 'Waiting', 'In progress', 'Closed'] },
+    status: { label: 'Status', kind: 'select', values: statusValues('point') },
     waiting_for: { label: 'Oczekiwanie na', kind: 'select', values: () => options('waiting_for'), blank: '— brak —' },
     owner_user_id: { label: 'Odpowiedzialny', kind: 'user' }, requirement_ids: { label: 'Zapotrzebowanie', kind: 'requirements' },
     due_date: { label: 'Deadline', kind: 'date' }, reminder_date: { label: 'Przypomnienie', kind: 'date' }
   } },
   status: { endpoint: '/api/status', fields: {
     status: { label: 'Status', kind: 'select', values: () => statusWorkflowOptions() },
-    criticality: { label: 'Krytyczność', kind: 'select', values: ['Low', 'Medium', 'High', 'Critical'] },
+    criticality: { label: 'Krytyczność', kind: 'select', values: PRIORITY_VALUES },
     responsible_user_ids: { label: 'Odpowiedzialni', kind: 'users' }, requirement_ids: { label: 'Zapotrzebowanie', kind: 'requirements' }
   } }
 };
@@ -3380,7 +3392,6 @@ function bindDependencyJumps(root = document) {
       if (event.type === 'keydown' && !['Enter', ' '].includes(event.key)) return;
       event.preventDefault(); event.stopPropagation();
       const [type, rawId] = card.dataset.dependencyJump.split(':');
-      if ($('#modal')?.open) $('#modal').close();
       openEntityOverlay(type, Number(rawId));
     };
     card.addEventListener('click', open);
@@ -3867,7 +3878,7 @@ function openBulkStatus() {
   $('#bulk-status-fields').innerHTML = `<div class="field full hierarchy-target-field required-field"><label>Zakres w hierarchii projektu *</label>${hierarchyTargetTreeHtml(hierarchyTarget, { inputId: 'bulk-status-hierarchy-target' })}</div>
     <label class="field required-field"><span>Grupa statusu *</span><select name="status_group_id" id="bulk-status-matrix-group" required>${selectOptions(statusGroups().map(item => ({ value: item.id, label: item.name })), statusGroup?.id || '', 'Wybierz grupę')}</select></label>
     <label class="field"><span>Podgrupa</span><select name="status_subgroup_id" id="bulk-status-matrix-subgroup">${selectOptions((statusGroup?.subgroups || []).map(item => ({ value: item.id, label: item.name })), '', 'Bezpośrednio w grupie')}</select></label>
-    <label class="field"><span>Krytyczność</span><select name="criticality">${selectOptions(['Low', 'Medium', 'High', 'Critical'], 'Medium', '')}</select></label>
+    <label class="field"><span>Krytyczność</span><select name="criticality">${selectOptions(PRIORITY_DEFINITIONS, 'Medium', '')}</select></label>
     <label class="field"><span>Status początkowy</span><select name="status">${selectOptions(statusWorkflowOptions(), 'Never checked', '')}</select></label>
     <label class="field full required-field big"><span>Punkty do dodania *</span><textarea name="names" rows="14" required placeholder="Każdy wiersz to osobny punkt, np.&#10;Sprawdź sygnał QM1&#10;Sprawdź sygnał QM2&#10;Potwierdź blokadę osłony"></textarea><small class="sub">Maksymalnie 500 punktów w jednej operacji. Nazwy mogą się powtarzać.</small></label>${requirementsField({}, 'requirement_ids', 'Zapotrzebowanie')}`;
   bindHierarchyTargetTrees($('#bulk-status-fields'));
@@ -3985,8 +3996,8 @@ function drawTaskBoard() {
 function drawTaskList() {
   const columns = [
     { key: 'title', label: 'Zadanie' }, { key: 'scope_label', label: 'Zakres / PLC', filter: 'hierarchy' }, { key: 'function_group_name', label: 'Grupa funkcyjna', values: uniqueValues(state.tasks, 'function_group_name') }, { key: 'function_group_element_name', label: 'Element grupy', values: uniqueValues(state.tasks, 'function_group_element_name') }, { key: 'category', label: 'Kategoria', values: taskCategories() },
-    { key: 'subcategory', label: 'Podkategoria', values: uniqueValues(state.tasks, 'subcategory') }, { key: 'requirement_names', label: 'Zapotrzebowanie', values: uniqueValues(state.tasks, 'requirement_names', true) }, { key: 'status', label: 'Status', values: ['To do', 'In progress', 'Blocked', 'NOK / Retest required', 'Done'] },
-    { key: 'owner_name', label: 'Odpowiedzialni', values: uniqueValues(state.tasks, 'owner_name', true) }, { key: 'progress', label: 'Postęp', filter: 'number' }, { key: 'start_date', label: 'Start', filter: 'date' }, { key: 'due_date', label: 'Deadline', filter: 'date' }, { key: 'priority', label: 'Priorytet', values: ['Low', 'Medium', 'High', 'Critical'] }
+    { key: 'subcategory', label: 'Podkategoria', values: uniqueValues(state.tasks, 'subcategory') }, { key: 'requirement_names', label: 'Zapotrzebowanie', values: uniqueValues(state.tasks, 'requirement_names', true) }, { key: 'status', label: 'Status', values: statusValues('task') },
+    { key: 'owner_name', label: 'Odpowiedzialni', values: uniqueValues(state.tasks, 'owner_name', true) }, { key: 'progress', label: 'Postęp', filter: 'number' }, { key: 'start_date', label: 'Start', filter: 'date' }, { key: 'due_date', label: 'Deadline', filter: 'date' }, { key: 'priority', label: 'Priorytet', values: PRIORITY_VALUES }
   ];
   state.taskColumns = columns;
   $('#task-content').innerHTML = `<div class="panel compact-data-panel" id="task-list-panel"><div class="table-view-tools">${columnVisibilityControl('tasks', columns)}</div><div class="tablewrap"><table><thead><tr>${columns.map(column => `<th class="sortable" data-column="${column.key}" data-sort="${column.key}" data-label="${column.label}">${column.label}${sortMarker('tasks', column.key)}</th>`).join('')}</tr>${tableFilterRow(columns)}</thead><tbody id="task-list-body"></tbody></table></div></div>`;
@@ -4082,7 +4093,7 @@ function filteredPoints() {
 function drawPointList() {
   const columns = [
     { key: 'title', label: 'Temat' }, { key: 'controller', label: 'PLC', filter: 'hierarchy' }, { key: 'category', label: 'Kategoria', values: statusCategories() },
-    { key: 'subcategory', label: 'Podkategoria', values: uniqueValues(state.points, 'subcategory') }, { key: 'status', label: 'Status', values: ['Open', 'Waiting', 'In progress', 'Closed'] },
+    { key: 'subcategory', label: 'Podkategoria', values: uniqueValues(state.points, 'subcategory') }, { key: 'status', label: 'Status', values: statusValues('point') },
     { key: 'waiting_for', label: 'Oczekiwanie na', values: options('waiting_for') }, { key: 'owner_name', label: 'Odpowiedzialny', values: uniqueValues(state.points, 'owner_name', true) },
     { key: 'requirement_names', label: 'Zapotrzebowanie', values: uniqueValues(state.points, 'requirement_names', true) }, { key: 'due_date', label: 'Deadline', filter: 'date' }, { key: 'reminder_date', label: 'Przypomnienie', filter: 'date' }
   ];
@@ -4989,7 +5000,7 @@ function renderFunctionPointDraft() {
       <label class="field"><span>Element grupy (opcjonalnie)</span><select data-point-element>${selectOptions((state.functionPointGroup.elements || []).map(element => ({ value: element.id, label: element.name })), point.element_id, 'Cała grupa funkcyjna')}</select></label>
       <label class="field"><span>Podkategoria grupy funkcyjnej</span><select data-point-group-subcategory>${selectOptions((state.functionPointGroup.subcategories || []).map(item => ({ value: item.id, label: item.name })), point.group_subcategory_id, 'Bez podkategorii grupy')}</select></label>
       <label class="field"><span>Kategoria statusu</span><select data-point-category>${selectOptions(statusCategories(), category)}</select></label>
-      <label class="field"><span>Krytyczność</span><select data-point-criticality>${selectOptions(['Low', 'Medium', 'High', 'Critical'], point.criticality || 'Medium')}</select></label>
+      <label class="field"><span>Krytyczność</span><select data-point-criticality>${selectOptions(PRIORITY_DEFINITIONS, point.criticality || 'Medium')}</select></label>
     </div><div class="subcategory-picks"><span>Podkategorie dotyczące punktu</span><div>${categoryConfig?.subcategories.length ? categoryConfig.subcategories.map(subcategory => `<label class="mention"><input type="checkbox" data-point-subcategory value="${subcategory.id}" ${selected.has(subcategory.id) ? 'checked' : ''}>${escapeHtml(subcategory.name)}</label>`).join('') : '<span class="sub">Ta kategoria nie ma podkategorii — zostanie utworzony jeden punkt na poziomie kategorii.</span>'}</div></div></article>`;
   }).join('') || '<div class="empty">Dodaj pierwszy punkt do sprawdzenia dla tej grupy.</div>';
   $$('.remove-function-point').forEach(button => button.addEventListener('click', () => {
@@ -5192,14 +5203,14 @@ const formDefinitions = {
   status: { endpoint: '/api/status', title: 'punkt statusu', fields: [
     ['hierarchy_target', 'Zakres w hierarchii projektu', 'hierarchy-target'], ['status_group_id', 'Grupa tabeli statusowej', 'status-group'], ['status_subgroup_id', 'Podgrupa tabeli statusowej', 'status-subgroup'],
     ['matrix_values', 'Dane punktu statusowego', 'status-matrix'], ['function_group_id', 'Grupa funkcyjna', 'function-group'], ['function_group_subcategory_id', 'Podkategoria grupy funkcyjnej', 'function-subcategory'], ['function_group_element_id', 'Obiekt / element grupy', 'function-element'],
-    ['criticality', 'Krytyczność', 'select', ['Low', 'Medium', 'High', 'Critical']], ['responsible_user_ids', 'Osoby odpowiedzialne', 'users'], ['dependency_refs', 'Zależności — elementy wymagane wcześniej', 'dependencies'],
+    ['criticality', 'Krytyczność', 'select', PRIORITY_DEFINITIONS], ['responsible_user_ids', 'Osoby odpowiedzialne', 'users'], ['dependency_refs', 'Zależności — elementy wymagane wcześniej', 'dependencies'],
     ['requirement_ids', 'Zapotrzebowanie', 'requirements'], ['current_note', 'Aktualna notatka', 'textarea'], ['evidence_link', 'Dodatkowe informacje / link'], ['links', 'Powiązane elementy', 'multi-links', ['task', 'point', 'note', 'goal']]
   ] },
   tasks: { endpoint: '/api/tasks', title: 'zadanie', fields: [
     ['hierarchy_target', 'Zakres w hierarchii projektu', 'hierarchy-target'], ['title', 'Tytuł', 'wide-text'], ['description', 'Opis', 'textarea'], ['info_link', 'Dodatkowe informacje / link', 'wide-text'],
     ['direct_assignee_user_ids', 'Odpowiedzialni', 'users'], ['dependency_refs', 'Zależności — elementy wymagane wcześniej', 'dependencies'], ['checklist', 'Lista kontrolna', 'checklist'], ['scope_checklist', 'Kontrola sterowników w zakresie', 'scope-checklist'],
     ['function_group_id', 'Grupa funkcyjna', 'function-group'], ['function_group_element_id', 'Element grupy funkcyjnej', 'function-element'], ['other_object', 'Inne (gdy nie dotyczy grupy)'],
-    ['status', 'Status', 'select', ['To do', 'In progress', 'Blocked', 'NOK / Retest required', 'Done']], ['priority', 'Priorytet', 'select', ['Low', 'Medium', 'High', 'Critical']],
+    ['status', 'Status', 'select', statusDefinitions('task')], ['priority', 'Priorytet', 'select', PRIORITY_DEFINITIONS],
     ['start_date', 'Planowany start', 'date'], ['due_date', 'Deadline', 'date'],
     ['recurrence_enabled', 'Zadanie cykliczne', 'boolean'], ['recurrence_interval', 'Odstęp cyklu', 'number'], ['recurrence_unit', 'Jednostka cyklu', 'select', [{ value: 'days', label: 'Dni' }, { value: 'weeks', label: 'Tygodnie' }, { value: 'months', label: 'Miesiące' }]],
     ['category', 'Kategoria zadania', 'category', 'task'], ['subcategory', 'Podkategoria zadania', 'subcategory', 'task'], ['requirement_ids', 'Zapotrzebowanie', 'requirements'],
@@ -5207,7 +5218,7 @@ const formDefinitions = {
   ] },
   points: { endpoint: '/api/open-points', title: 'otwarty punkt', fields: [
     ['hierarchy_target', 'Zakres w hierarchii projektu', 'hierarchy-target'], ['title', 'Temat'], ['owner_user_id', 'Odpowiedzialny', 'user'],
-    ['status', 'Status', 'select', ['Open', 'Waiting', 'In progress', 'Closed']], ['priority', 'Priorytet', 'select', ['Low', 'Medium', 'High', 'Critical']], ['dependency_refs', 'Zależności — elementy wymagane wcześniej', 'dependencies'],
+    ['status', 'Status', 'select', statusDefinitions('point')], ['priority', 'Priorytet', 'select', PRIORITY_DEFINITIONS], ['dependency_refs', 'Zależności — elementy wymagane wcześniej', 'dependencies'],
     ['start_date', 'Planowany start', 'date'], ['due_date', 'Deadline', 'date'], ['reminder_date', 'Przypomnienie', 'date'],
     ['category', 'Kategoria', 'category', 'status'], ['subcategory', 'Podkategoria', 'subcategory', 'status'], ['waiting_for', 'Oczekiwanie na', 'options', 'waiting_for'], ['requirement_ids', 'Zapotrzebowanie', 'requirements'],
     ['links', 'Powiązane elementy', 'multi-links', ['status', 'task', 'point', 'note']], ['info_link', 'Dodatkowe informacje / link'],
@@ -5218,7 +5229,7 @@ const formDefinitions = {
     ['content', 'Treść', 'bigtextarea'], ['links', 'Powiązane elementy', 'multi-links', ['status', 'task', 'point']], ['mentioned_user_ids', 'Wspomniane osoby', 'mentions']
   ] },
   goals: { endpoint: '/api/goals', title: 'cel', fields: [
-    ['hierarchy_target', 'Zakres w hierarchii projektu', 'hierarchy-target'], ['title', 'Nazwa celu'], ['status', 'Status', 'select', ['Open', 'In progress', 'Done']], ['priority', 'Priorytet', 'select', ['Low', 'Medium', 'High', 'Critical']], ['due_date', 'Termin', 'date'], ['description', 'Opis', 'textarea'], ['goal_links', 'Powiązane elementy', 'goal-links']
+    ['hierarchy_target', 'Zakres w hierarchii projektu', 'hierarchy-target'], ['title', 'Nazwa celu'], ['status', 'Status', 'select', statusDefinitions('goal')], ['priority', 'Priorytet', 'select', PRIORITY_DEFINITIONS], ['due_date', 'Termin', 'date'], ['description', 'Opis', 'textarea'], ['goal_links', 'Powiązane elementy', 'goal-links']
   ] },
   announcements: { endpoint: '/api/announcements', title: 'wiadomość', fields: [
     ['entry_type', 'Rodzaj wpisu', 'select', [{ value: 'message', label: 'Komunikat' }, { value: 'decision', label: 'Decyzja projektowa' }, { value: 'scope_change', label: 'Zmiana zakresu' }]], ['decision_status', 'Stan decyzji / zmiany', 'select', [{ value: 'draft', label: 'Szkic' }, { value: 'published', label: 'Opublikowana' }, { value: 'implemented', label: 'Wdrożona' }, { value: 'superseded', label: 'Zastąpiona' }]],
@@ -5232,9 +5243,112 @@ const formDefinitions = {
   controllers: { endpoint: '/api/controllers', title: 'sterownik', fields: [['leaf_code', 'Nazwa / kod sterownika'], ['group_id', 'Grupa w hierarchii', 'controller-group'], ['area', 'Obszar'], ['description', 'Opis', 'textarea']] }
 };
 
-async function openRecord(type, record = null, prefill = null, duplicateSource = null) {
+function recordControlState(root) {
+  return [...root.querySelectorAll('input,select,textarea')].map(control => ({
+    value: control.value,
+    checked: control.checked,
+    selected: control instanceof HTMLSelectElement && control.multiple ? [...control.selectedOptions].map(option => option.value) : null
+  }));
+}
+
+function applyRecordControlState(root, values = []) {
+  [...root.querySelectorAll('input,select,textarea')].forEach((control, index) => {
+    const saved = values[index]; if (!saved) return;
+    if (control instanceof HTMLSelectElement && control.multiple && saved.selected) [...control.options].forEach(option => { option.selected = saved.selected.includes(option.value); });
+    else if (control.type === 'checkbox' || control.type === 'radio') control.checked = Boolean(saved.checked);
+    else control.value = saved.value;
+  });
+}
+
+function recordButtonState(id) {
+  const button = $(id); return { hidden: button.hidden, disabled: button.disabled, text: button.textContent, className: button.className };
+}
+
+function applyRecordButtonState(id, saved) {
+  const button = $(id); if (!button || !saved) return;
+  button.hidden = saved.hidden; button.disabled = saved.disabled; button.textContent = saved.text; button.className = saved.className;
+}
+
+function captureRecordDialog() {
+  const fields = $('#fields');
+  return {
+    dialog: structuredClone(state.dialog),
+    goalDraftLinks: structuredClone(state.goalDraftLinks),
+    linkDraft: structuredClone(state.linkDraft),
+    fieldsHtml: fields.innerHTML,
+    controls: recordControlState(fields),
+    title: $('#modal-title').textContent,
+    subtitle: $('#modal-subtitle').textContent,
+    metaHtml: $('#record-meta').innerHTML,
+    similarClass: $('#similar-history-section').className,
+    similarCount: $('#similar-history-count').textContent,
+    similarHtml: $('#similar-history-list').innerHTML,
+    commentsClass: $('#comments-section').className,
+    commentsCount: $('#comments-count').textContent,
+    commentsHtml: $('#comments-list').innerHTML,
+    commentContent: $('#comment-content').value,
+    auditToggle: recordButtonState('#audit-toggle'),
+    auditClass: $('#audit-section').className,
+    auditHtml: $('#audit-list').innerHTML,
+    buttons: Object.fromEntries(['#remove', '#skip-recurrence', '#duplicate', '#lock-record', '#cancel', '#edit-record', '#record-save'].map(id => [id, recordButtonState(id)])),
+    fieldsClass: fields.className,
+    dirty: $('#modal').dataset.dirty || '',
+    scrollTop: $('#modal').scrollTop
+  };
+}
+
+function updateRecordBackButton() {
+  const button = $('#record-back');
+  button.hidden = !state.dialogStack.length;
+  button.setAttribute('aria-label', state.dialogStack.length ? 'Wróć do poprzedniego elementu' : 'Brak poprzedniego elementu');
+}
+
+function restoreRecordDialog() {
+  const saved = state.dialogStack.pop();
+  if (!saved) return $('#modal').close();
+  state.dialog = saved.dialog;
+  state.goalDraftLinks = saved.goalDraftLinks;
+  state.linkDraft = saved.linkDraft;
+  $('#modal-title').textContent = saved.title;
+  $('#modal-subtitle').textContent = saved.subtitle;
+  $('#record-meta').innerHTML = saved.metaHtml;
+  $('#fields').innerHTML = saved.fieldsHtml;
+  $('#fields').className = saved.fieldsClass;
+  applyRecordControlState($('#fields'), saved.controls);
+  $('#similar-history-section').className = saved.similarClass;
+  $('#similar-history-count').textContent = saved.similarCount;
+  $('#similar-history-list').innerHTML = saved.similarHtml;
+  $('#comments-section').className = saved.commentsClass;
+  $('#comments-count').textContent = saved.commentsCount;
+  $('#comments-list').innerHTML = saved.commentsHtml;
+  $('#comment-content').value = saved.commentContent;
+  applyRecordButtonState('#audit-toggle', saved.auditToggle);
+  $('#audit-section').className = saved.auditClass;
+  $('#audit-list').innerHTML = saved.auditHtml;
+  Object.entries(saved.buttons).forEach(([id, button]) => applyRecordButtonState(id, button));
+  bindDynamicFields(state.dialog.type);
+  applyRecordControlState($('#fields'), saved.controls);
+  $('#modal').dataset.dirty = saved.dirty;
+  $('#modal').scrollTop = saved.scrollTop;
+  updateRecordBackButton();
+}
+
+function closeOrReturnRecordDialog() {
+  if (state.dialogStack.length) restoreRecordDialog();
+  else $('#modal').close();
+}
+
+async function finishRecordMutation() {
+  const returnToSource = state.dialogStack.length > 0;
+  if (!returnToSource) $('#modal').close();
+  await loadData();
+  if (returnToSource) restoreRecordDialog();
+}
+
+async function openRecord(type, record = null, prefill = null, duplicateSource = null, replaceCurrent = false) {
   const definition = formDefinitions[type];
   if (!definition) return;
+  const parentDialog = !replaceCurrent && $('#modal').open && state.dialog ? captureRecordDialog() : null;
   const source = record || prefill || null;
   if (type === 'goals') {
     try {
@@ -5255,6 +5369,7 @@ async function openRecord(type, record = null, prefill = null, duplicateSource =
     }
   }
   const lockable = Boolean(record && ['status', 'tasks', 'points', 'goals'].includes(type));
+  if (parentDialog) state.dialogStack.push(parentDialog);
   state.dialog = { type, record, prefill, duplicateSource, auditLoaded: false, editing: !lockable, commentAdded: false };
   state.goalDraftLinks = source?.links ? source.links.map(link => ({ entity_type: link.entity_type, entity_id: Number(link.entity_id) })) : [];
   state.linkDraft = source?.links ? source.links.map(link => ({ entity_type: link.entity_type, entity_id: Number(link.entity_id) })) : [];
@@ -5282,9 +5397,10 @@ async function openRecord(type, record = null, prefill = null, duplicateSource =
     if (projectRole) [...projectRole.options].forEach(option => { if (option.value === 'project_admin') option.remove(); });
   }
   bindDynamicFields(type);
-  $('#modal').showModal();
+  if (!$('#modal').open) $('#modal').showModal();
   setRecordDialogMode(state.dialog.editing);
   $('#modal').dataset.dirty = '';
+  updateRecordBackButton();
   if (!record && ['tasks', 'points'].includes(type)) bindSimilarHistorySearch(typeToEntity(type));
 }
 
@@ -5439,7 +5555,6 @@ async function toggleAudit() {
 async function openDuplicate(type, record) {
   if (!record || !['status', 'tasks', 'points', 'goals'].includes(type)) return;
   const clone = structuredClone(record);
-  $('#modal').close();
   await openRecord(type, null, clone, record);
 }
 
@@ -5734,7 +5849,7 @@ function bindDynamicFields(type) {
     syncTaskObjectFields();
   }
   if ($('#entity-type')) fillEntitySelect();
-  $('#go-entity')?.addEventListener('click', () => { const type = $('#entity-type').value; const id = Number($('#entity-id').value); $('#modal').close(); openEntityOverlay(type, id); });
+  $('#go-entity')?.addEventListener('click', () => { const type = $('#entity-type').value; const id = Number($('#entity-id').value); openEntityOverlay(type, id); });
   $$('[data-toggle]').forEach(checkbox => checkbox.addEventListener('change', () => { $('#' + checkbox.dataset.toggle).disabled = !checkbox.checked; }));
   if (type === 'tasks') {
     $('#add-check').addEventListener('click', () => { $('#checklist').insertAdjacentHTML('beforeend', checklistRow()); bindChecklistDelete(); });
@@ -5812,7 +5927,7 @@ function renderMultiLinks(allowed) {
   const container = $('#multi-links'); if (!container) return;
   captureMultiLinks();
   container.innerHTML = state.linkDraft.map((link, index) => { const item = entity(link.entity_type, link.entity_id); return item ? `<div class="link-editor-row static"><span class="type-dot ${link.entity_type}"></span><span><b>${escapeHtml(entityLabel(link.entity_type, item))}</b><small>${escapeHtml(controllerLabel(item))} · ${escapeHtml(badgeText(item.status || item.type))}</small></span><button type="button" class="mini go-link" data-index="${index}" title="Przejdź do elementu">→</button><button type="button" class="mini remove-link" data-index="${index}">×</button></div>` : ''; }).join('') || '<div class="form-hint">Brak powiązań. Wybierz status, zadanie, otwarty punkt, cel lub wpis dziennika.</div>';
-  $$('#multi-links .go-link').forEach(button => button.addEventListener('click', () => { const link = state.linkDraft[Number(button.dataset.index)]; $('#modal').close(); openEntityOverlay(link.entity_type, link.entity_id); }));
+  $$('#multi-links .go-link').forEach(button => button.addEventListener('click', () => { const link = state.linkDraft[Number(button.dataset.index)]; openEntityOverlay(link.entity_type, link.entity_id); }));
   $$('#multi-links .remove-link').forEach(button => button.addEventListener('click', () => { state.linkDraft.splice(Number(button.dataset.index), 1); renderMultiLinks(allowed); }));
 }
 
@@ -6227,10 +6342,9 @@ async function saveRecord(event) {
       }
     }
     if (!record && prefill?._calendar_date && saved?.id) await api('/api/calendar/items', { method: 'POST', body: JSON.stringify({ calendar_date: prefill._calendar_date, items: [{ entity_type: typeToEntity(type), entity_id: saved.id }] }) });
-    $('#modal').close();
     if (type === 'controllers') state.controller = 'all';
     toast('Zapisano zmiany');
-    await loadData();
+    await finishRecordMutation();
   } catch (error) { toast(error.message, true); }
 }
 
@@ -6239,9 +6353,8 @@ async function deleteRecord() {
   if (!await uiConfirm('Usuń rekord', 'Operacja zostanie zapisana w historii zmian.', 'Usuń rekord', true)) return;
   try {
     await api(`${formDefinitions[type].endpoint}/${record.id}`, { method: 'DELETE' });
-    $('#modal').close();
     toast('Usunięto rekord');
-    await loadData();
+    await finishRecordMutation();
   } catch (error) { toast(error.message, true); }
 }
 
@@ -6251,9 +6364,8 @@ async function skipRecurringTask() {
   if (!await uiConfirm('Pomiń bieżące zadanie', `Zadanie „${record.title}” zostanie usunięte, a następne wystąpienie otrzyma deadline liczony od obecnego terminu.`, 'Pomiń zadanie', true)) return;
   try {
     const next = await api(`/api/tasks/${record.id}/skip-recurrence`, { method: 'POST' });
-    $('#modal').close();
     toast(`Pominięto zadanie. Nowy deadline: ${displayDate(next.due_date)}`);
-    await loadData();
+    await finishRecordMutation();
   } catch (error) { toast(error.message, true); }
 }
 

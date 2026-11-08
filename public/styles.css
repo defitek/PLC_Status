@@ -184,6 +184,7 @@ dialog::backdrop { background:#101827a3; }
 .dialog-head>div { flex:1; }
 .dialog-head h2 { margin:0; font-size:20px; }
 .dialog-head p { margin:4px 0 0; color:var(--muted); font-size:12px; }
+.record-back { align-self:center; flex:0 0 auto; min-height:34px; padding:6px 10px; white-space:nowrap; }
 .x { color:var(--muted); background:transparent; border:0; font-size:25px; }
 .record-meta { display:flex; gap:8px; flex-wrap:wrap; padding:10px 16px; color:var(--muted); background:var(--panel-alt); border-bottom:1px solid var(--line); font-size:11px; }
 .record-meta span { padding:4px 7px; background:var(--surface); border:1px solid var(--line); border-radius:99px; }

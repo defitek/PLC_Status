@@ -9,9 +9,13 @@
   },
   "scripts": {
     "start": "node server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "test:ui": "playwright test"
   },
   "dependencies": {
     "redis": "^5.12.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.0"
   }
 }

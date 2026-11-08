@@ -3,5 +3,7 @@ data/*.db-shm
 data/*.db-wal
 .env
 node_modules/
+playwright-report/
+test-results/
 .sites-runtime/
 *.zip

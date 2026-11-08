@@ -1,6 +1,7 @@
 import { seedDemoData } from '../demo-data.js';
 import { ENTITY_TABLES as TABLES } from './constants.js';
 import { hashPassword, validPassword } from './security.js';
+import { DEFAULT_STATUS_WORKFLOW_STATES, PRIORITY_VALUES, statusValues } from '../public/modules/workflow-model.js';
 
 const clean = value => typeof value === 'string' ? value.trim() : '';
 
@@ -9,88 +10,105 @@ const clean = value => typeof value === 'string' ? value.trim() : '';
  * Repository methods stay in database.js; this module owns schema evolution only.
  */
 export function prepareDatabase(db, { seedDemo, demoLimit = 100 }) {
-  migrateToV3(db);
-  migrateToV4(db);
-  migrateToV5(db);
-  migrateToV6(db);
-  migrateToV7(db);
-  migrateToV8(db);
-  migrateToV9(db);
-  migrateToV10(db);
-  migrateToV11(db);
-  migrateToV12(db);
-  migrateToV13(db);
-  migrateToV14(db);
-  migrateToV15(db);
-  migrateToV16(db);
-  migrateToV17(db);
-  migrateToV18(db);
-  migrateToV19(db);
-  migrateToV20(db);
-  migrateToV21(db);
-  migrateToV22(db);
-  migrateToV23(db);
-  migrateToV24(db);
-  migrateToV25(db);
-  migrateSecurityFoundation(db);
-  migrateStatusWorkflow(db);
-  migrateEntityDependencies(db);
-  ensureStatusMatrixColumns(db);
-  ensureEntityScopeColumns(db);
-  ensureProjectMeetingFeatures(db);
+  ensureMigrationTable(db);
+  runMigrations(db, [
+    ['003-base-projects', migrateToV3],
+    ['004-project-links', migrateToV4],
+    ['005-planner', migrateToV5],
+    ['006-hierarchy', migrateToV6],
+    ['007-status-groups', migrateToV7],
+    ['008-meetings', migrateToV8],
+    ['009-announcements', migrateToV9],
+    ['010-notifications', migrateToV10],
+    ['011-saved-views', migrateToV11],
+    ['012-automation', migrateToV12],
+    ['013-open-points', migrateToV13],
+    ['014-entity-history', migrateToV14],
+    ['015-calendar-annotations', migrateToV15],
+    ['016-operations', migrateToV16],
+    ['017-planner-requirements', migrateToV17],
+    ['018-review-workflow', migrateToV18],
+    ['019-meeting-publication', migrateToV19],
+    ['020-meeting-plans', migrateToV20],
+    ['021-meeting-groups', migrateToV21],
+    ['022-meeting-priorities', migrateToV22],
+    ['023-status-descriptions', migrateToV23],
+    ['024-status-inheritance', migrateToV24],
+    ['025-external-dependencies', migrateToV25],
+    ['026-security-foundation', migrateSecurityFoundation],
+    ['027-status-workflow', migrateStatusWorkflow],
+    ['028-entity-dependencies', migrateEntityDependencies],
+    ['029-status-matrix-columns', ensureStatusMatrixColumns],
+    ['030-entity-scope-columns', ensureEntityScopeColumns],
+    ['031-project-meeting-features', ensureProjectMeetingFeatures],
+    ['032-performance-indexes', ensurePerformanceIndexes]
+  ]);
   const defaultProjectId = primaryProjectId(db);
-  db.exec('CREATE INDEX IF NOT EXISTS idx_status_function_group ON status_items(function_group_id,function_group_check_id)');
-  db.exec('CREATE INDEX IF NOT EXISTS idx_status_project ON status_items(project_id,controller_id,status)');
-  db.exec('CREATE INDEX IF NOT EXISTS idx_status_scope_group ON status_items(project_id,controller_group_id,status)');
-  db.exec('CREATE INDEX IF NOT EXISTS idx_task_scope_group ON tasks(project_id,controller_group_id,status)');
-  db.exec('CREATE INDEX IF NOT EXISTS idx_task_scope_checklist ON task_scope_checklist(task_id,sort_order)');
-  db.exec('CREATE INDEX IF NOT EXISTS idx_points_project ON open_points(project_id,controller_id,status,due_date)');
-  db.exec('CREATE INDEX IF NOT EXISTS idx_points_scope_group ON open_points(project_id,controller_group_id,status,due_date)');
-  db.exec('CREATE INDEX IF NOT EXISTS idx_goals_project ON goals(project_id,controller_id,status,due_date)');
-  db.exec('CREATE INDEX IF NOT EXISTS idx_goals_scope_group ON goals(project_id,controller_group_id,status,due_date)');
-  db.exec('CREATE INDEX IF NOT EXISTS idx_notes_project_date ON daily_notes(project_id,note_date DESC,controller_id)');
-  db.exec('CREATE INDEX IF NOT EXISTS idx_audit_project_changed ON audit_log(project_id,changed_at DESC,id DESC)');
-  seedConfiguration(db, defaultProjectId);
-  ensureStatusWorkflowStates(db);
+
+  runMigration(db, '033-default-configuration', () => {
+    seedConfiguration(db, defaultProjectId);
+    ensureStatusWorkflowStates(db);
+  });
+
   if (seedDemo) {
     if (defaultProjectId === 1) seedDemoData(db, hashPassword, demoLimit);
     seedControllerHierarchy(db, defaultProjectId);
     seedSecondProject(db, hashPassword);
   }
-  migrateToV12(db);
-  migrateToV13(db);
-  migrateToV14(db);
-  migrateToV15(db);
-  migrateToV16(db);
-  migrateToV17(db);
-  migrateToV18(db);
-  migrateToV19(db);
-  migrateToV20(db);
-  migrateToV21(db);
-  migrateToV22(db);
-  migrateToV23(db);
-  migrateToV24(db);
-  migrateToV25(db);
-  migrateSecurityFoundation(db);
-  migrateStatusWorkflow(db);
-  migrateEntityDependencies(db);
-  migrateGlobalPlannerData(db);
-  removeCommissioningModule(db);
-  removeDefinitionOfDone(db);
-  removeKnowledgeBase(db);
-  syncProjectMemberships(db);
-  removeEmptyDuplicateControllerRoots(db);
-  backfillV3(db);
-  backfillFunctionGroups(db);
-  backfillV4Links(db);
-  backfillV5(db);
-  backfillV6(db);
-  backfillV7(db);
+
+  runMigrations(db, [
+    ['034-global-planner-data', migrateGlobalPlannerData],
+    ['035-remove-commissioning-module', removeCommissioningModule],
+    ['036-remove-definition-of-done', removeDefinitionOfDone],
+    ['037-remove-knowledge-base', removeKnowledgeBase],
+    ['038-sync-project-memberships', syncProjectMemberships],
+    ['039-remove-duplicate-controller-roots', removeEmptyDuplicateControllerRoots],
+    ['040-backfill-v3', backfillV3],
+    ['041-backfill-function-groups', backfillFunctionGroups],
+    ['042-backfill-v4-links', backfillV4Links],
+    ['043-backfill-v5', backfillV5],
+    ['044-backfill-v6', backfillV6],
+    ['045-backfill-v7', backfillV7]
+  ]);
   if (seedDemo) { seedV5Demo(db); seedV8Demo(db); }
-  migrateStatusMatrix(db);
-  seedMigrationAudit(db, defaultProjectId);
-  db.prepare("INSERT INTO app_meta(key,value) VALUES('schema_version','current') ON CONFLICT(key) DO UPDATE SET value='current'").run();
+  runMigration(db, '046-status-matrix', () => migrateStatusMatrix(db));
+  runMigration(db, '047-migration-audit', () => seedMigrationAudit(db, defaultProjectId));
+  runMigration(db, '048-current-schema-marker', () => db.prepare("INSERT INTO app_meta(key,value) VALUES('schema_version','current') ON CONFLICT(key) DO UPDATE SET value='current'").run());
   return defaultProjectId;
+}
+
+function ensureMigrationTable(db) {
+  db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+    id TEXT PRIMARY KEY,
+    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  ) STRICT`);
+}
+
+function runMigration(db, id, migrate) {
+  if (db.prepare('SELECT 1 FROM schema_migrations WHERE id=?').get(id)) return false;
+  migrate(db);
+  db.prepare('INSERT INTO schema_migrations(id) VALUES(?)').run(id);
+  return true;
+}
+
+function runMigrations(db, migrations) {
+  for (const [id, migrate] of migrations) runMigration(db, id, () => migrate(db));
+}
+
+function ensurePerformanceIndexes(db) {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_status_function_group ON status_items(function_group_id,function_group_check_id);
+    CREATE INDEX IF NOT EXISTS idx_status_project ON status_items(project_id,controller_id,status);
+    CREATE INDEX IF NOT EXISTS idx_status_scope_group ON status_items(project_id,controller_group_id,status);
+    CREATE INDEX IF NOT EXISTS idx_task_scope_group ON tasks(project_id,controller_group_id,status);
+    CREATE INDEX IF NOT EXISTS idx_task_scope_checklist ON task_scope_checklist(task_id,sort_order);
+    CREATE INDEX IF NOT EXISTS idx_points_project ON open_points(project_id,controller_id,status,due_date);
+    CREATE INDEX IF NOT EXISTS idx_points_scope_group ON open_points(project_id,controller_group_id,status,due_date);
+    CREATE INDEX IF NOT EXISTS idx_goals_project ON goals(project_id,controller_id,status,due_date);
+    CREATE INDEX IF NOT EXISTS idx_goals_scope_group ON goals(project_id,controller_group_id,status,due_date);
+    CREATE INDEX IF NOT EXISTS idx_notes_project_date ON daily_notes(project_id,note_date DESC,controller_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_project_changed ON audit_log(project_id,changed_at DESC,id DESC);
+  `);
 }
 
 function columnNames(db, table) {
@@ -133,15 +151,9 @@ function ensureProjectMeetingFeatures(db) {
   db.exec("UPDATE project_meetings SET period_from=COALESCE(period_from,meeting_date),period_to=COALESCE(period_to,meeting_date)");
 }
 
-const BASE_STATUS_WORKFLOW_STATES = [
-  ['never_checked', 'Never checked', 'Nigdy nie sprawdzone', '◎', 'Nikt jeszcze nie zweryfikował tego punktu.', 0],
-  ['ready', 'Ready to test', 'Gotowe do sprawdzenia', '○', 'Można rozpocząć lub kontynuować pracę.', 0],
-  ['progress', 'In progress', 'W trakcie', '●', 'Praca nad punktem trwa.', 0],
-  ['blocked', 'Blocked', 'Zablokowany', '⊘', 'Praca oczekuje na zależność albo wskazaną przyczynę.', 0],
-  ['retest', 'NOK / Retest required', 'NOK / wymagany retest', '↻', 'Test trzeba powtórzyć po usunięciu przyczyny.', 0],
-  ['done', 'Done', 'Gotowe', '✓', 'Punkt został ukończony.', 1],
-  ['na', 'N/A', 'N/A', '—', 'Punkt nie jest już istotny.', 1]
-];
+const BASE_STATUS_WORKFLOW_STATES = DEFAULT_STATUS_WORKFLOW_STATES.map(item => [
+  item.system_key, item.value, item.label, item.icon, item.description, Number(item.counts_as_done)
+]);
 
 function ensureStatusWorkflowStates(db, projectId = null) {
   const projects = projectId ? [{ id: Number(projectId) }] : db.prepare('SELECT id FROM projects').all();
@@ -170,7 +182,7 @@ function ensureEntityScopeColumns(db) {
 function migrateStatusMatrix(db, onlyProjectId = null) {
   ensureStatusMatrixColumns(db);
   if (!onlyProjectId && db.prepare("SELECT value FROM app_meta WHERE key='status_matrix_backfill_v1'").get()?.value === '1') return;
-  const allowedStatuses = new Set(['Ready to test', 'In progress', 'Blocked', 'NOK / Retest required', 'Done', 'N/A']);
+  const allowedStatuses = new Set(statusValues('status').filter(value => value !== 'Never checked'));
   const rows = db.prepare(`SELECT id,project_id,trim(COALESCE(category,'')) category,trim(COALESCE(subcategory,'')) subcategory,status
     FROM status_items ${onlyProjectId ? 'WHERE project_id=?' : ''} ORDER BY project_id,id`).all(...(onlyProjectId ? [onlyProjectId] : []));
   const findGroup = db.prepare('SELECT id FROM status_groups WHERE project_id=? AND name=? COLLATE NOCASE');
@@ -1092,7 +1104,7 @@ function seedSecondProject(db, hashPassword) {
     const owner = activeUsers[(index + 1) % activeUsers.length];
     const [category, subcategory] = statusPairs[index % statusPairs.length];
     const status = ['Ready to test','In progress','Ready to test','Done','Done','Blocked'][index % 6];
-    const result = addStatus.run(project.id, controllerRow.id, `W520-${controllerRow.code}-${String(index + 1).padStart(3,'0')}`, `${String((index % 12) + 1).padStart(3,'0')}VR_001`, `Weryfikacja ${subcategory}`, category, subcategory, ['Low','Medium','High','Critical'][index % 4], owner.display_name, owner.id, status, 'Dane testowe drugiego projektu.', owner.id);
+    const result = addStatus.run(project.id, controllerRow.id, `W520-${controllerRow.code}-${String(index + 1).padStart(3,'0')}`, `${String((index % 12) + 1).padStart(3,'0')}VR_001`, `Weryfikacja ${subcategory}`, category, subcategory, PRIORITY_VALUES[index % PRIORITY_VALUES.length], owner.display_name, owner.id, status, 'Dane testowe drugiego projektu.', owner.id);
     if (result.changes) statusIds.push(Number(result.lastInsertRowid));
   }
 
@@ -1102,7 +1114,7 @@ function seedSecondProject(db, hashPassword) {
   for (let index = 0; index < 35; index += 1) {
     const controllerRow = controllers[(index + 2) % controllers.length];
     const owner = activeUsers[(index + 3) % activeUsers.length];
-    const result = addTask.run(project.id, controllerRow.id, `W520 · zadanie ${String(index + 1).padStart(2,'0')} · ${controllerRow.code}`, 'Zadanie demonstracyjne drugiego projektu.', `${String((index % 12) + 1).padStart(3,'0')}VR_001`, ['Low','Medium','High'][index % 3], owner.display_name, owner.id, ['To do','In progress','Done'][index % 3], date(-(index % 10)), date((index % 21) - 5), ['Commissioning','Programming','Testing'][index % 3], ['Field verification','PLC changes','Sequence tests'][index % 3], owner.id);
+    const result = addTask.run(project.id, controllerRow.id, `W520 · zadanie ${String(index + 1).padStart(2,'0')} · ${controllerRow.code}`, 'Zadanie demonstracyjne drugiego projektu.', `${String((index % 12) + 1).padStart(3,'0')}VR_001`, PRIORITY_VALUES[index % 3], owner.display_name, owner.id, ['To do','In progress','Done'][index % 3], date(-(index % 10)), date((index % 21) - 5), ['Commissioning','Programming','Testing'][index % 3], ['Field verification','PLC changes','Sequence tests'][index % 3], owner.id);
     taskIds.push(Number(result.lastInsertRowid));
   }
 

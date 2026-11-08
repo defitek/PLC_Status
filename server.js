@@ -812,7 +812,7 @@ function runScheduledAutomations() {
     } catch (error) { console.error(`Automation failed for project ${projectId}:`, error); }
   }
 }
-async function startServer() {
+export async function startServer() {
   if (redis) await redis.connect();
   server.listen(port, '0.0.0.0', () => {
     console.log(`PLC Commissioning Hub 1.0.0 running on port ${port}${redis ? ' · Redis sessions' : ''}`);

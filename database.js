@@ -7,6 +7,13 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { ENTITY_TABLES as TABLES } from './database/constants.js';
 import { hashPassword, validPassword, verifyPassword } from './database/security.js';
 import {
+  PRIORITY_VALUES,
+  normalizeWorkflowStatus,
+  requiresStatusComment,
+  statusValues as sharedStatusValues,
+  workflowLabel
+} from './public/modules/workflow-model.js';
+import {
   prepareDatabase,
   columnNames,
   ensureStatusWorkflowStates,
@@ -24,7 +31,11 @@ const moduleDir = dirname(fileURLToPath(import.meta.url));
 const AUDIT_IGNORED = new Set(['updated_at', 'progress_updated_at', 'progress_updated_by']);
 
 const clean = value => typeof value === 'string' ? value.trim() : '';
-const normalizeStatusWorkflow = value => ({ 'Not started': 'Ready to test', 'NOK / Rework': 'NOK / Retest required', 'Retest required': 'NOK / Retest required' })[clean(value)] || clean(value);
+const normalizeStatusWorkflow = normalizeWorkflowStatus;
+const PRIORITY_VALUE_SET = new Set(PRIORITY_VALUES);
+const TASK_STATUS_VALUE_SET = new Set(sharedStatusValues('task'));
+const POINT_STATUS_VALUE_SET = new Set(sharedStatusValues('point'));
+const GOAL_STATUS_VALUE_SET = new Set(sharedStatusValues('goal'));
 const nullableDate = value => /^\d{4}-\d{2}-\d{2}$/.test(clean(value)) ? clean(value) : null;
 const nullableTime = value => /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(clean(value)) ? clean(value) : null;
 const nullableNumber = value => value === '' || value === null || value === undefined || !Number.isFinite(Number(value)) ? null : Number(value);
@@ -3007,8 +3018,7 @@ function createRepository(db, defaultProjectId) {
     const requestedDueDate = nullableDate(item.due_date);
     let savedThroughTaskWorkflow = false;
     if (item.entity_type === 'task') {
-      const allowedTaskStatuses = new Set(['To do', 'In progress', 'Blocked', 'NOK / Retest required', 'Done']);
-      const nextStatus = allowedTaskStatuses.has(targetStatus) ? targetStatus : before.status;
+      const nextStatus = TASK_STATUS_VALUE_SET.has(targetStatus) ? targetStatus : before.status;
       const nextDueDate = requestedDueDate || before.due_date;
       if (nextStatus !== before.status || nextDueDate !== before.due_date) {
         repository.saveTask(item.entity_id, {
@@ -3016,7 +3026,7 @@ function createRepository(db, defaultProjectId) {
           direct_assignee_user_ids: before.direct_assignee_user_ids || [],
           due_date: nextDueDate,
           status: nextStatus,
-          status_change_comment: ['Blocked', 'NOK / Retest required'].includes(nextStatus) ? clean(item.outcome_comment) || clean(item.decision) || `Zmiana ustalona podczas odprawy „${meeting.title}”.` : '',
+          status_change_comment: requiresStatusComment('task', nextStatus) ? clean(item.outcome_comment) || clean(item.decision) || `Zmiana ustalona podczas odprawy „${meeting.title}”.` : '',
           recurrence_enabled: Number(before.recurrence_interval || 0) > 0 ? 1 : 0
         }, currentUser);
         savedThroughTaskWorkflow = true;
@@ -3024,7 +3034,7 @@ function createRepository(db, defaultProjectId) {
     } else if (item.entity_type === 'point' && requestedDueDate && requestedDueDate !== before.due_date) db.prepare("UPDATE open_points SET due_date=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?").run(requestedDueDate, item.entity_id, activeProjectId());
     else if (item.entity_type === 'goal' && requestedDueDate && requestedDueDate !== before.due_date) db.prepare("UPDATE goals SET due_date=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?").run(requestedDueDate, item.entity_id, activeProjectId());
     if (targetStatus && item.entity_type !== 'task') {
-      const allowed = item.entity_type === 'status' ? statusWorkflowValueSet() : item.entity_type === 'task' ? new Set(['To do', 'In progress', 'Blocked', 'NOK / Retest required', 'Done']) : item.entity_type === 'point' ? new Set(['Open', 'Waiting', 'In progress', 'Closed']) : new Set(['Open', 'In progress', 'Done']);
+      const allowed = item.entity_type === 'status' ? statusWorkflowValueSet() : item.entity_type === 'task' ? TASK_STATUS_VALUE_SET : item.entity_type === 'point' ? POINT_STATUS_VALUE_SET : GOAL_STATUS_VALUE_SET;
       if (allowed.has(targetStatus) && targetStatus !== before.status) db.prepare(`UPDATE ${TABLES[item.entity_type]} SET status=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?`).run(targetStatus, item.entity_id, activeProjectId());
     }
     const after = baseSnapshot(item.entity_type, item.entity_id);
@@ -3321,7 +3331,7 @@ function createRepository(db, defaultProjectId) {
     if (!items.length) throw appError('Wybierz co najmniej jeden element');
     const patch = input.patch && typeof input.patch === 'object' ? input.patch : {};
     if (!['owner_user_id', 'priority', 'due_date'].some(key => Object.hasOwn(patch, key))) throw appError('Wybierz zmianę do wykonania');
-    const priority = ['Low', 'Medium', 'High', 'Critical'].includes(clean(patch.priority)) ? clean(patch.priority) : null;
+    const priority = PRIORITY_VALUE_SET.has(clean(patch.priority)) ? clean(patch.priority) : null;
     const ownerId = Object.hasOwn(patch, 'owner_user_id') ? asId(patch.owner_user_id) : undefined;
     const dueDate = Object.hasOwn(patch, 'due_date') ? nullableDate(patch.due_date) : undefined;
     if (ownerId && !one(`SELECT 1 FROM users u JOIN project_memberships pm ON pm.user_id=u.id
@@ -3444,7 +3454,7 @@ function createRepository(db, defaultProjectId) {
     const actions = [...new Set((Array.isArray(input.actions) ? input.actions : [input.action_type]).map(clean).filter(action => allowedActions.includes(action)))];
     const action = actions[0] || '';
     const types = [...new Set((Array.isArray(input.entity_types) ? input.entity_types : []).map(clean).filter(type => ['status', 'task', 'point', 'goal'].includes(type)))];
-    const targetPriority = ['Low', 'Medium', 'High', 'Critical'].includes(clean(input.target_priority)) ? clean(input.target_priority) : 'High';
+    const targetPriority = PRIORITY_VALUE_SET.has(clean(input.target_priority)) ? clean(input.target_priority) : 'High';
     if (!name || !trigger || !action || !types.length) throw appError('Nazwa, warunek, moduły i działanie reguły są wymagane');
     if (trigger === 'reminder_due' && !types.includes('point')) throw appError('Reguła przypomnienia wymaga modułu Otwarte punkty');
     const values = [name, trigger, JSON.stringify(types), Math.max(0, Math.min(365, Number(input.days_offset || 0))), action, JSON.stringify(actions), targetPriority, Number(input.active ?? 1) ? 1 : 0];
@@ -4725,10 +4735,9 @@ function createRepository(db, defaultProjectId) {
       const after = baseSnapshot('status', statusId);
       writeAudit('status', statusId, 'update', currentUser, before, after);
       if (statusChanged && statusComment) {
-        const statusNames = { 'Ready to test': 'Gotowe do sprawdzenia', 'In progress': 'W trakcie', Blocked: 'Zablokowany', 'NOK / Retest required': 'NOK / wymagany retest', Done: 'Gotowe', 'N/A': 'N/A' };
         const dependencyTypes = { status: 'Status', task: 'Zadanie', point: 'Otwarty punkt' };
         const dependencyContext = dependencyOverride ? `\nWymagane niespełnione zależności:\n${blockers.map(item => `• ${dependencyTypes[item.entity_type] || item.entity_type}: ${item.title}; obszar: ${item.controller_path || item.controller_label || item.controller || 'cały projekt'}; status: ${item.status}`).join('\n')}` : '';
-        const context = dependencyOverride ? `Ręczne pominięcie blokady zależności w polu „${column.name}” przy zmianie statusu na „${statusNames[value] || value}”` : `Komentarz dodany ze względu na zmianę pola „${column.name}” na „${statusNames[value] || value}”`;
+        const context = dependencyOverride ? `Ręczne pominięcie blokady zależności w polu „${column.name}” przy zmianie statusu na „${workflowLabel(value, 'status')}”` : `Komentarz dodany ze względu na zmianę pola „${column.name}” na „${workflowLabel(value, 'status')}”`;
         addComment({ entity_type: 'status', entity_id: statusId, content: `${context}:${dependencyContext}\n${statusComment}` }, currentUser);
       }
       if (column.field_type === 'status') refreshDependentStatusItems('status', statusId, currentUser);
@@ -4841,10 +4850,9 @@ function createRepository(db, defaultProjectId) {
       const after = baseSnapshot('status', recordId);
       writeAudit('status', recordId, id ? 'update' : 'create', currentUser, before, after);
       if (statusChanged && statusComment) {
-        const statusNames = { 'Ready to test': 'Gotowe do sprawdzenia', 'In progress': 'W trakcie', Blocked: 'Zablokowany', 'NOK / Retest required': 'NOK / wymagany retest', Done: 'Gotowe', 'N/A': 'N/A' };
         const dependencyTypes = { status: 'Status', task: 'Zadanie', point: 'Otwarty punkt' };
         const dependencyContext = dependencyOverride ? `\nWymagane niespełnione zależności:\n${blockers.map(item => `• ${dependencyTypes[item.entity_type] || item.entity_type}: ${item.title}; obszar: ${item.controller_path || item.controller_label || item.controller || 'cały projekt'}; status: ${item.status}`).join('\n')}` : '';
-        const context = dependencyOverride ? `Ręczne pominięcie blokady zależności przy zmianie statusu na „${statusNames[requestedStatus] || requestedStatus}”` : `Komentarz dodany ze względu na zmianę statusu na „${statusNames[requestedStatus] || requestedStatus}”`;
+        const context = dependencyOverride ? `Ręczne pominięcie blokady zależności przy zmianie statusu na „${workflowLabel(requestedStatus, 'status')}”` : `Komentarz dodany ze względu na zmianę statusu na „${workflowLabel(requestedStatus, 'status')}”`;
         addComment({ entity_type: 'status', entity_id: recordId, content: `${context}:${dependencyContext}\n${statusComment}` }, currentUser);
       }
       refreshDependentStatusItems('status', recordId, currentUser);
@@ -4918,11 +4926,11 @@ function createRepository(db, defaultProjectId) {
       const recurrenceInterval = recurrenceEnabled ? Math.trunc(requestedRecurrenceInterval) : 0;
       const recurrenceUnit = ['days', 'weeks', 'months'].includes(clean(input.recurrence_unit)) ? clean(input.recurrence_unit) : before?.recurrence_unit || 'days';
       const taskStatus = clean(input.status) || 'To do';
-      if (!['To do', 'In progress', 'Blocked', 'NOK / Retest required', 'Done'].includes(taskStatus)) throw appError('Nieprawidłowy status zadania');
+      if (!TASK_STATUS_VALUE_SET.has(taskStatus)) throw appError('Nieprawidłowy status zadania');
       const taskStatusChanged = Boolean(before && before.status !== taskStatus);
       const taskStatusComment = clean(input.status_change_comment);
       if (taskStatusComment.length > 3000) throw appError('Komentarz zmiany statusu może mieć maksymalnie 3000 znaków');
-      if (taskStatusChanged && ['Blocked', 'NOK / Retest required'].includes(taskStatus) && !taskStatusComment) throw appError('Status „Zablokowane” i „NOK / wymagany retest” wymaga komentarza z przyczyną');
+      if (taskStatusChanged && requiresStatusComment('task', taskStatus) && !taskStatusComment) throw appError('Status „Zablokowane” i „NOK / wymagany retest” wymaga komentarza z przyczyną');
       const values = {
         project_id: activeProjectId(), controller_id: targetController.id, controller_group_id: scopeGroupId, title: clean(input.title), description: clean(input.description), station: clean(input.station),
         function_group_id: groupId, function_group_element_id: elementId, other_object: otherObject,
@@ -4948,7 +4956,7 @@ function createRepository(db, defaultProjectId) {
       setEntityDependencies('task', recordId, requestedDependencies, currentUser);
       const after = baseSnapshot('task', recordId);
       writeAudit('task', recordId, id ? 'update' : 'create', currentUser, before, after);
-      if (taskStatusChanged && taskStatusComment) addComment({ entity_type: 'task', entity_id: recordId, content: `Komentarz dodany ze względu na zmianę statusu zadania na „${taskStatus === 'Blocked' ? 'Zablokowane' : 'NOK / wymagany retest'}”:\n${taskStatusComment}` }, currentUser);
+      if (taskStatusChanged && taskStatusComment) addComment({ entity_type: 'task', entity_id: recordId, content: `Komentarz dodany ze względu na zmianę statusu zadania na „${workflowLabel(taskStatus, 'task')}”:\n${taskStatusComment}` }, currentUser);
       refreshDependentStatusItems('task', recordId, currentUser);
       const previousAssignees = before ? [...(before.direct_assignee_user_ids || []), ...(before.checklist || []).map(item => item.owner_user_id).filter(Boolean)] : [];
       notifyNewTaskAssignees(recordId, previousAssignees, allAssignees, currentUser);
