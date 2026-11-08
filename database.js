@@ -2725,6 +2725,19 @@ function createRepository(db, defaultProjectId) {
     return 'Cały projekt';
   }
 
+  function shapeOperationEntity(type, row, hierarchy, assigneeUserIds = []) {
+    if (!row) return null;
+    row = attachControllerMeta(row, hierarchy);
+    return {
+      entity_type: type, entity_id: row.id, title: operationTitle(type, row) || row.content || 'Element projektu',
+      status: row.status || row.type || '', priority: row.priority || row.criticality || '', scope_label: operationScope(row),
+      due_date: row.due_date || null, owner_name: row.owner_name || row.responsible_name || '',
+      controller: row.controller || '', controller_id: row.controller_id || null, controller_group_id: row.controller_group_id || null,
+      assignee_user_ids: assigneeUserIds,
+      search_text: [row.title, row.function_detail, row.description, row.current_note, row.impact, row.next_action, row.category, row.subcategory, row.content].filter(Boolean).join(' ')
+    };
+  }
+
   function operationEntity(type, id, currentUser, hierarchy = null) {
     const projectId = activeProjectId();
     let row = null;
@@ -2740,33 +2753,121 @@ function createRepository(db, defaultProjectId) {
     else if (type === 'goal') row = one(`SELECT g.*,c.code controller FROM goals g LEFT JOIN controllers c ON c.id=g.controller_id
       WHERE g.id=? AND g.project_id=?`, asId(id), projectId);
     if (!row) return null;
-    row = attachControllerMeta(row, hierarchy || hierarchyData());
     const assigneeUserIds = type === 'task'
       ? all('SELECT user_id FROM task_assignees WHERE project_id=? AND task_id=? AND assigned_directly=1 ORDER BY user_id', projectId, row.id).map(item => item.user_id)
       : type === 'status'
         ? all('SELECT user_id FROM status_assignees WHERE project_id=? AND status_id=? ORDER BY user_id', projectId, row.id).map(item => item.user_id)
         : type === 'point' && row.owner_user_id ? [row.owner_user_id] : [];
+    return shapeOperationEntity(type, row, hierarchy || hierarchyData(), assigneeUserIds);
+  }
+
+  function chunked(values, size = 400) {
+    const result = [];
+    for (let index = 0; index < values.length; index += size) result.push(values.slice(index, index + size));
+    return result;
+  }
+
+  function groupRows(rows, key) {
+    const result = new Map();
+    for (const row of rows) {
+      const value = key(row);
+      if (!result.has(value)) result.set(value, []);
+      result.get(value).push(row);
+    }
+    return result;
+  }
+
+  function operationEntityMap(items, hierarchy) {
+    const projectId = activeProjectId();
+    const idsByType = new Map();
+    for (const item of items) {
+      if (!['status', 'task', 'point', 'goal'].includes(item.entity_type) || !asId(item.entity_id)) continue;
+      if (!idsByType.has(item.entity_type)) idsByType.set(item.entity_type, new Set());
+      idsByType.get(item.entity_type).add(asId(item.entity_id));
+    }
+    const queries = {
+      status: ids => [`SELECT s.*,c.code controller,responsible.display_name responsible_name FROM status_items s JOIN controllers c ON c.id=s.controller_id LEFT JOIN users responsible ON responsible.id=s.responsible_user_id WHERE s.project_id=? AND s.id IN (${ids.map(() => '?').join(',')})`, ids],
+      task: ids => [`SELECT t.*,c.code controller,owner.display_name owner_name FROM tasks t JOIN controllers c ON c.id=t.controller_id LEFT JOIN users owner ON owner.id=t.owner_user_id WHERE t.project_id=? AND t.id IN (${ids.map(() => '?').join(',')})`, ids],
+      point: ids => [`SELECT p.*,c.code controller,owner.display_name owner_name FROM open_points p JOIN controllers c ON c.id=p.controller_id LEFT JOIN users owner ON owner.id=p.owner_user_id WHERE p.project_id=? AND p.id IN (${ids.map(() => '?').join(',')})`, ids],
+      goal: ids => [`SELECT g.*,c.code controller FROM goals g LEFT JOIN controllers c ON c.id=g.controller_id WHERE g.project_id=? AND g.id IN (${ids.map(() => '?').join(',')})`, ids]
+    };
+    const rowsByType = new Map();
+    for (const [type, idSet] of idsByType) {
+      const rows = [];
+      for (const ids of chunked([...idSet])) {
+        const [sql, params] = queries[type](ids);
+        rows.push(...all(sql, projectId, ...params));
+      }
+      rowsByType.set(type, rows);
+    }
+    const taskAssignees = new Map();
+    for (const ids of chunked([...new Set((rowsByType.get('task') || []).map(row => row.id))])) {
+      for (const row of all(`SELECT task_id,user_id FROM task_assignees WHERE project_id=? AND assigned_directly=1 AND task_id IN (${ids.map(() => '?').join(',')}) ORDER BY user_id`, projectId, ...ids)) {
+        if (!taskAssignees.has(row.task_id)) taskAssignees.set(row.task_id, []);
+        taskAssignees.get(row.task_id).push(row.user_id);
+      }
+    }
+    const statusAssignees = new Map();
+    for (const ids of chunked([...new Set((rowsByType.get('status') || []).map(row => row.id))])) {
+      for (const row of all(`SELECT status_id,user_id FROM status_assignees WHERE project_id=? AND status_id IN (${ids.map(() => '?').join(',')}) ORDER BY user_id`, projectId, ...ids)) {
+        if (!statusAssignees.has(row.status_id)) statusAssignees.set(row.status_id, []);
+        statusAssignees.get(row.status_id).push(row.user_id);
+      }
+    }
+    const result = new Map();
+    for (const [type, rows] of rowsByType) for (const row of rows) {
+      const assignees = type === 'task' ? taskAssignees.get(row.id) || [] : type === 'status' ? statusAssignees.get(row.id) || [] : type === 'point' && row.owner_user_id ? [row.owner_user_id] : [];
+      result.set(`${type}:${row.id}`, shapeOperationEntity(type, row, hierarchy, assignees));
+    }
+    return result;
+  }
+
+  function meetingDecorationContext(items, hierarchy, includeMeetingPeople = true) {
+    const projectId = activeProjectId();
+    const entityItems = [...new Map(items.map(item => [`${item.entity_type}:${item.entity_id}`, item])).values()];
+    const entityByKey = operationEntityMap(entityItems, hierarchy);
+    const audits = [];
+    const comments = [];
+    for (const type of ['status', 'task', 'point', 'goal']) {
+      const ids = [...new Set(entityItems.filter(item => item.entity_type === type).map(item => asId(item.entity_id)).filter(Boolean))];
+      for (const group of chunked(ids)) {
+        const placeholders = group.map(() => '?').join(',');
+        audits.push(...all(`SELECT al.entity_type,al.entity_id,al.user_id,al.changed_at,al.changes_json,u.display_name user_name FROM audit_log al LEFT JOIN users u ON u.id=al.user_id WHERE al.project_id=? AND al.entity_type=? AND al.entity_id IN (${placeholders}) ORDER BY al.changed_at DESC,al.id DESC`, projectId, type, ...group));
+        comments.push(...all(`SELECT ec.*,u.display_name user_name FROM entity_comments ec JOIN users u ON u.id=ec.user_id WHERE ec.project_id=? AND ec.entity_type=? AND ec.entity_id IN (${placeholders}) ORDER BY ec.created_at,ec.id`, projectId, type, ...group));
+      }
+    }
+    const itemIds = [...new Set(items.map(item => asId(item.id)).filter(Boolean))];
+    const assigneeRows = [];
+    const workerRows = [];
+    if (includeMeetingPeople) for (const ids of chunked(itemIds)) {
+      const placeholders = ids.map(() => '?').join(',');
+      assigneeRows.push(...all(`SELECT pmia.meeting_item_id,pmia.user_id,u.display_name FROM project_meeting_item_assignees pmia JOIN users u ON u.id=pmia.user_id WHERE pmia.meeting_item_id IN (${placeholders}) ORDER BY u.display_name`, ...ids));
+      workerRows.push(...all(`SELECT pmiw.meeting_item_id,pmiw.user_id,u.display_name FROM project_meeting_item_workers pmiw JOIN users u ON u.id=pmiw.user_id WHERE pmiw.meeting_item_id IN (${placeholders}) ORDER BY u.display_name`, ...ids));
+    }
+    const userNames = new Map(all(`SELECT u.id,u.display_name FROM users u JOIN project_memberships pm ON pm.user_id=u.id WHERE pm.project_id=?`, projectId).map(row => [row.id, row.display_name]));
     return {
-      entity_type: type, entity_id: row.id, title: operationTitle(type, row) || row.content || 'Element projektu',
-      status: row.status || row.type || '', priority: row.priority || row.criticality || '', scope_label: operationScope(row),
-      due_date: row.due_date || null, owner_name: row.owner_name || row.responsible_name || '',
-      controller: row.controller || '', controller_id: row.controller_id || null, controller_group_id: row.controller_group_id || null,
-      assignee_user_ids: assigneeUserIds,
-      search_text: [row.title, row.function_detail, row.description, row.current_note, row.impact, row.next_action, row.category, row.subcategory, row.content].filter(Boolean).join(' ')
+      entityByKey,
+      auditsByKey: groupRows(audits, row => `${row.entity_type}:${row.entity_id}`),
+      commentsByKey: groupRows(comments, row => `${row.entity_type}:${row.entity_id}`),
+      assigneesByItem: groupRows(assigneeRows, row => row.meeting_item_id),
+      workersByItem: groupRows(workerRows, row => row.meeting_item_id),
+      userNames
     };
   }
 
-  function decorateMeetingItem(item, meeting, currentUser, hierarchy, preservePublishedPeople = false) {
-    const entity = operationEntity(item.entity_type, item.entity_id, currentUser, hierarchy);
-    const audit = auditRowsForEntity(item.entity_type, item.entity_id).filter(row => String(row.changed_at) >= String(meeting.created_at)).map(row => {
+  function decorateMeetingItem(item, meeting, currentUser, hierarchy, preservePublishedPeople = false, context = null) {
+    const key = `${item.entity_type}:${item.entity_id}`;
+    const entity = context ? context.entityByKey.get(key) || null : operationEntity(item.entity_type, item.entity_id, currentUser, hierarchy);
+    const auditSource = context ? context.auditsByKey.get(key) || [] : auditRowsForEntity(item.entity_type, item.entity_id);
+    const audit = auditSource.filter(row => String(row.changed_at) >= String(meeting.created_at)).map(row => {
       let changes = {}; try { changes = JSON.parse(row.changes_json || '{}'); } catch {}
       return { user_id: row.user_id, changed_at: row.changed_at, user_name: row.user_name, changes };
     }).filter(row => Object.keys(row.changes).length);
-    const comments = ['status', 'task', 'point', 'goal'].includes(item.entity_type) ? commentRows(item.entity_type, item.entity_id).filter(row => String(row.created_at) >= String(meeting.created_at)) : [];
+    const comments = ['status', 'task', 'point', 'goal'].includes(item.entity_type) ? (context ? context.commentsByKey.get(key) || [] : commentRows(item.entity_type, item.entity_id)).filter(row => String(row.created_at) >= String(meeting.created_at)) : [];
     const status_events = audit.filter(row => row.changes.status).map(row => ({ user_id: row.user_id, user_name: row.user_name, changed_at: row.changed_at, from: row.changes.status.from, to: row.changes.status.to }));
     const statusChangedByUserId = asId(item.status_changed_by_user_id) || asId(status_events[0]?.user_id);
-    const assignees = preservePublishedPeople ? null : all(`SELECT pmia.user_id,u.display_name FROM project_meeting_item_assignees pmia JOIN users u ON u.id=pmia.user_id WHERE pmia.meeting_item_id=? ORDER BY u.display_name`, item.id);
-    const workers = preservePublishedPeople ? null : all(`SELECT pmiw.user_id,u.display_name FROM project_meeting_item_workers pmiw JOIN users u ON u.id=pmiw.user_id WHERE pmiw.meeting_item_id=? ORDER BY u.display_name`, item.id);
+    const assignees = preservePublishedPeople ? null : context ? context.assigneesByItem.get(item.id) || [] : all(`SELECT pmia.user_id,u.display_name FROM project_meeting_item_assignees pmia JOIN users u ON u.id=pmia.user_id WHERE pmia.meeting_item_id=? ORDER BY u.display_name`, item.id);
+    const workers = preservePublishedPeople ? null : context ? context.workersByItem.get(item.id) || [] : all(`SELECT pmiw.user_id,u.display_name FROM project_meeting_item_workers pmiw JOIN users u ON u.id=pmiw.user_id WHERE pmiw.meeting_item_id=? ORDER BY u.display_name`, item.id);
     return {
       ...item, baseline: item.baseline || parseJson(item.baseline_json, {}), entity,
       assignee_user_ids: preservePublishedPeople ? (item.assignee_user_ids || []) : assignees.map(row => row.user_id),
@@ -2774,18 +2875,29 @@ function createRepository(db, defaultProjectId) {
       worker_user_ids: preservePublishedPeople ? (item.worker_user_ids || []) : workers.map(row => row.user_id),
       worker_names: preservePublishedPeople ? (item.worker_names || []) : workers.map(row => row.display_name),
       changes: audit, comments, status_events, status_changed_by_user_id: statusChangedByUserId,
-      status_changed_by_name: statusChangedByUserId ? userName(statusChangedByUserId) : ''
+      status_changed_by_name: statusChangedByUserId ? (context ? context.userNames.get(statusChangedByUserId) || '' : userName(statusChangedByUserId)) : ''
     };
   }
 
-  function projectMeetingRows(currentUser) {
+  function projectMeetingRows(currentUser, onlyMeetingIds = null) {
+    if (Array.isArray(onlyMeetingIds) && !onlyMeetingIds.length) return [];
     const hierarchy = hierarchyData();
-    return all(`SELECT pm.*,creator.display_name created_by_name,closer.display_name closed_by_name FROM project_meetings pm
+    const projectId = activeProjectId();
+    const meetings = Array.isArray(onlyMeetingIds)
+      ? chunked([...new Set(onlyMeetingIds.map(asId).filter(Boolean))]).flatMap(ids => all(`SELECT pm.*,creator.display_name created_by_name,closer.display_name closed_by_name FROM project_meetings pm
+        LEFT JOIN users creator ON creator.id=pm.created_by LEFT JOIN users closer ON closer.id=pm.closed_by
+        WHERE pm.project_id=? AND pm.id IN (${ids.map(() => '?').join(',')})`, projectId, ...ids))
+      : all(`SELECT pm.*,creator.display_name created_by_name,closer.display_name closed_by_name FROM project_meetings pm
       LEFT JOIN users creator ON creator.id=pm.created_by LEFT JOIN users closer ON closer.id=pm.closed_by
-      WHERE pm.project_id=? ORDER BY pm.meeting_date DESC,pm.id DESC`, activeProjectId()).map(meeting => ({
+      WHERE pm.project_id=?`, projectId);
+    meetings.sort((first, second) => String(second.meeting_date).localeCompare(String(first.meeting_date)) || second.id - first.id);
+    const items = [];
+    for (const meetingIds of chunked(meetings.map(meeting => meeting.id))) items.push(...all(`SELECT pmi.*,u.display_name owner_name FROM project_meeting_items pmi LEFT JOIN users u ON u.id=pmi.owner_user_id WHERE pmi.meeting_id IN (${meetingIds.map(() => '?').join(',')}) ORDER BY pmi.meeting_id,pmi.sort_order,pmi.id`, ...meetingIds));
+    const itemsByMeeting = groupRows(items, item => item.meeting_id);
+    const context = meetingDecorationContext(items, hierarchy, true);
+    return meetings.map(meeting => ({
         ...meeting, period_from: meeting.period_from || meeting.meeting_date, period_to: meeting.period_to || meeting.meeting_date,
-        items: all(`SELECT pmi.*,u.display_name owner_name FROM project_meeting_items pmi LEFT JOIN users u ON u.id=pmi.owner_user_id WHERE pmi.meeting_id=? ORDER BY pmi.sort_order,pmi.id`, meeting.id)
-          .map(item => decorateMeetingItem(item, meeting, currentUser, hierarchy))
+        items: (itemsByMeeting.get(meeting.id) || []).map(item => decorateMeetingItem(item, meeting, currentUser, hierarchy, false, context))
       }));
   }
 
@@ -2843,11 +2955,14 @@ function createRepository(db, defaultProjectId) {
 
   function meetingSummaryRows(currentUser) {
     const hierarchy = hierarchyData();
-    const live = new Map(projectMeetingRows(currentUser).map(meeting => [meeting.id, meeting]));
-    return all(`SELECT pm.*,creator.display_name created_by_name,closer.display_name closed_by_name FROM project_meetings pm
+    const meetings = all(`SELECT pm.*,creator.display_name created_by_name,closer.display_name closed_by_name FROM project_meetings pm
       LEFT JOIN users creator ON creator.id=pm.created_by LEFT JOIN users closer ON closer.id=pm.closed_by
-      WHERE pm.project_id=? AND pm.published_at IS NOT NULL`, activeProjectId()).map(meeting => {
-      const snapshot = parseJson(meeting.published_snapshot_json, {});
+      WHERE pm.project_id=? AND pm.published_at IS NOT NULL`, activeProjectId());
+    const snapshots = new Map(meetings.map(meeting => [meeting.id, parseJson(meeting.published_snapshot_json, {})]));
+    const missingSnapshots = meetings.filter(meeting => !Array.isArray(snapshots.get(meeting.id)?.items)).map(meeting => meeting.id);
+    const live = new Map(projectMeetingRows(currentUser, missingSnapshots).map(meeting => [meeting.id, meeting]));
+    const prepared = meetings.map(meeting => {
+      const snapshot = snapshots.get(meeting.id);
       const source = Array.isArray(snapshot.items) ? snapshot : live.get(meeting.id) || meeting;
       const publishedMeeting = {
         ...meeting,
@@ -2861,7 +2976,12 @@ function createRepository(db, defaultProjectId) {
         closed_by_name: source.closed_by_name || '',
         created_by_name: source.created_by_name || meeting.created_by_name
       };
-      const items = (source.items || []).map(item => decorateMeetingItem(item, publishedMeeting, currentUser, hierarchy, true));
+      return { meeting: publishedMeeting, source, hasSnapshot: Array.isArray(snapshot.items) };
+    });
+    const snapshotItems = prepared.filter(entry => entry.hasSnapshot).flatMap(entry => entry.source.items || []);
+    const context = meetingDecorationContext(snapshotItems, hierarchy, false);
+    return prepared.map(({ meeting: publishedMeeting, source, hasSnapshot }) => {
+      const items = hasSnapshot ? (source.items || []).map(item => decorateMeetingItem(item, publishedMeeting, currentUser, hierarchy, true, context)) : source.items || [];
       return {
         ...publishedMeeting, items, item_count: items.length,
         open_count: items.filter(item => item.item_status === 'open').length,
@@ -2940,7 +3060,8 @@ function createRepository(db, defaultProjectId) {
         .filter(item => !inScope(item.entity_type, item.entity_id));
       requested = [...requested, ...hiddenExisting];
     }
-    const prepared = requested.map(item => ({ item, entity: operationEntity(item.entity_type, item.entity_id, currentUser) })).filter(row => row.entity);
+    const requestedEntities = operationEntityMap(requested, hierarchyData());
+    const prepared = requested.map(item => ({ item, entity: requestedEntities.get(`${item.entity_type}:${item.entity_id}`) || null })).filter(row => row.entity);
     if (values.status === 'closed' && !prepared.length) throw appError('Dodaj i zatwierdź co najmniej jeden element przed zamknięciem odprawy');
     if (values.status === 'closed') for (const { item, entity } of prepared) {
       const itemStatus = ['open', 'decided', 'deferred'].includes(item.item_status) ? item.item_status : 'open';
@@ -2980,12 +3101,12 @@ function createRepository(db, defaultProjectId) {
       else db.prepare('UPDATE project_meetings SET closed_by=NULL,closed_at=NULL WHERE id=?').run(recordId);
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
-    const saved = projectMeetingRows(currentUser).find(item => item.id === recordId);
+    const saved = projectMeetingRows(currentUser, [recordId])[0];
     return scope === 'all' ? saved : { ...saved, items: saved.items.filter(item => inScope(item.entity_type, item.entity_id)) };
   }
 
   function publishProjectMeeting(id, currentUser) {
-    const meeting = projectMeetingRows(currentUser).find(item => item.id === asId(id));
+    const meeting = projectMeetingRows(currentUser, [asId(id)])[0];
     if (!meeting) throw appError('Nie znaleziono odprawy', 404);
     if (!meeting.items.length) throw appError('Dodaj co najmniej jeden element przed opublikowaniem odprawy');
     const typeNames = { status: 'Punkt statusu', task: 'Zadanie', point: 'Otwarty punkt', goal: 'Cel', note: 'Przekazanie statusu' };
@@ -3049,19 +3170,30 @@ function createRepository(db, defaultProjectId) {
   }
 
   function externalDependencyRows(currentUser) {
-    return all(`SELECT ed.*,u.display_name owner_name,creator.display_name created_by_name,
-      p.title point_title,p.status point_status,p.waiting_for,p.due_date point_due_date,p.created_at point_created_at
+    const hierarchy = hierarchyData();
+    const rows = all(`SELECT ed.*,u.display_name owner_name,creator.display_name created_by_name,
+      p.title point_title,p.status point_status,p.waiting_for,p.due_date point_due_date,p.created_at point_created_at,
+      p.controller_id point_controller_id,p.controller_group_id point_controller_group_id,p.priority point_priority,
+      p.description point_description,p.impact point_impact,p.next_action point_next_action,c.code point_controller,
+      p.owner_user_id point_owner_user_id,point_owner.display_name point_owner_name
       FROM external_dependencies ed
       JOIN open_points p ON p.id=ed.entity_id AND p.project_id=ed.project_id AND ed.entity_type='point'
-      LEFT JOIN users u ON u.id=ed.owner_user_id LEFT JOIN users creator ON creator.id=ed.created_by
-      WHERE ed.project_id=? ORDER BY ed.configuration_pending DESC,ed.dependency_status='resolved',ed.next_followup IS NULL,ed.next_followup,ed.id DESC`, activeProjectId())
-      .map(row => ({ ...row, entity: operationEntity('point', row.entity_id, currentUser), updates: externalDependencyUpdateRows(row.id) }));
-  }
-
-  function externalDependencyUpdateRows(dependencyId) {
-    return all(`SELECT edu.*,u.display_name created_by_name FROM external_dependency_updates edu
-      LEFT JOIN users u ON u.id=edu.created_by
-      WHERE edu.project_id=? AND edu.dependency_id=? ORDER BY edu.created_at,edu.id`, activeProjectId(), asId(dependencyId));
+      JOIN controllers c ON c.id=p.controller_id
+      LEFT JOIN users u ON u.id=ed.owner_user_id LEFT JOIN users creator ON creator.id=ed.created_by LEFT JOIN users point_owner ON point_owner.id=p.owner_user_id
+      WHERE ed.project_id=? ORDER BY ed.configuration_pending DESC,ed.dependency_status='resolved',ed.next_followup IS NULL,ed.next_followup,ed.id DESC`, activeProjectId());
+    const updates = [];
+    for (const ids of chunked(rows.map(row => row.id))) updates.push(...all(`SELECT edu.*,u.display_name created_by_name FROM external_dependency_updates edu
+      LEFT JOIN users u ON u.id=edu.created_by WHERE edu.project_id=? AND edu.dependency_id IN (${ids.map(() => '?').join(',')}) ORDER BY edu.dependency_id,edu.created_at,edu.id`, activeProjectId(), ...ids));
+    const updatesByDependency = groupRows(updates, row => row.dependency_id);
+    return rows.map(row => {
+      const point = {
+        id: row.entity_id, title: row.point_title, status: row.point_status, waiting_for: row.waiting_for,
+        due_date: row.point_due_date, controller_id: row.point_controller_id, controller_group_id: row.point_controller_group_id,
+        priority: row.point_priority, description: row.point_description, impact: row.point_impact, next_action: row.point_next_action,
+        controller: row.point_controller, owner_user_id: row.point_owner_user_id, owner_name: row.point_owner_name
+      };
+      return { ...row, entity: shapeOperationEntity('point', point, hierarchy, point.owner_user_id ? [point.owner_user_id] : []), updates: updatesByDependency.get(row.id) || [] };
+    });
   }
 
   function saveExternalDependency(id, input, currentUser) {
@@ -3151,9 +3283,9 @@ function createRepository(db, defaultProjectId) {
   }
 
   function riskRadarRows(currentUser, code = 'all') {
-    const external = externalDependencyRows(currentUser).filter(item => item.dependency_status !== 'resolved');
-    const externalByEntity = new Map();
-    for (const item of external) externalByEntity.set(`${item.entity_type}:${item.entity_id}`, (externalByEntity.get(`${item.entity_type}:${item.entity_id}`) || 0) + 1);
+    const externalByEntity = new Map(all(`SELECT entity_type,entity_id,COUNT(*) count FROM external_dependencies
+      WHERE project_id=? AND dependency_status!='resolved' GROUP BY entity_type,entity_id`, activeProjectId())
+      .map(item => [`${item.entity_type}:${item.entity_id}`, Number(item.count)]));
     return triageRows(currentUser, 14, code).map(item => {
       const ext = externalByEntity.get(`${item.entity_type}:${item.entity_id}`) || 0;
       let score = (item.signals.includes('overdue') ? 35 : 0) + (item.signals.includes('blocked') ? 30 : 0) + (item.signals.includes('dependency') ? 20 : 0) + (item.signals.includes('unassigned') ? 15 : 0) + (item.signals.includes('due_soon') ? 10 : 0) + ext * 12;
@@ -3163,28 +3295,24 @@ function createRepository(db, defaultProjectId) {
     }).sort((a, b) => b.risk_score - a.risk_score).slice(0, 100);
   }
 
-  function operationsData(currentUser, code = 'all') {
-    const collections = operationCollections(currentUser, code);
-    const scopedIds = new Map(Object.entries(collections).map(([type, rows]) => [type, new Set(rows.map(row => Number(row.id)))]));
-    const inScope = (type, id) => scopedIds.get(type)?.has(Number(id));
-    const triage = triageRows(currentUser, 7, code);
-    const quality = qualityRows(currentUser, code);
-    const meetings = projectMeetingRows(currentUser).map(meeting => code === 'all' ? meeting : ({ ...meeting, items: meeting.items.filter(item => inScope(item.entity_type, item.entity_id)) }))
-      .filter(meeting => code === 'all' || meeting.items.length);
-    const externalDependencies = externalDependencyRows(currentUser).filter(item => code === 'all' || inScope(item.entity_type, item.entity_id));
-    return {
-      scope: code,
-      triage,
-      triage_counts: Object.fromEntries(['overdue', 'due_soon', 'reminder_due', 'unassigned', 'blocked', 'dependency'].map(signal => [signal, triage.filter(item => item.signals.includes(signal)).length])),
-      quality,
-      quality_counts: Object.fromEntries(['high', 'medium', 'low'].map(level => [level, quality.filter(item => item.severity === level).length])),
-      dependencies: criticalPathData(currentUser, code),
-      risk_radar: riskRadarRows(currentUser, code),
-      meetings,
-      external_dependencies: externalDependencies,
-      automation_rules: automationRuleRows(),
-      can_coordinate: ['system_admin', 'project_admin', 'moderator'].includes(currentUser.role)
-    };
+  function operationsData(currentUser, code = 'all', requestedTab = 'triage') {
+    const tab = ['triage', 'quality', 'risk', 'dependencies', 'meetings', 'automations', 'reviews'].includes(requestedTab) ? requestedTab : 'triage';
+    const result = { scope: code, tab, can_coordinate: ['system_admin', 'project_admin', 'moderator'].includes(currentUser.role) };
+    if (tab === 'triage') {
+      result.triage = triageRows(currentUser, 7, code);
+      result.triage_counts = Object.fromEntries(['overdue', 'due_soon', 'reminder_due', 'unassigned', 'blocked', 'dependency'].map(signal => [signal, result.triage.filter(item => item.signals.includes(signal)).length]));
+    } else if (tab === 'quality') {
+      result.quality = qualityRows(currentUser, code);
+      result.quality_counts = Object.fromEntries(['high', 'medium', 'low'].map(level => [level, result.quality.filter(item => item.severity === level).length]));
+    } else if (tab === 'risk') result.risk_radar = riskRadarRows(currentUser, code);
+    else if (tab === 'dependencies') result.dependencies = criticalPathData(currentUser, code);
+    else if (tab === 'meetings') {
+      const collections = code === 'all' ? null : operationCollections(currentUser, code);
+      const scopedIds = collections ? new Map(Object.entries(collections).map(([type, rows]) => [type, new Set(rows.map(row => Number(row.id)))])) : null;
+      result.meetings = projectMeetingRows(currentUser).map(meeting => !scopedIds ? meeting : ({ ...meeting, items: meeting.items.filter(item => scopedIds.get(item.entity_type)?.has(Number(item.entity_id))) }))
+        .filter(meeting => !scopedIds || meeting.items.length);
+    } else if (tab === 'automations') result.automation_rules = automationRuleRows();
+    return result;
   }
 
   function triageBatch(input, currentUser) {
@@ -4477,7 +4605,7 @@ function createRepository(db, defaultProjectId) {
     savedViews(currentUser) { return savedViewRows(currentUser); },
     saveSavedView(id, input, currentUser) { return saveSavedView(id, input, currentUser); },
     deleteSavedView(id, currentUser) { return deleteSavedView(id, currentUser); },
-    operations(currentUser, code) { return operationsData(currentUser, code); },
+    operations(currentUser, code, tab) { return operationsData(currentUser, code, tab); },
     triageBatch(input, currentUser) { return triageBatch(input, currentUser); },
     deleteOrphanLink(id) { return deleteOrphanLink(id); },
     saveProjectMeeting(id, input, currentUser) { return saveProjectMeeting(id, input, currentUser); },

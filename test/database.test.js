@@ -1182,15 +1182,19 @@ test('operational views support dependencies, handovers and automation', () => {
       const outsideScope = repository.saveTask(null, { controller: otherController, title: 'V12 Poza zakresem', due_date: '2026-10-02', priority: 'High' }, admin);
       assert.equal(repository.tasks('all', admin).find(item => item.id === second.id).blocked_by_dependencies, 1);
       assert.throws(() => repository.saveTask(first.id, { ...first, controller, dependency_task_ids: [third.id] }, admin), /cykl/i);
-      const dependencies = repository.operations(admin).dependencies;
+      const dependencyTab = repository.operations(admin, 'all', 'dependencies');
+      const dependencies = dependencyTab.dependencies;
+      assert.equal(dependencyTab.tab, 'dependencies');
+      assert.equal(Object.hasOwn(dependencyTab, 'triage'), false, 'operations only prepares the requested tab');
+      assert.equal(Object.hasOwn(dependencyTab, 'meetings'), false, 'meeting data stays lazy outside the meetings tab');
       assert.ok(dependencies.edges >= 2);
       assert.ok(dependencies.critical_path.length > 0);
       assert.ok(dependencies.blocked_tasks.some(item => item.entity_id === second.id));
       assert.ok(dependencies.blocked_tasks.some(item => item.entity_id === third.id));
 
-      const triage = repository.operations(admin).triage;
+      const triage = repository.operations(admin, 'all', 'triage').triage;
       assert.ok(triage.some(item => item.entity_type === 'task' && item.entity_id === third.id));
-      const scopedTriage = repository.operations(admin, controller).triage;
+      const scopedTriage = repository.operations(admin, controller, 'triage').triage;
       assert.ok(scopedTriage.some(item => item.entity_type === 'task' && item.entity_id === third.id));
       assert.equal(scopedTriage.some(item => item.entity_type === 'task' && item.entity_id === outsideScope.id), false, 'operations follow the selected data scope');
       assert.equal(repository.triageBatch({ items: [{ entity_type: 'task', entity_id: third.id }], patch: { owner_user_id: worker.id, priority: 'Critical' } }, admin).updated, 1);
@@ -1339,7 +1343,7 @@ test('status handovers support meetings, risk and historical suggestions', () =>
       assert.throws(() => repository.saveProjectMeeting(meeting.id, {
         ...meeting, status: 'closed', items: [{ ...meeting.items[0], item_status: 'deferred', review_confirmed: 1, outcome_comment: '' }]
       }, manager), /uzasadnienie/i);
-      assert.equal(repository.operations(manager).meetings.find(item => item.id === meeting.id).status, 'open');
+      assert.equal(repository.operations(manager, 'all', 'meetings').meetings.find(item => item.id === meeting.id).status, 'open');
 
       meeting = repository.saveProjectMeeting(meeting.id, {
         ...meeting, status: 'closed', items: [{ ...meeting.items[0], item_status: 'deferred', target_status: 'Waiting', due_date: '2026-10-20',
@@ -1368,7 +1372,7 @@ test('status handovers support meetings, risk and historical suggestions', () =>
       assert.equal(dependency.entity.entity_id, riskPoint.id);
 
       assert.ok(repository.similarHistory('task', 'Diagnostyka komunikacji Profinet', admin).some(item => item.entity_id === task.id && item.similarity > 0));
-      assert.ok(repository.operations(admin).risk_radar.some(item => item.entity_type === 'point' && item.entity_id === riskPoint.id));
+      assert.ok(repository.operations(admin, 'all', 'risk').risk_radar.some(item => item.entity_type === 'point' && item.entity_id === riskPoint.id));
 
       repository.savePlannerDay({ user_id: workerRecord.id, plan_date: '2026-10-12', absence_type: 'vacation', absence_note: 'Urlop V13' }, admin);
       repository.movePlannerDay({ source_user_id: workerRecord.id, source_date: '2026-10-12', target_user_id: workerRecord.id, target_date: '2026-10-13', copy: 1 }, admin);
@@ -1382,7 +1386,7 @@ test('status handovers support meetings, risk and historical suggestions', () =>
       repository.saveTask(null, { controller: controller.code, title: 'Tymczasowy rekord V13' }, admin);
       repository.restoreProjectBackup(backup);
       assert.equal(repository.tasks('all', admin).length, taskCount);
-      assert.equal(repository.operations(admin).meetings.some(item => item.id === meeting.id), true);
+      assert.equal(repository.operations(admin, 'all', 'meetings').meetings.some(item => item.id === meeting.id), true);
       assert.equal(repository.similarHistory('task', 'Diagnostyka komunikacji Profinet', admin).some(item => item.entity_id === task.id), true);
     });
   } finally {
@@ -1608,7 +1612,7 @@ test('project-scoped generic updates cannot move records between projects', () =
       assert.throws(() => repository.saveProjectMeeting(meeting.id, { meeting_date: '2026-10-14', title: 'Próba przejęcia rekordu', items: [] }, secondProjectAdmin), /Nie znaleziono rekordu/);
     });
     repository.withProject(1, () => {
-      assert.equal(repository.operations(firstProjectAdmin).meetings.find(item => item.id === meeting.id)?.title, 'Odprawa projektu źródłowego');
+      assert.equal(repository.operations(firstProjectAdmin, 'all', 'meetings').meetings.find(item => item.id === meeting.id)?.title, 'Odprawa projektu źródłowego');
     });
   } finally {
     repository.close();

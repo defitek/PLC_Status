@@ -14,7 +14,8 @@ const state = {
   announcementLabelFilter: '', announcementImportanceFilter: '', announcementTab: 'news', announcementFrom: '', announcementTo: '', announcementWeek: '', liveSource: null, liveRefreshTimer: null,
   categorySelection: { status: null, task: null },
   functionListManager: null, bulkChoice: null,
-  operationsTab: 'triage', triageSelection: new Set(), savedViewApplying: false, activeSavedView: {}, taskDependencyOptions: [], dependencyOptions: null, dependencyOptionsAll: false,
+  operationsTab: 'triage', operationsLoading: new Set(), triageSelection: new Set(), savedViewApplying: false, activeSavedView: {}, taskDependencyOptions: [], dependencyOptions: null, dependencyOptionsAll: false,
+  dataCache: { projectId: null, entries: new Map(), versions: new Map() },
   collapsedStatusGroups: new Set(), collapsedTaskGroups: new Set(), statusTransfer: null, overviewHierarchyLevel: 'areas', statusMatrixQuery: '', statusFunctionGroupFilter: '', statusGroupByFunction: false, statusShowUnassigned: false,
   statusMatrixSort: { columnId: null, direction: 1 },
   hiddenColumns: { status: new Set(), tasks: new Set(), points: new Set(), external: new Set() },
@@ -112,7 +113,65 @@ async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', 'X-Client-Id': clientId, ...(options.headers || {}) } });
   if (response.status === 401) { location.href = '/login.html'; throw new Error('Sesja wygasła'); }
   if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || `Błąd serwera (${response.status})`);
-  return response.status === 204 ? null : response.json();
+  const result = response.status === 204 ? null : await response.json();
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(String(options.method || 'GET').toUpperCase())) invalidateCacheForMutation(path);
+  return result;
+}
+
+function ensureProjectCache() {
+  const projectId = Number(state.me?.current_project?.id) || null;
+  if (state.dataCache.projectId === projectId) return;
+  state.dataCache = { projectId, entries: new Map(), versions: new Map() };
+  state.operations = null;
+  state.operationsLoading.clear();
+}
+
+function invalidateDataCache(...keys) {
+  keys.flat().forEach(key => {
+    state.dataCache.entries.delete(key);
+    state.dataCache.versions.set(key, (state.dataCache.versions.get(key) || 0) + 1);
+  });
+}
+
+function rememberDataCache(key, value) {
+  state.dataCache.entries.set(key, { value, loadedAt: Date.now() });
+  return value;
+}
+
+function cachedDataRequest(key, path, maxAge = Infinity) {
+  const cached = state.dataCache.entries.get(key);
+  if (cached?.promise) return cached.promise;
+  if (cached && Date.now() - cached.loadedAt <= maxAge) return Promise.resolve(cached.value);
+  const version = state.dataCache.versions.get(key) || 0;
+  const request = api(path).then(value => {
+    if ((state.dataCache.versions.get(key) || 0) === version) rememberDataCache(key, value);
+    return value;
+  }).catch(error => {
+    if (state.dataCache.entries.get(key)?.promise === request) state.dataCache.entries.delete(key);
+    throw error;
+  });
+  state.dataCache.entries.set(key, { promise: request, loadedAt: 0 });
+  return request;
+}
+
+function invalidateCacheForMutation(path) {
+  const pathname = String(path || '').split('?')[0];
+  invalidateDataCache('notifications', 'navigationCounts', 'meetingSummaries');
+  if (/^\/api\/(?:settings|options|categories|subcategories|task-categories|task-subcategories|function-groups|status-groups|status-subgroups|status-columns|status-workflow-states|status-layout|completion-requirements|announcement-labels|export-templates)(?:\/|$)/.test(pathname) || /^\/api\/planner\/holidays(?:\/|$)/.test(pathname)) invalidateDataCache('config');
+  if (/^\/api\/(?:controllers|controller-groups)(?:\/|$)/.test(pathname)) invalidateDataCache('controllers', 'controllerGroups', 'config');
+  if (/^\/api\/(?:users|projects|project-memberships)(?:\/|$)/.test(pathname)) invalidateDataCache('users');
+  if (/^\/api\/saved-views(?:\/|$)/.test(pathname)) invalidateDataCache('savedViews');
+  if (/^\/api\/(?:announcements|project-meetings)(?:\/|$)/.test(pathname)) invalidateDataCache('announcements', 'meetingSummaries');
+  if (pathname === '/api/reorder' || pathname === '/api/backup/restore') invalidateDataCache('controllerGroups', 'controllers', 'users', 'config', 'announcements', 'meetingSummaries', 'savedViews');
+  if (state.operations) state.operations._loaded = {};
+}
+
+function mergeOperationsData(payload) {
+  if (!payload) return;
+  const sameScope = state.operations?.scope === payload.scope;
+  const loaded = sameScope ? { ...(state.operations._loaded || {}) } : {};
+  loaded[payload.tab] = true;
+  state.operations = { ...(sameScope ? state.operations : {}), ...payload, _loaded: loaded };
 }
 
 function roleName(role) { return ({ system_admin: 'Administrator systemu', project_admin: 'Administrator projektu', admin: 'Administrator', moderator: 'Manager projektu', user: 'Użytkownik' })[role] || role; }
@@ -700,6 +759,7 @@ function finishAction(result) {
 
 async function loadData(silent = false) {
   const loadId = ++state.loadSequence;
+  ensureProjectCache();
   if ($('#config-full-dialog')?.open) state.configScroll = $('#config-full-content')?.scrollTop || 0;
   if (!silent) $('#content').innerHTML = '<div class="loading">Ładowanie danych…</div>';
   const query = `?controller=${encodeURIComponent(state.controller)}`;
@@ -716,8 +776,15 @@ async function loadData(silent = false) {
   state.calendarTypes.forEach(type => calendarParams.append('type', type));
   state.calendarPriorities.forEach(priority => calendarParams.append('priority', priority));
   const requests = {
-    controllerGroups: api('/api/controller-groups'), controllers: api('/api/controllers'), users: api('/api/users'), config: api('/api/config'),
-    announcements: api('/api/announcements'), meetingSummaries: api('/api/meeting-summaries'), notifications: api('/api/notifications'), navigationCounts: api('/api/navigation-counts'), savedViews: api('/api/saved-views')
+    controllerGroups: cachedDataRequest('controllerGroups', '/api/controller-groups'),
+    controllers: cachedDataRequest('controllers', '/api/controllers'),
+    users: cachedDataRequest('users', '/api/users'),
+    config: cachedDataRequest('config', '/api/config'),
+    announcements: cachedDataRequest('announcements', '/api/announcements'),
+    meetingSummaries: cachedDataRequest('meetingSummaries', '/api/meeting-summaries'),
+    notifications: cachedDataRequest('notifications', '/api/notifications', 15000),
+    navigationCounts: cachedDataRequest('navigationCounts', '/api/navigation-counts', 15000),
+    savedViews: cachedDataRequest('savedViews', '/api/saved-views')
   };
   const addWorkCollections = (includeGoals = false, includeNotes = false) => {
     requests.status = api('/api/status' + query); requests.tasks = api('/api/tasks' + query); requests.points = api('/api/open-points' + query);
@@ -733,12 +800,18 @@ async function loadData(silent = false) {
   if (state.view === 'planner') requests.planner = api('/api/planner' + plannerQuery);
   if (state.view === 'calendar') { requests.calendar = api('/api/calendar?' + calendarParams); requests.calendarPlanner = api(`/api/planner?from=${state.calendarFrom}&to=${state.calendarTo}`); }
   if (state.view === 'history') requests.history = api('/api/history?limit=200');
-  if (state.view === 'operations' && canCoordinate()) { requests.operations = api('/api/operations' + query); requests.employeeReviews = api(`/api/monthly-reviews?period=${state.reviewPeriod}`); }
+  if (state.view === 'operations' && canCoordinate()) {
+    requests.operationsPayload = api(`/api/operations${query}&tab=${encodeURIComponent(state.operationsTab)}`);
+    if (state.operationsTab === 'reviews') requests.employeeReviews = api(`/api/monthly-reviews?period=${state.reviewPeriod}`);
+  }
   if (state.view === 'reviews' && canCoordinate()) requests.employeeReviews = api(`/api/monthly-reviews?period=${state.reviewPeriod}`);
   const entries = Object.entries(requests);
   const values = await Promise.all(entries.map(([, request]) => request));
   if (loadId !== state.loadSequence) return;
-  entries.forEach(([key], index) => { state[key] = values[index]; });
+  entries.forEach(([key], index) => {
+    if (key === 'operationsPayload') mergeOperationsData(values[index]);
+    else state[key] = values[index];
+  });
   state.dependencyOptions = { status: state.status, task: state.tasks, point: state.points };
   state.taskDependencyOptions = state.tasks;
   state.dependencyOptionsAll = state.controller === 'all';
@@ -811,11 +884,14 @@ function startLiveSync() {
   source.addEventListener('change', event => {
     let change; try { change = JSON.parse(event.data); } catch { return; }
     if (change.client_id === clientId) return;
+    if (change.path) invalidateCacheForMutation(change.path);
+    else invalidateDataCache('controllerGroups', 'controllers', 'users', 'config', 'announcements', 'meetingSummaries', 'notifications', 'navigationCounts', 'savedViews');
     clearTimeout(state.liveRefreshTimer);
     state.liveRefreshTimer = setTimeout(async () => {
       try {
         if ($('#config-full-dialog')?.open && $('#config-full-dialog').dataset.dirty === '1') {
           [state.announcements, state.notifications] = await Promise.all([api('/api/announcements'), api('/api/notifications')]);
+          rememberDataCache('announcements', state.announcements); rememberDataCache('notifications', state.notifications);
           updateNotificationUi(true); renderTopNews();
           toast('Inny użytkownik zmienił dane. Zapisz lub zamknij konfigurację, aby odświeżyć pełny widok.');
         } else {
@@ -842,7 +918,7 @@ function updateCounts() {
   $('#n-goals').textContent = state.navigationCounts.goals || 0;
   $('#n-points').textContent = state.navigationCounts.points || 0;
   $('#n-notes').textContent = state.navigationCounts.notes || 0;
-  $('#n-operations').textContent = state.operations?.triage?.length || 0;
+  if (state.operations?._loaded?.triage) $('#n-operations').textContent = state.operations.triage?.length || 0;
 }
 
 let notificationPollTimer;
@@ -852,7 +928,7 @@ function startNotificationPolling() {
     if (!state.me?.current_project || document.hidden) return;
     try {
       if (!state.liveSource || state.liveSource.readyState !== 1) await loadData(true);
-      else { state.notifications = await api('/api/notifications'); updateNotificationUi(true); }
+      else { state.notifications = await api('/api/notifications'); rememberDataCache('notifications', state.notifications); updateNotificationUi(true); }
     } catch { /* kolejna próba nastąpi automatycznie */ }
   }, 15000);
 }
@@ -918,14 +994,14 @@ async function openNotification(item) {
     return;
   }
   if (item.entity_type === 'meeting') {
-    state.meetingSummaries = await api('/api/meeting-summaries');
+    state.meetingSummaries = await api('/api/meeting-summaries'); rememberDataCache('meetingSummaries', state.meetingSummaries);
     state.announcementTab = 'meetings'; await setView('announcements');
     const meeting = state.meetingSummaries.find(row => Number(row.id) === Number(item.entity_id));
     if (meeting) openMeetingPlanDetails(meeting); else toast('Plan odprawy nie jest już dostępny', true);
     return;
   }
   try {
-    if (item.entity_type === 'announcement') state.announcements = await api('/api/announcements');
+    if (item.entity_type === 'announcement') { state.announcements = await api('/api/announcements'); rememberDataCache('announcements', state.announcements); }
     else {
       const targets = {
         status: ['/api/status?controller=all', 'status'], task: ['/api/tasks?controller=all', 'tasks'],
@@ -960,7 +1036,7 @@ async function acknowledgeAnnouncement(id) {
     const updated = await api(`/api/announcements/${id}/ack`, { method: 'POST' });
     const index = state.announcements.findIndex(item => item.id === Number(id));
     if (index >= 0) state.announcements[index] = updated;
-    state.notifications = await api('/api/notifications');
+    state.notifications = await api('/api/notifications'); rememberDataCache('notifications', state.notifications);
     updateNotificationUi(false);
     updateCounts();
     renderTopNews();
@@ -1401,26 +1477,41 @@ function operationJump(type, id) {
   openEntityOverlay(type, id);
 }
 
-async function reloadOperations() {
-  state.operations = await api(`/api/operations?controller=${encodeURIComponent(state.controller)}`);
-  $('#n-operations').textContent = state.operations?.triage?.length || 0;
-  if (state.view === 'operations') renderOperations();
+async function reloadOperations(tab = state.operationsTab) {
+  const loadingKey = `${state.controller}:${tab}:${tab === 'reviews' ? state.reviewPeriod : ''}`;
+  if (state.operationsLoading.has(loadingKey)) return;
+  state.operationsLoading.add(loadingKey);
+  try {
+    const requests = [api(`/api/operations?controller=${encodeURIComponent(state.controller)}&tab=${encodeURIComponent(tab)}`)];
+    if (tab === 'reviews') requests.push(api(`/api/monthly-reviews?period=${state.reviewPeriod}`));
+    const [payload, reviews] = await Promise.all(requests);
+    mergeOperationsData(payload);
+    if (tab === 'reviews') state.employeeReviews = reviews;
+    if (state.operations?._loaded?.triage) $('#n-operations').textContent = state.operations.triage?.length || 0;
+    if (state.view === 'operations') renderOperations();
+  } finally { state.operationsLoading.delete(loadingKey); }
 }
 
 function renderOperations() {
+  if (!state.operations || state.operations.scope !== state.controller) state.operations = { scope: state.controller, can_coordinate: canCoordinate(), _loaded: {} };
   const data = state.operations;
-  if (!data) { $('#content').innerHTML = '<div class="loading">Ładowanie centrum operacyjnego…</div>'; reloadOperations().catch(error => toast(error.message, true)); return; }
+  const tabCount = (key, count) => data._loaded?.[key] ? count : '…';
   const tabs = [
-    ['triage', 'Triage', data.triage?.length || 0], ['quality', 'Jakość danych', data.quality?.length || 0],
-    ['risk', 'Radar ryzyka', data.risk_radar?.filter(item => item.risk_score >= 40).length || 0], ['dependencies', 'Zależności zadań', data.dependencies?.blocked_tasks?.length || 0],
-    ['meetings', 'Odprawa projektowa', data.meetings?.filter(item => item.status === 'open').length || 0],
-    ['automations', 'Automatyzacje', data.automation_rules?.filter(item => item.active).length || 0],
-    ['reviews', 'Oceny miesięczne', (state.employeeReviews || []).filter(item => item.review_id).length]
+    ['triage', 'Triage', tabCount('triage', data.triage?.length || 0)], ['quality', 'Jakość danych', tabCount('quality', data.quality?.length || 0)],
+    ['risk', 'Radar ryzyka', tabCount('risk', data.risk_radar?.filter(item => item.risk_score >= 40).length || 0)], ['dependencies', 'Zależności zadań', tabCount('dependencies', data.dependencies?.blocked_tasks?.length || 0)],
+    ['meetings', 'Odprawa projektowa', tabCount('meetings', data.meetings?.filter(item => item.status === 'open').length || 0)],
+    ['automations', 'Automatyzacje', tabCount('automations', data.automation_rules?.filter(item => item.active).length || 0)],
+    ['reviews', 'Oceny miesięczne', tabCount('reviews', (state.employeeReviews || []).filter(item => item.review_id).length)]
   ];
   if (!tabs.some(([key]) => key === state.operationsTab)) state.operationsTab = 'triage';
   $('#content').innerHTML = `${savedViewsToolbar('operations')}<section class="operations-shell"><nav class="operations-tabs">${tabs.map(([key, label, count]) => `<button type="button" data-operations-tab="${key}" class="${state.operationsTab === key ? 'active' : ''}"><span>${escapeHtml(label)}</span><b>${count}</b></button>`).join('')}</nav><div id="operations-content"></div></section>`;
   $$('[data-operations-tab]').forEach(button => button.addEventListener('click', () => { state.operationsTab = button.dataset.operationsTab; renderOperations(); }));
   bindSavedViews('operations', '.operations-shell', renderOperations);
+  if (!data._loaded?.[state.operationsTab]) {
+    $('#operations-content').innerHTML = '<div class="loading">Ładowanie wybranej zakładki…</div>';
+    reloadOperations(state.operationsTab).catch(error => toast(error.message, true));
+    return;
+  }
   ({ triage: renderTriage, quality: renderDataQuality, risk: renderRiskRadar, dependencies: renderDependencies, meetings: renderProjectMeetings, automations: renderAutomations, reviews: () => renderEmployeeReviews('#operations-content') })[state.operationsTab]?.();
 }
 
@@ -1619,7 +1710,7 @@ async function createProjectMeeting() {
     { name: 'summary', label: 'Cel / agenda', type: 'textarea', full: true, rows: 3 }
   ] });
   if (!result) return;
-  try { const meeting = await api('/api/project-meetings', { method: 'POST', body: JSON.stringify({ ...result, status: 'open', items: [], scope: 'all' }) }); await loadData(true); if (!state.operations) await reloadOperations(); openProjectMeeting(meeting); } catch (error) { toast(error.message, true); }
+  try { const meeting = await api('/api/project-meetings', { method: 'POST', body: JSON.stringify({ ...result, status: 'open', items: [], scope: 'all' }) }); await loadData(true); openProjectMeeting(meeting); } catch (error) { toast(error.message, true); }
 }
 
 function meetingUsersHtml(attribute, selectedIds = [], emptyLabel = 'Wybierz osoby') {
@@ -1720,7 +1811,7 @@ function openProjectMeeting(meeting, requestedMode = null) {
       if (incomplete) return toast('Uzupełnij uzasadnienie dla wszystkich otwartych lub odłożonych elementów.', true);
     }
     const updated = await api(`/api/project-meetings/${meeting.id}`, { method: 'PATCH', body: JSON.stringify({ ...currentMeeting(items), status, scope: 'all' }) });
-    toast(status === 'closed' ? 'Podsumowanie odprawy zostało zapisane' : 'Szkic odprawy został zapisany. Udostępnij go osobnym przyciskiem.'); await loadData(true); await reloadOperations(); openProjectMeeting(updated, status === 'closed' ? 'review' : 'plan');
+    toast(status === 'closed' ? 'Podsumowanie odprawy zostało zapisane' : 'Szkic odprawy został zapisany. Udostępnij go osobnym przyciskiem.'); await loadData(true); openProjectMeeting(updated, status === 'closed' ? 'review' : 'plan');
   };
 
   $('#meeting-add-items')?.addEventListener('click', () => addMeetingItems(localMeeting()));
@@ -1782,7 +1873,7 @@ function openProjectMeeting(meeting, requestedMode = null) {
   $$('[data-meeting-move]').forEach(button => button.addEventListener('click', () => { const item = button.closest('[data-meeting-item]'); const sibling = button.dataset.meetingMove === 'up' ? item.previousElementSibling : item.nextElementSibling; if (!sibling?.matches('[data-meeting-item]')) return; if (button.dataset.meetingMove === 'up') item.parentElement.insertBefore(item, sibling); else item.parentElement.insertBefore(sibling, item); }));
   $$('[data-meeting-remove]').forEach(button => button.addEventListener('click', async () => { const key = button.dataset.meetingRemove; const items = collectItems().filter(item => `${item.entity_type}:${item.entity_id}` !== key); try { const updated = await api(`/api/project-meetings/${meeting.id}`, { method: 'PATCH', body: JSON.stringify({ ...currentMeeting(items), scope: 'all' }) }); await reloadOperations(); openProjectMeeting(updated, 'plan'); } catch (error) { toast(error.message, true); } }));
   $$('[data-meeting-create]').forEach(button => button.addEventListener('click', () => { const [entityType, entityId] = button.dataset.sourceKey.split(':'); const current = collectItems().find(item => item.entity_type === entityType && Number(item.entity_id) === Number(entityId)); const source = { ...(meeting.items.find(item => item.entity_type === entityType && Number(item.entity_id) === Number(entityId)) || {}), ...current }; if (!source.entity_type) return; const links = [{ entity_type: source.entity_type, entity_id: source.entity_id }]; if (button.dataset.meetingCreate === 'task') openRecord('tasks', null, { title: `Działanie po odprawie: ${source.entity?.title || ''}`, description: source.decision || '', hierarchy_target: source.entity?.controller_group_id ? `group:${source.entity.controller_group_id}` : `controller:${source.entity?.controller || ''}`, links }); else openRecord('points', null, { title: `Punkt po odprawie: ${source.entity?.title || ''}`, description: source.decision || '', hierarchy_target: source.entity?.controller_group_id ? `group:${source.entity.controller_group_id}` : `controller:${source.entity?.controller || ''}`, links }); }));
-  $('#meeting-publish')?.addEventListener('click', async () => { try { const current = localMeeting(); if (!current.title.trim()) return toast('Podaj indywidualną nazwę odprawy.', true); const updatingPublication = Boolean(meeting.published_at); const updated = await api(`/api/project-meetings/${meeting.id}`, { method: 'PATCH', body: JSON.stringify({ ...current, status: meeting.status, scope: 'all' }) }); const published = await api(`/api/project-meetings/${meeting.id}/publish`, { method: 'POST' }); meeting = published.meeting || updated; toast(`Plan odprawy został ${updatingPublication ? 'zaktualizowany' : 'opublikowany'} w „Planach i priorytetach”`); await loadData(true); await reloadOperations(); openProjectMeeting(meeting, meeting.status === 'closed' ? 'review' : 'plan'); } catch (error) { toast(error.message, true); } });
+  $('#meeting-publish')?.addEventListener('click', async () => { try { const current = localMeeting(); if (!current.title.trim()) return toast('Podaj indywidualną nazwę odprawy.', true); const updatingPublication = Boolean(meeting.published_at); const updated = await api(`/api/project-meetings/${meeting.id}`, { method: 'PATCH', body: JSON.stringify({ ...current, status: meeting.status, scope: 'all' }) }); const published = await api(`/api/project-meetings/${meeting.id}/publish`, { method: 'POST' }); meeting = published.meeting || updated; toast(`Plan odprawy został ${updatingPublication ? 'zaktualizowany' : 'opublikowany'} w „Planach i priorytetach”`); await loadData(true); openProjectMeeting(meeting, meeting.status === 'closed' ? 'review' : 'plan'); } catch (error) { toast(error.message, true); } });
   $('#meeting-save')?.addEventListener('click', () => save(meeting.status).catch(error => toast(error.message, true)));
   $('#meeting-start-review')?.addEventListener('click', () => openProjectMeeting(localMeeting(), 'review'));
   $('#meeting-back-plan')?.addEventListener('click', () => openProjectMeeting(localMeeting(), 'plan'));

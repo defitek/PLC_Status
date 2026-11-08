@@ -269,14 +269,14 @@ function openEventStream(request, response, projectId, userId, clientId) {
   request.on('close', () => { clearInterval(heartbeat); liveClients.delete(client); });
 }
 function broadcastProjectChange(projectId, payload) {
-  const body = `event: change\ndata: ${JSON.stringify({ at: payload.at, client_id: payload.client_id })}\n\n`;
+  const body = `event: change\ndata: ${JSON.stringify({ at: payload.at, client_id: payload.client_id, method: payload.method, path: payload.path })}\n\n`;
   for (const client of liveClients) {
     if (client.projectId !== Number(projectId)) continue;
     try { client.response.write(body); } catch { liveClients.delete(client); }
   }
 }
 function broadcastPlannerChange(payload) {
-  const body = `event: change\ndata: ${JSON.stringify({ at: payload.at, client_id: payload.client_id, global_planner: true })}\n\n`;
+  const body = `event: change\ndata: ${JSON.stringify({ at: payload.at, client_id: payload.client_id, method: payload.method, path: payload.path, global_planner: true })}\n\n`;
   for (const client of liveClients) {
     try { client.response.write(body); } catch { liveClients.delete(client); }
   }
@@ -309,7 +309,7 @@ async function handleProjectApi(request, response, url, user) {
     if (method === 'PATCH') return json(response, 200, repository.saveSavedView(savedViewId, await readJson(request), user));
     if (method === 'DELETE') { repository.deleteSavedView(savedViewId, user); response.writeHead(204); return response.end(); }
   }
-  if (method === 'GET' && path === '/api/operations') { requireRole(user, 'moderator'); return json(response, 200, repository.operations(user, scope)); }
+  if (method === 'GET' && path === '/api/operations') { requireRole(user, 'moderator'); return json(response, 200, repository.operations(user, scope, url.searchParams.get('tab') || 'triage')); }
   if (method === 'PATCH' && path === '/api/triage/batch') { requireRole(user, 'moderator'); return json(response, 200, repository.triageBatch(await readJson(request), user)); }
   const orphanLinkId = path.match(/^\/api\/data-quality\/orphan-links\/(\d+)$/);
   if (orphanLinkId && method === 'DELETE') { requireRole(user, 'moderator'); return json(response, 200, repository.deleteOrphanLink(Number(orphanLinkId[1]))); }

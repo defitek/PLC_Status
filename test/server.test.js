@@ -141,7 +141,13 @@ test('API protects manager data, project directory and account sessions', async 
   const managerLogin = await login(baseUrl, 'security-manager', 'manager-password');
   assert.equal(managerLogin.response.status, 200);
   await selectProject(baseUrl, managerLogin.cookie, projectId);
-  assert.equal((await request(baseUrl, '/api/operations', { cookie: managerLogin.cookie })).status, 200);
+  const operationsResponse = await request(baseUrl, '/api/operations?tab=dependencies', { cookie: managerLogin.cookie });
+  assert.equal(operationsResponse.status, 200);
+  const operations = await operationsResponse.json();
+  assert.equal(operations.tab, 'dependencies');
+  assert.ok(operations.dependencies);
+  assert.equal(Object.hasOwn(operations, 'triage'), false);
+  assert.equal(Object.hasOwn(operations, 'meetings'), false);
   assert.equal((await request(baseUrl, '/api/monthly-reviews', { cookie: managerLogin.cookie })).status, 200);
   for (const removedPath of ['/api/commissioning', '/api/commissioning-templates', '/api/test-campaigns', '/api/readiness-gates']) {
     assert.equal((await request(baseUrl, removedPath, { cookie: managerLogin.cookie })).status, 404, removedPath);
