@@ -2,7 +2,7 @@
 
 Aktualna wersja aplikacji: **1.0.0**. Repozytorium utrzymuje jedną bieżącą wersję produktu.
 
-Nazwy `migrateToV...` w `database.js` są wewnętrznymi, idempotentnymi migracjami schematu SQLite. Nie są osobnymi wersjami aplikacji i pozostają w kodzie wyłącznie po to, aby istniejący wolumen Railway został bezpiecznie zaktualizowany bez utraty danych.
+Nazwy `migrateToV...` w `database/migrations.js` są wewnętrznymi, idempotentnymi migracjami schematu SQLite. Nie są osobnymi wersjami aplikacji i pozostają w kodzie wyłącznie po to, aby istniejący wolumen Railway został bezpiecznie zaktualizowany bez utraty danych.
 
 ## Zakres aplikacji
 
