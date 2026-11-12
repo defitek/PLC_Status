@@ -71,6 +71,26 @@ test.afterEach(async ({ page }) => {
   expect(page.__pageErrors || []).toEqual([]);
 });
 
+test('uproszczona nawigacja łączy pracę, plan i komunikację', async ({ page }) => {
+  const navigation = page.locator('#nav button[data-view]');
+  await expect(navigation).toHaveCount(7);
+  await expect(navigation.locator(':scope > span:nth-child(2)')).toHaveText(['Start', 'Status', 'Praca', 'Plan', 'Priorytety i odprawy', 'Komunikacja', 'Konfiguracja']);
+
+  await openView(page, 'tasks');
+  await expect(page.locator('.workspace-tabs')).toContainText('Zależności zewnętrzne');
+  await expect(page.locator('#task-queue-mode')).toHaveCount(0);
+
+  await page.locator('[data-view="planner"]').evaluate(button => button.click());
+  await expect(page.locator('.workspace-tabs')).toContainText('Kalendarz');
+  await page.getByRole('button', { name: 'Kalendarz' }).click();
+  await expect(page.locator('#title')).toHaveText('Plan · Kalendarz');
+
+  await page.locator('[data-view="announcements"]').evaluate(button => button.click());
+  await expect(page.locator('.workspace-tabs')).toContainText('Centrum wiadomości');
+  await expect(page.locator('.message-center-section h2').first()).toHaveText('Do działania');
+  await expectViewportContained(page);
+});
+
 test('tabele pozostają w obszarze strony', async ({ page }, testInfo) => {
   await openView(page, 'status');
   await expect(page.locator('.status-matrix-table table').first()).toBeVisible();
@@ -100,6 +120,9 @@ test('odprawa i zagnieżdżone szczegóły zachowują okno źródłowe', async (
   await page.locator(`[data-meeting-open="${meeting.id}"]`).click();
   await expect(page.locator('#insight-dialog')).toBeVisible();
   await expect(page.locator(`.meeting-plan-item[data-meeting-item="task:${dependent.id}"]`)).toBeVisible();
+  await expect(page.locator('[data-meeting-priority] option')).toHaveCount(4);
+  await expect(page.locator('.meeting-priority-badge').first()).toHaveText('P2');
+  await expect(page.locator('[data-meeting-group-config]')).toHaveCount(0);
   await expectViewportContained(page);
 
   await page.locator(`[data-operation-jump="task:${dependent.id}"]`).click();

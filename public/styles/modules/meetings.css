@@ -253,12 +253,17 @@
   min-width:25px;
   min-height:25px;
   padding:3px 6px;
-  color:hsl(var(--meeting-priority-hue) 78% 24%);
-  background:hsl(var(--meeting-priority-hue) 72% 86%);
-  border:1px solid hsl(var(--meeting-priority-hue) 64% 48%);
+  color:var(--text);
+  background:var(--badge-soft);
+  border:1px solid var(--line);
   border-radius:99px;
   font-weight:850;
 }
+
+.meeting-priority-badge.priority-1 { color:#7f1d1d; background:#fee2e2; border-color:#ef4444; }
+.meeting-priority-badge.priority-2 { color:#78350f; background:#fef3c7; border-color:#f59e0b; }
+.meeting-priority-badge.priority-3 { color:#1e3a8a; background:#dbeafe; border-color:#3b82f6; }
+.meeting-priority-badge.priority-4 { color:#14532d; background:#dcfce7; border-color:#22c55e; }
 
 .meeting-priority-field>span {
   display:flex;

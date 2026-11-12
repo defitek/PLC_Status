@@ -1,13 +1,16 @@
 import { createTableTools } from './modules/table-tools.js?v=1.7.0';
 import {
   DEFAULT_STATUS_WORKFLOW_STATES,
+  MEETING_PRIORITY_DEFINITIONS,
   PRIORITY_DEFINITIONS,
   PRIORITY_VALUES,
+  meetingPriorityDefinition,
+  normalizeMeetingPriority,
   statusDefinitions,
   statusValues,
   workflowLabel,
   workflowTone
-} from './modules/workflow-model.js?v=1.0.0';
+} from './modules/workflow-model.js?v=1.1.0';
 
 const state = {
   view: 'mine', controller: 'all', me: null, projects: [], controllerGroups: [], controllers: [], users: [],
@@ -20,7 +23,7 @@ const state = {
   plannerRequirementEdit: false, requirementProjectId: null, requirementLevel: 'areas', requirementFrom: '', requirementDays: 14, requirementData: null, requirementDraft: new Map(), requirementBaseline: new Map(), requirementDirty: new Set(), requirementSelection: null, requirementCollapsedGroups: new Set(), requirementGridAbort: null, requirementPointerSelecting: false, requirementFill: null,
   kpiModules: ['status', 'tasks', 'points', 'goals'], globalTrendMode: 'combined', overviewDetailed: false, detailedKpiMode: 'combined', detailedKpiPeriod: 'week', linkPickerAllowed: [], linkPickerDraft: [], linkPickerCollections: null, actionResolve: null, actionDialogGeneration: 0, actionClosingGeneration: 0, configPanel: null, configScroll: 0, hierarchySelection: null, dailySummaryOpening: false,
   selectionContext: null, selectionDraft: [], selectionCollections: null, duplicateSource: null, checklistTask: null, notificationSeen: new Set(),
-  announcementLabelFilter: '', announcementImportanceFilter: '', announcementTab: 'news', announcementFrom: '', announcementTo: '', announcementWeek: '', liveSource: null, liveRefreshTimer: null,
+  announcementLabelFilter: '', announcementImportanceFilter: '', announcementTab: 'inbox', announcementFrom: '', announcementTo: '', announcementWeek: '', liveSource: null, liveRefreshTimer: null,
   categorySelection: { status: null, task: null },
   functionListManager: null, bulkChoice: null,
   operationsTab: 'triage', operationsLoading: new Set(), triageSelection: new Set(), savedViewApplying: false, activeSavedView: {}, taskDependencyOptions: [], dependencyOptions: null, dependencyOptionsAll: false,
@@ -45,19 +48,19 @@ const displayDateTime = value => value ? new Intl.DateTimeFormat('pl-PL', { date
 const clientId = globalThis.crypto?.randomUUID?.() || `client-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 const pageCopy = {
-  overview: ['Przegląd', 'Liczbowy obraz gotowości całego projektu', ''],
-  announcements: ['Informator', 'Wiadomości operacyjne, decyzje i komunikaty projektu', '+ Nowa wiadomość'],
-  mine: ['Moje podsumowanie', 'Twoje zadania, odpowiedzialności, wzmianki i aktywność', ''],
-  operations: ['Centrum operacyjne', 'Triage, jakość danych, ryzyko, zależności, odprawy, automatyzacje i oceny miesięczne', ''],
-  planner: ['Planner', 'Planowanie manpoweru, obszarów, zmian i transportu', ''],
+  overview: ['Start · Projekt', 'Liczbowy obraz gotowości całego projektu', ''],
+  announcements: ['Komunikacja', 'Jedno miejsce dla działań, wiadomości, planów i przekazań', '+ Nowa wiadomość'],
+  mine: ['Start', 'Twoja praca, terminy i najbliższy plan', ''],
+  operations: ['Priorytety i odprawy', 'Wspólna kolejka działań oraz opublikowane plany pracy', ''],
+  planner: ['Plan', 'Planner manpoweru i kalendarz projektu', ''],
   reviews: ['Oceny miesięczne', 'Obiektywna ocena pracy na podstawie aktywności, rezultatów i wkładu w projekt', ''],
-  calendar: ['Kalendarz', 'Zintegrowany harmonogram projektu do 31 dni', '+ Adnotacja'],
+  calendar: ['Plan · Kalendarz', 'Zintegrowany harmonogram i adnotacje projektu', '+ Adnotacja'],
   status: ['Status', 'Konfigurowalne grupy, podgrupy i pola weryfikacji', '+ Dodaj punkt'],
-  tasks: ['Zadania', 'Plan pracy zespołu, checklisty i odpowiedzialności', '+ Nowe zadanie'],
-  goals: ['Cele', 'Cele projektu łączące status, zadania i otwarte punkty', '+ Nowy cel'],
-  points: ['Otwarte punkty', 'Problemy, oczekiwania i przypomnienia', '+ Nowy punkt'],
-  notes: ['Przekazanie statusu', 'Wielosekcyjne przekazanie informacji dla projektu, obszarów i sterowników', '+ Nowe przekazanie'],
-  history: ['Historia', 'Wszystkie zmiany w danych projektu z bezpośrednim przejściem', ''],
+  tasks: ['Praca · Zadania', 'Zadania, punkty, zależności i kamienie milowe w jednym module', '+ Nowe zadanie'],
+  goals: ['Praca · Kamienie milowe', 'Najważniejsze cele połączone z pracą projektu', '+ Nowy cel'],
+  points: ['Praca · Otwarte punkty', 'Problemy, oczekiwania i zależności zewnętrzne', '+ Nowy punkt'],
+  notes: ['Komunikacja · Przekazania', 'Przekazania informacji dla projektu, obszarów i sterowników', '+ Nowe przekazanie'],
+  history: ['Komunikacja · Historia zmian', 'Wszystkie zmiany projektu z bezpośrednim przejściem do elementu', ''],
   settings: ['Konfiguracja', 'Kolejność, sterowniki, użytkownicy, kategorie i słowniki', '']
 };
 
@@ -518,7 +521,7 @@ function bindShell() {
   $('#task-checklist-close').addEventListener('click', () => $('#task-checklist-dialog').close());
   $('#task-checklist-cancel').addEventListener('click', () => $('#task-checklist-dialog').close());
   $('#task-checklist-save').addEventListener('click', saveTaskChecklistPopup);
-  $('#notification-open').addEventListener('click', openNotifications);
+  $('#notification-open').addEventListener('click', async () => { state.announcementTab = 'inbox'; await setView('announcements'); });
   $('#notifications-close').addEventListener('click', () => $('#notifications-dialog').close());
   $('#calendar-filter-close').addEventListener('click', () => $('#calendar-filter-dialog').close());
   $('#calendar-filter-cancel').addEventListener('click', () => $('#calendar-filter-dialog').close());
@@ -804,6 +807,10 @@ async function loadData(silent = false) {
     if (includeNotes) requests.notes = api('/api/daily-notes' + notesQuery);
   };
   if (state.view === 'mine') requests.mine = api('/api/my-summary');
+  if (state.view === 'announcements' && state.announcementTab === 'inbox') {
+    requests.mine = api('/api/my-summary');
+    if (canCoordinate()) requests.operationsPayload = api(`/api/operations${query}&tab=triage`);
+  }
   if (state.view === 'overview') { requests.overview = api('/api/overview' + query); requests.dashboard = api('/api/dashboard' + query); addWorkCollections(true); }
   if (['status', 'tasks', 'points'].includes(state.view)) { requests.dashboard = api('/api/dashboard' + query); addWorkCollections(); }
   if (state.view === 'points') requests.externalDependencies = api('/api/external-dependencies');
@@ -924,12 +931,9 @@ function startLiveSync() {
 }
 
 function updateCounts() {
-  $('#n-announcements').textContent = informationAnnouncements().filter(item => item.requires_ack && !item.accepted_by_me).length;
+  $('#n-announcements').textContent = communicationAttentionCount();
   $('#n-status').textContent = state.navigationCounts.status || 0;
-  $('#n-tasks').textContent = state.navigationCounts.tasks || 0;
-  $('#n-goals').textContent = state.navigationCounts.goals || 0;
-  $('#n-points').textContent = state.navigationCounts.points || 0;
-  $('#n-notes').textContent = state.navigationCounts.notes || 0;
+  $('#n-tasks').textContent = Number(state.navigationCounts.tasks || 0) + Number(state.navigationCounts.points || 0) + Number(state.navigationCounts.goals || 0);
   if (state.operations?._loaded?.triage) $('#n-operations').textContent = state.operations.triage?.length || 0;
 }
 
@@ -953,8 +957,10 @@ function notificationTarget(notification) {
 
 function updateNotificationUi(showPush = false) {
   const unread = (state.notifications || []).filter(item => !item.read_at);
-  $('#notification-count').textContent = unread.length;
-  $('#notification-open').classList.toggle('has-unread', unread.length > 0);
+  const attention = communicationAttentionCount();
+  $('#notification-count').textContent = attention;
+  if ($('#n-announcements')) $('#n-announcements').textContent = attention;
+  $('#notification-open').classList.toggle('has-unread', attention > 0);
   if (!showPush) return;
   unread.slice().reverse().forEach(item => {
     if (state.notificationSeen.has(item.id)) return;
@@ -984,7 +990,8 @@ async function markNotificationAsRead(id) {
   try {
     Object.assign(item, await api(`/api/notifications/${id}/read`, { method: 'POST' }));
     updateNotificationUi(false);
-    openNotifications();
+    if (state.view === 'announcements' && state.announcementTab === 'inbox') render();
+    else if ($('#notifications-dialog').open) openNotifications();
     toast('Powiadomienie oznaczono jako przeczytane');
   } catch (error) { toast(error.message, true); }
 }
@@ -1052,7 +1059,7 @@ async function acknowledgeAnnouncement(id) {
     updateNotificationUi(false);
     updateCounts();
     renderTopNews();
-    if (state.view === 'announcements') renderAnnouncements();
+    if (state.view === 'announcements') render();
     openAnnouncementDetails(updated);
     toast('Wiadomość została oznaczona jako przeczytana');
   } catch (error) { toast(error.message, true); }
@@ -1066,7 +1073,8 @@ async function setView(view) {
   state.view = view;
   document.body.classList.remove('nav-open');
   updateNavigationToggle();
-  $$('#nav button').forEach(button => button.classList.toggle('active', button.dataset.view === view));
+  const parentView = ({ overview: 'mine', calendar: 'planner', points: 'tasks', goals: 'tasks', notes: 'announcements', history: 'announcements' })[view] || view;
+  $$('#nav button').forEach(button => button.classList.toggle('active', button.dataset.view === parentView));
   await loadData();
 }
 
@@ -1077,6 +1085,48 @@ function render() {
   $('#add').textContent = copy[2];
   $('#add').hidden = !copy[2];
   ({ overview: renderOverview, announcements: renderAnnouncements, mine: renderMine, operations: renderOperations, planner: renderPlanner, reviews: renderEmployeeReviews, calendar: renderCalendar, status: renderStatus, tasks: renderTasks, goals: renderGoals, points: renderPoints, notes: renderNotes, history: renderHistory, settings: renderSettings })[state.view]();
+  decorateUnifiedWorkspace();
+}
+
+function unifiedWorkspaceTabs() {
+  const pending = informationAnnouncements().filter(item => item.requires_ack && !item.accepted_by_me).length;
+  const unread = communicationAttentionCount() - pending;
+  if (['mine', 'overview'].includes(state.view)) return [
+    { view: 'mine', label: 'Moja praca' }, { view: 'overview', label: 'Projekt' }
+  ];
+  if (['tasks', 'points', 'goals'].includes(state.view)) return [
+    { view: 'tasks', label: 'Zadania' },
+    { view: 'points', section: 'points', label: 'Otwarte punkty' },
+    { view: 'points', section: 'external', label: 'Zależności zewnętrzne' },
+    { view: 'goals', label: 'Kamienie milowe' }
+  ];
+  if (['planner', 'calendar'].includes(state.view)) return [
+    { view: 'planner', label: 'Planner' }, { view: 'calendar', label: 'Kalendarz' }
+  ];
+  if (['announcements', 'notes', 'history'].includes(state.view)) return [
+    { view: 'announcements', tab: 'inbox', label: 'Centrum wiadomości', count: pending + unread },
+    { view: 'announcements', tab: 'news', label: 'Informacje', count: pending },
+    { view: 'announcements', tab: 'meetings', label: 'Plany i priorytety' },
+    { view: 'notes', label: 'Przekazania statusu' },
+    { view: 'history', label: 'Historia zmian' }
+  ];
+  return [];
+}
+
+function decorateUnifiedWorkspace() {
+  const tabs = unifiedWorkspaceTabs();
+  if (!tabs.length || !$('#content')) return;
+  $('#content > .workspace-tabs')?.remove();
+  const active = item => item.view === state.view
+    && (!item.section || item.section === state.pointSection)
+    && (!item.tab || item.tab === state.announcementTab);
+  $('#content').insertAdjacentHTML('afterbegin', `<nav class="announcement-tabs workspace-tabs" aria-label="Widoki modułu">${tabs.map((item, index) => `<button type="button" data-workspace-tab="${index}" class="${active(item) ? 'active' : ''}">${escapeHtml(item.label)}${item.count ? `<b>${item.count}</b>` : ''}</button>`).join('')}</nav>`);
+  $$('[data-workspace-tab]').forEach(button => button.addEventListener('click', async () => {
+    const item = tabs[Number(button.dataset.workspaceTab)];
+    if (item.section) state.pointSection = item.section;
+    if (item.tab) state.announcementTab = item.tab;
+    await setView(item.view);
+  }));
 }
 
 function canManageAnnouncements() { return ['system_admin', 'project_admin', 'moderator'].includes(state.me.role); }
@@ -1102,6 +1152,13 @@ function informationAnnouncements() {
     const rightPending = Number(Boolean(right.requires_ack && !right.accepted_by_me));
     return rightPending - leftPending || String(right.created_at).localeCompare(String(left.created_at)) || Number(right.id) - Number(left.id);
   });
+}
+
+function communicationAttentionCount() {
+  const pending = informationAnnouncements().filter(item => item.requires_ack && !item.accepted_by_me);
+  const pendingIds = new Set(pending.map(item => Number(item.id)));
+  const otherUnread = (state.notifications || []).filter(item => !item.read_at && !(item.entity_type === 'announcement' && pendingIds.has(Number(item.entity_id))));
+  return pending.length + otherUnread.length;
 }
 
 function announcementStateClasses(item) {
@@ -1139,13 +1196,9 @@ function openAnnouncementDetails(item) {
   if (!$('#insight-dialog').open) $('#insight-dialog').showModal();
 }
 
-function meetingPriorityValue(value, fallback = 'Medium') {
-  const numeric = Number(value);
-  if (Number.isInteger(numeric) && numeric >= 1 && numeric <= 10) return numeric;
-  return ({ Critical: 1, High: 3, Medium: 5, Low: 8 })[value] || ({ Critical: 1, High: 3, Medium: 5, Low: 8 })[fallback] || 5;
-}
-function meetingPriorityOptions() { return Array.from({ length: 10 }, (_, index) => ({ value: index + 1, label: `${index + 1}${index === 0 ? ' — najwyższy' : index === 9 ? ' — najniższy' : ''}` })); }
-function meetingPriorityBadge(value) { const priority = meetingPriorityValue(value); return `<span class="meeting-priority-badge" style="--meeting-priority-hue:${(priority - 1) * 13.333}deg">${priority}</span>`; }
+function meetingPriorityValue(value, fallback = 'Medium') { return Number(normalizeMeetingPriority(value, fallback)); }
+function meetingPriorityOptions() { return MEETING_PRIORITY_DEFINITIONS.map(item => ({ value: item.value, label: item.label })); }
+function meetingPriorityBadge(value) { const priority = meetingPriorityDefinition(value); return `<span class="meeting-priority-badge priority-${priority.value}" title="${escapeHtml(priority.label)}">${priority.short_label}</span>`; }
 function meetingPlanSignature(meeting = {}) {
   const userIds = values => (values || []).map(Number).filter(Boolean).sort((a, b) => a - b);
   return JSON.stringify({
@@ -1211,20 +1264,51 @@ function announcementDateMatches(item, meeting = false) {
   return inRange && (!state.announcementWeek || isoWeek(date).key === state.announcementWeek);
 }
 
+function messageCenterActions() {
+  if (canCoordinate() && state.operations?._loaded?.triage) return (state.operations.triage || []).map(item => ({
+    type: item.entity_type, item: { ...item, id: item.entity_id }, signals: item.signals || []
+  }));
+  const mine = state.mine || {};
+  const rows = [
+    ...(mine.overdue_tasks || []).map(item => ({ type: 'task', item, signals: ['overdue'] })),
+    ...(mine.overdue_points || []).map(item => ({ type: 'point', item, signals: ['overdue'] })),
+    ...(mine.statuses || []).filter(item => ['Blocked', 'NOK / Retest required'].includes(item.status)).map(item => ({ type: 'status', item, signals: ['blocked'] }))
+  ];
+  return [...new Map(rows.map(row => [`${row.type}:${row.item.project_id || ''}:${row.item.id}`, row])).values()];
+}
+
+function renderMessageCenter() {
+  $('#add').hidden = true;
+  const actions = messageCenterActions();
+  const pending = informationAnnouncements().filter(item => item.requires_ack && !item.accepted_by_me);
+  const pendingIds = new Set(pending.map(item => Number(item.id)));
+  const unread = (state.notifications || []).filter(item => !item.read_at && !(item.entity_type === 'announcement' && pendingIds.has(Number(item.entity_id))));
+  const activity = (state.notifications || []).filter(item => item.read_at).slice(0, 30);
+  const notificationRows = rows => rows.map(item => `<article class="message-center-row ${item.read_at ? 'read' : 'unread'}"><button type="button" data-message-notification="${item.id}"><span class="type-dot ${['announcement', 'meeting'].includes(item.entity_type) ? 'goal' : item.entity_type}"></span><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.message || '')} · ${displayDateTime(item.created_at)}</small></span></button>${item.read_at ? '' : `<button type="button" class="mini" data-message-read="${item.id}">Oznacz jako przeczytane</button>`}</article>`).join('');
+  $('#content').innerHTML = `<section class="message-center-summary"><article><b>${actions.length}</b><span>Do działania</span><small>terminy, blokady i ryzyka</small></article><article><b>${pending.length + unread.length}</b><span>Do przeczytania</span><small>wiadomości wymagające uwagi</small></article><article><b>${activity.length}</b><span>Ostatnia aktywność</span><small>przeczytane powiadomienia</small></article></section>
+    <section class="message-center-grid"><article class="panel message-center-section"><header><div><h2>Do działania</h2><p>Jedna kolejka zamiast osobnych kolejek w Statusie, Zadaniach i Otwartych punktach.</p></div><b>${actions.length}</b></header><div class="operation-list">${actions.map(({ type, item, signals }) => `<button type="button" class="operation-row" data-jump="${type}" data-id="${item.id}" data-project-id="${item.project_id || ''}"><span class="type-dot ${type}"></span><span class="operation-primary"><b>${escapeHtml(item.title || item.function_detail || 'Element projektu')}</b><small>${escapeHtml(item.scope_label || item.controller_label || item.controller || 'Cały projekt')} · ${escapeHtml(item.owner_name || item.responsible_name || 'Nieprzypisane')}</small></span><span class="operation-signals">${signals.map(signal => `<em class="signal ${signal}">${escapeHtml(triageSignalNames[signal] || signal)}</em>`).join('')}</span><span class="operation-date">${badge(item.priority || item.criticality || item.status)}<small>${item.due_date ? displayDate(item.due_date) : item.reminder_date ? displayDate(item.reminder_date) : 'Bez terminu'}</small></span></button>`).join('') || '<div class="empty">Brak elementów wymagających działania.</div>'}</div></article>
+    <article class="panel message-center-section"><header><div><h2>Do przeczytania</h2><p>Powiadomienia i komunikaty wymagające potwierdzenia.</p></div><b>${pending.length + unread.length}</b></header><div>${pending.map(item => `<button type="button" class="message-center-announcement" data-message-announcement="${item.id}"><span>◆</span><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.created_by_name || 'System')} · wymaga potwierdzenia odczytu</small></span></button>`).join('')}${notificationRows(unread) || (!pending.length ? '<div class="empty">Wszystko przeczytane.</div>' : '')}</div></article>
+    <article class="panel message-center-section activity"><header><div><h2>Aktywność</h2><p>Ostatnie przeczytane powiadomienia.</p></div></header><div>${notificationRows(activity) || '<div class="empty">Brak aktywności.</div>'}</div></article></section>`;
+  bindJumpItems();
+  $$('[data-message-notification]').forEach(button => button.addEventListener('click', () => openNotification(state.notifications.find(item => item.id === Number(button.dataset.messageNotification)))));
+  $$('[data-message-read]').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); markNotificationAsRead(Number(button.dataset.messageRead)); }));
+  $$('[data-message-announcement]').forEach(button => button.addEventListener('click', () => openAnnouncementDetails(state.announcements.find(item => item.id === Number(button.dataset.messageAnnouncement)))));
+}
+
 function renderAnnouncements() {
   $('#add').hidden = !canManageAnnouncements();
   const news = informationAnnouncements();
   const pendingCount = news.filter(item => item.requires_ack && !item.accepted_by_me).length;
   const dates = [...news.map(item => announcementEntryDate(item)), ...state.meetingSummaries.map(item => announcementEntryDate(item, true))].filter(Boolean);
   const weeks = [...new Map(dates.map(date => { const week = isoWeek(date); return [week.key, week]; })).values()].sort((first, second) => second.key.localeCompare(first.key));
-  const tabs = `<nav class="announcement-tabs"><button type="button" data-announcement-tab="news" class="${state.announcementTab === 'news' ? 'active' : ''}">Informacje <b>${pendingCount}</b></button><button type="button" data-announcement-tab="meetings" class="${state.announcementTab === 'meetings' ? 'active' : ''}">Plany i priorytety <b>${state.meetingSummaries.length}</b></button></nav>`;
+  const tabs = '';
   const rangeControls = `<label>Numer tygodnia <select id="announcement-week">${selectOptions(weeks.map(week => ({ value: week.key, label: week.label })), state.announcementWeek, 'Wszystkie CW')}</select></label><label>Od <input type="date" id="announcement-from" value="${state.announcementFrom}"></label><label>Do <input type="date" id="announcement-to" value="${state.announcementTo}"></label><button type="button" class="secondary" id="announcement-range-apply">Pokaż zakres</button>`;
   const legend = `<div class="announcement-state-legend" aria-label="Legenda oznaczeń"><b>Legenda</b><span class="own">Utworzone przeze mnie</span><span class="meeting">Plan odprawy</span><span class="accepted">Odczytane</span><span class="awaiting-ack">Czeka na potwierdzenie</span></div>`;
   const bindCommonControls = () => {
-    $$('[data-announcement-tab]').forEach(button => button.addEventListener('click', () => { state.announcementTab = button.dataset.announcementTab; renderAnnouncements(); }));
-    $('#announcement-week').addEventListener('change', event => { state.announcementWeek = event.target.value; renderAnnouncements(); });
-    $('#announcement-range-apply').addEventListener('click', () => { const from = $('#announcement-from').value; const to = $('#announcement-to').value; if (!from || !to || to < from) return toast('Wybierz poprawny zakres dat Informatora.', true); state.announcementFrom = from; state.announcementTo = to; state.announcementWeek = ''; renderAnnouncements(); });
+    $('#announcement-week').addEventListener('change', event => { state.announcementWeek = event.target.value; render(); });
+    $('#announcement-range-apply').addEventListener('click', () => { const from = $('#announcement-from').value; const to = $('#announcement-to').value; if (!from || !to || to < from) return toast('Wybierz poprawny zakres dat Informatora.', true); state.announcementFrom = from; state.announcementTo = to; state.announcementWeek = ''; render(); });
   };
+  if (state.announcementTab === 'inbox') { renderMessageCenter(); return; }
   if (state.announcementTab === 'meetings') {
     const meetings = state.meetingSummaries.filter(item => announcementDateMatches(item, true));
     $('#content').innerHTML = `${tabs}<section class="panel announcement-range-filters"><div class="toolbar"><strong>Widoczność opublikowanych planów</strong>${rangeControls}</div></section>${legend}<section class="announcements-feed meeting-summary-feed">${meetings.map(item => { const priorities = [...new Set((item.items || []).map(row => meetingPriorityValue(row.meeting_priority)))].sort((a, b) => a - b); const date = announcementEntryDate(item, true); const publishedBadge = meetingLifecycleBadge({ status: item.status === 'closed' ? 'closed' : 'open', published_at: item.published_at || 'published', updated_at: item.published_at || 'published' }); return `<article class="announcement-card meeting-summary-card meeting-origin ${Number(item.created_by) === Number(state.me.id) ? 'own' : ''}" data-meeting-summary="${item.id}"><header><span><b>${escapeHtml(item.title)}</b><small>${displayDate(item.period_from)}–${displayDate(item.period_to)} · ${escapeHtml(item.created_by_name || 'System')} · ${escapeHtml(isoWeek(date).label)}</small></span>${publishedBadge}</header><p>${escapeHtml(item.summary || 'Brak opisu planu.')}</p><div class="meeting-card-priorities">${priorities.map(priority => `<span>${meetingPriorityBadge(priority)} <b>${(item.items || []).filter(row => meetingPriorityValue(row.meeting_priority) === priority).length}</b></span>`).join('')}</div><footer><span>${item.item_count} elementów · opublikowany</span><span>${item.closed_count} zamkniętych · ${item.open_count} otwartych · ${item.deferred_count} odłożonych</span></footer></article>`; }).join('') || '<div class="empty">Brak opublikowanych planów w wybranym zakresie.</div>'}</section>`;
@@ -1243,9 +1327,9 @@ function renderAnnouncements() {
     const date = announcementEntryDate(item);
     return `<article class="announcement-card ${item.accepted_by_me ? 'read' : 'unread'} ${announcementStateClasses(item)}" data-announcement-id="${item.id}"><header><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.created_by_name || 'System')} · ${displayDateTime(item.created_at)} · ${escapeHtml(isoWeek(date).label)}</small></span>${item.requires_ack && !item.accepted_by_me ? '<span class="ack-alert">Wymaga potwierdzenia odczytu</span>' : `<span class="badge blue">${escapeHtml(announcementAudience(item))}</span>`}</header><div class="announcement-tags"><span class="decision-type ${escapeHtml(item.entry_type || 'message')}">${entryLabel}</span><span class="importance importance-${escapeHtml(String(item.importance || 'normalna').toLowerCase())}">${escapeHtml(item.importance || 'Normalna')}</span>${(item.labels || []).map(label => `<span class="announcement-label ${escapeHtml(label.color)}">${escapeHtml(label.name)}</span>`).join('')}</div><p>${escapeHtml(item.content)}</p><footer><span>${(item.recipient_names || []).length ? `Osoby: ${escapeHtml(item.recipient_names.join(', '))}` : 'Wiadomość ogólna'}</span><span>${Number(item.created_by) === Number(state.me.id) ? 'utworzone przez Ciebie' : item.requires_ack ? (item.accepted_by_me ? '✓ przeczytane' : 'wymaga potwierdzenia') : 'informacyjna'}${canManageAnnouncements() ? ` · ${item.accepted_count || 0}/${item.audience_count || 0} potwierdzeń` : ''}</span></footer></article>`;
   }).join('') || '<div class="empty">Informator nie zawiera jeszcze wiadomości.</div>'}</section>`;
-  $('#announcement-label-filter').addEventListener('change', event => { state.announcementLabelFilter = event.target.value; renderAnnouncements(); });
-  $('#announcement-importance-filter').addEventListener('change', event => { state.announcementImportanceFilter = event.target.value; renderAnnouncements(); });
-  $('#announcement-clear-filters').addEventListener('click', () => { state.announcementLabelFilter = ''; state.announcementImportanceFilter = ''; renderAnnouncements(); });
+  $('#announcement-label-filter').addEventListener('change', event => { state.announcementLabelFilter = event.target.value; render(); });
+  $('#announcement-importance-filter').addEventListener('change', event => { state.announcementImportanceFilter = event.target.value; render(); });
+  $('#announcement-clear-filters').addEventListener('click', () => { state.announcementLabelFilter = ''; state.announcementImportanceFilter = ''; render(); });
   bindCommonControls();
   $$('.announcement-card').forEach(card => card.addEventListener('click', event => {
     if (event.target.closest('a,button')) return;
@@ -1259,6 +1343,7 @@ function metricCard(title, metric, completeKey, details) {
 }
 
 function renderOverview() {
+  queueMicrotask(decorateUnifiedWorkspace);
   const data = state.overview;
   const scopeLabel = hierarchyTargetLabel(state.controller);
   const score = combinedMetric(data.overall);
@@ -1453,6 +1538,7 @@ function summarySection(title, items, type, label) {
 function badgeText(value) { return (badgeMap[value] || [value || '—'])[0]; }
 
 function renderMine() {
+  queueMicrotask(decorateUnifiedWorkspace);
   const data = state.mine;
   const taskProgress = data.metrics.tasks_total ? Math.round(data.metrics.tasks_done * 100 / data.metrics.tasks_total) : 0;
   const pointProgress = data.metrics.points_total ? Math.round(data.metrics.points_closed * 100 / data.metrics.points_total) : 0;
@@ -1509,12 +1595,14 @@ function renderOperations() {
   const data = state.operations;
   const tabCount = (key, count) => data._loaded?.[key] ? count : '…';
   const tabs = [
-    ['triage', 'Triage', tabCount('triage', data.triage?.length || 0)], ['quality', 'Jakość danych', tabCount('quality', data.quality?.length || 0)],
-    ['risk', 'Radar ryzyka', tabCount('risk', data.risk_radar?.filter(item => item.risk_score >= 40).length || 0)], ['dependencies', 'Zależności zadań', tabCount('dependencies', data.dependencies?.blocked_tasks?.length || 0)],
-    ['meetings', 'Odprawa projektowa', tabCount('meetings', data.meetings?.filter(item => item.status === 'open').length || 0)],
-    ['automations', 'Automatyzacje', tabCount('automations', data.automation_rules?.filter(item => item.active).length || 0)],
-    ['reviews', 'Oceny miesięczne', tabCount('reviews', (state.employeeReviews || []).filter(item => item.review_id).length)]
+    ['triage', 'Do działania', tabCount('triage', data.triage?.length || 0)],
+    ['meetings', 'Odprawy projektowe', tabCount('meetings', data.meetings?.filter(item => item.status === 'open').length || 0)]
   ];
+  const configurationTabs = {
+    automations: ['automations', 'Reguły automatyzacji', tabCount('automations', data.automation_rules?.filter(item => item.active).length || 0)],
+    reviews: ['reviews', 'Oceny miesięczne', tabCount('reviews', (state.employeeReviews || []).filter(item => item.review_id).length)]
+  };
+  if (configurationTabs[state.operationsTab]) tabs.push(configurationTabs[state.operationsTab]);
   if (!tabs.some(([key]) => key === state.operationsTab)) state.operationsTab = 'triage';
   $('#content').innerHTML = `${savedViewsToolbar('operations')}<section class="operations-shell"><nav class="operations-tabs">${tabs.map(([key, label, count]) => `<button type="button" data-operations-tab="${key}" class="${state.operationsTab === key ? 'active' : ''}"><span>${escapeHtml(label)}</span><b>${count}</b></button>`).join('')}</nav><div id="operations-content"></div></section>`;
   $$('[data-operations-tab]').forEach(button => button.addEventListener('click', () => { state.operationsTab = button.dataset.operationsTab; renderOperations(); }));
@@ -1532,7 +1620,7 @@ function renderTriage() {
   const rows = data.triage || [];
   const counts = data.triage_counts || {};
   const root = $('#operations-content');
-  root.innerHTML = `<section class="operation-view"><header class="operation-head"><div><h2>Kolejka triage</h2><p>Najpilniejsze pozycje ze wszystkich modułów, ustawione według ryzyka.</p></div>${data.can_coordinate ? '<div class="operation-actions"><button class="secondary" data-triage-action="owner">Przypisz</button><button class="secondary" data-triage-action="priority">Priorytet</button><button class="secondary" data-triage-action="due">Termin</button></div>' : ''}</header><div class="signal-strip">${Object.entries(triageSignalNames).filter(([key]) => key !== 'in_progress').map(([key, label]) => `<span><b>${counts[key] || 0}</b>${label}</span>`).join('')}</div><div class="operation-list triage-list">${rows.map(item => `<article class="operation-row" data-operation-jump="${item.entity_type}:${item.entity_id}">${data.can_coordinate ? `<input type="checkbox" data-triage-select="${item.entity_type}:${item.entity_id}" ${state.triageSelection.has(`${item.entity_type}:${item.entity_id}`) ? 'checked' : ''} aria-label="Wybierz ${escapeHtml(item.title)}">` : ''}<span class="type-dot ${item.entity_type}"></span><span class="operation-primary"><b>${escapeHtml(item.scope_label || 'Cały projekt')} · ${escapeHtml(item.title)}</b><small>${escapeHtml(operationTypeNames[item.entity_type])} · ${escapeHtml(item.owner_name || 'Nieprzypisane')}</small></span><span class="operation-signals">${item.signals.map(signal => `<em class="signal ${signal}">${escapeHtml(triageSignalNames[signal] || signal)}</em>`).join('')}</span><span class="operation-date">${badge(item.priority)}<small>${item.due_date ? `Termin ${displayDate(item.due_date)}` : item.reminder_date ? `Przypomnienie ${displayDate(item.reminder_date)}` : 'Bez terminu'}</small></span></article>`).join('') || '<div class="empty">Brak pozycji wymagających triage.</div>'}</div></section>`;
+  root.innerHTML = `<section class="operation-view"><header class="operation-head"><div><h2>Do działania</h2><p>Wspólna kolejka terminów, blokad i ryzyk ze wszystkich modułów.</p></div>${data.can_coordinate ? '<div class="operation-actions"><button class="secondary" data-triage-action="owner">Przypisz</button><button class="secondary" data-triage-action="priority">Priorytet</button><button class="secondary" data-triage-action="due">Termin</button></div>' : ''}</header><div class="signal-strip">${Object.entries(triageSignalNames).filter(([key]) => key !== 'in_progress').map(([key, label]) => `<span><b>${counts[key] || 0}</b>${label}</span>`).join('')}</div><div class="operation-list triage-list">${rows.map(item => `<article class="operation-row" data-operation-jump="${item.entity_type}:${item.entity_id}">${data.can_coordinate ? `<input type="checkbox" data-triage-select="${item.entity_type}:${item.entity_id}" ${state.triageSelection.has(`${item.entity_type}:${item.entity_id}`) ? 'checked' : ''} aria-label="Wybierz ${escapeHtml(item.title)}">` : ''}<span class="type-dot ${item.entity_type}"></span><span class="operation-primary"><b>${escapeHtml(item.scope_label || 'Cały projekt')} · ${escapeHtml(item.title)}</b><small>${escapeHtml(operationTypeNames[item.entity_type])} · ${escapeHtml(item.owner_name || 'Nieprzypisane')}</small></span><span class="operation-signals">${item.signals.map(signal => `<em class="signal ${signal}">${escapeHtml(triageSignalNames[signal] || signal)}</em>`).join('')}</span><span class="operation-date">${badge(item.priority)}<small>${item.due_date ? `Termin ${displayDate(item.due_date)}` : item.reminder_date ? `Przypomnienie ${displayDate(item.reminder_date)}` : 'Bez terminu'}</small></span></article>`).join('') || '<div class="empty">Brak pozycji wymagających działania.</div>'}</div></section>`;
   $$('[data-triage-select]').forEach(input => input.addEventListener('click', event => event.stopPropagation()));
   $$('[data-triage-select]').forEach(input => input.addEventListener('change', () => { if (input.checked) state.triageSelection.add(input.dataset.triageSelect); else state.triageSelection.delete(input.dataset.triageSelect); }));
   $$('[data-operation-jump]').forEach(row => row.addEventListener('click', event => { if (event.target.matches('input')) return; const [type, id] = row.dataset.operationJump.split(':'); operationJump(type, Number(id)); }));
@@ -1773,14 +1861,14 @@ function openProjectMeeting(meeting, requestedMode = null) {
       const confirmed = Number(item.review_confirmed) !== 0;
       return `<details class="meeting-plan-item meeting-summary-item ${confirmed ? 'confirmed' : 'pending'}" data-meeting-item="${item.entity_type}:${item.entity_id}" data-meeting-group-key="${escapeHtml(groupKey)}" data-review-confirmed="${confirmed ? 1 : 0}"><summary><span class="meeting-summary-entity"><span class="type-dot ${item.entity_type}"></span><span><b>${escapeHtml(item.entity?.scope_label || 'Projekt')} · ${escapeHtml(item.entity?.title || 'Element niedostępny')}</b><small>${escapeHtml(operationTypeNames[item.entity_type] || item.entity_type)} · ${escapeHtml(badgeText(item.entity?.status))}</small></span></span><span class="meeting-review-fact assignees"><small>Przypisani pracownicy</small><b>${escapeHtml((item.assignee_names || []).join(', ') || 'Nieprzypisane')}</b></span><span class="meeting-review-fact"><small>Deadline</small><b>${displayDate(item.due_date || item.entity?.due_date)}</b></span><span class="meeting-review-fact"><small>Cel</small><b>${escapeHtml(item.objective || 'Kontynuacja')}</b></span><span class="meeting-review-priority"><small>Priorytet</small>${meetingPriorityBadge(item.meeting_priority)}</span><span class="meeting-review-state ${confirmed ? 'confirmed' : 'pending'}" data-review-state>${confirmed ? '✓ Zatwierdzone' : 'Do zatwierdzenia'}</span></summary><div class="meeting-summary-editor"><button type="button" class="meeting-open-entity mini" data-operation-jump="${item.entity_type}:${item.entity_id}">Otwórz szczegóły elementu</button>${meetingActivityHtml(item)}<div class="meeting-review-fields"><label><span>Faktycznie pracowali</span>${meetingUsersHtml('data-meeting-worker', item.worker_user_ids || [], 'Nie wskazano')}</label><label><span>Status zmienił / zamknął</span><select data-meeting-status-user>${selectOptions(statusUserOptions, item.status_changed_by_user_id || '', 'Wykryj z historii')}</select></label><label><span>Wynik</span><select data-meeting-status>${selectOptions([{ value: 'decided', label: 'Zamknięty' }, { value: 'open', label: 'Nadal otwarty' }, { value: 'deferred', label: 'Odłożony' }], item.item_status, null)}</select></label><label><span>Stan elementu po odprawie</span><select data-meeting-target-status>${meetingTargetStatuses(item.entity_type, item.target_status)}</select></label><label class="meeting-outcome"><span>Uzasadnienie / podsumowanie</span><textarea data-meeting-outcome rows="2" placeholder="Opisz wynik, blokadę lub dalsze działania">${escapeHtml(item.outcome_comment || '')}</textarea></label><div class="meeting-followup-actions"><button type="button" class="mini" data-meeting-create="task" data-source-key="${item.entity_type}:${item.entity_id}">+ Dodaj powiązane zadanie</button><button type="button" class="mini" data-meeting-create="point" data-source-key="${item.entity_type}:${item.entity_id}">+ Dodaj powiązany punkt otwarty</button><span></span><button type="button" class="primary" data-meeting-confirm="${item.entity_type}:${item.entity_id}">${confirmed ? 'Zatwierdź ponownie' : 'Zatwierdź podsumowanie punktu'}</button></div></div></div></details>`;
     }
-    return `<article class="meeting-plan-item" data-meeting-item="${item.entity_type}:${item.entity_id}" data-meeting-group-key="${escapeHtml(groupKey)}"><header><input type="checkbox" data-meeting-select aria-label="Wybierz do grupowania"><button type="button" data-operation-jump="${item.entity_type}:${item.entity_id}"><span class="type-dot ${item.entity_type}"></span><span><b>${escapeHtml(item.entity?.scope_label || 'Projekt')} · ${escapeHtml(item.entity?.title || 'Element niedostępny')}</b><small>${escapeHtml(operationTypeNames[item.entity_type] || item.entity_type)} · ${escapeHtml(badgeText(item.entity?.status))}</small></span></button><div class="meeting-plan-fields"><label class="meeting-priority-field"><span>Priorytet 1–10 ${meetingPriorityBadge(item.meeting_priority)}</span><select data-meeting-priority>${selectOptions(meetingPriorityOptions(), meetingPriorityValue(item.meeting_priority, item.entity?.priority), null)}</select></label><label><span>Cel</span><select data-meeting-objective>${selectOptions(meetingGoals, item.objective || 'Kontynuacja', null)}</select></label><label><span>Odpowiedzialni</span>${meetingUsersHtml('data-meeting-assignee', item.assignee_user_ids || (item.owner_user_id ? [item.owner_user_id] : []), 'Wybierz osoby odpowiedzialne')}</label><label><span>Deadline</span><input data-meeting-due type="date" value="${escapeHtml(item.due_date || item.entity?.due_date || '')}"></label><label class="meeting-decision"><span>Co jest do zrobienia</span><textarea data-meeting-decision rows="1" placeholder="Krótkie ustalenie / następny krok">${escapeHtml(item.decision || '')}</textarea></label></div><div class="meeting-item-actions"><button type="button" class="mini meeting-order" data-meeting-move="up" title="Przesuń wyżej">↑</button><button type="button" class="mini meeting-order" data-meeting-move="down" title="Przesuń niżej">↓</button><button type="button" class="mini danger-text" data-meeting-remove="${item.entity_type}:${item.entity_id}">Usuń</button></div></header></article>`;
+    return `<article class="meeting-plan-item" data-meeting-item="${item.entity_type}:${item.entity_id}" data-meeting-group-key="${escapeHtml(groupKey)}"><header><input type="checkbox" data-meeting-select aria-label="Wybierz do grupowania"><button type="button" data-operation-jump="${item.entity_type}:${item.entity_id}"><span class="type-dot ${item.entity_type}"></span><span><b>${escapeHtml(item.entity?.scope_label || 'Projekt')} · ${escapeHtml(item.entity?.title || 'Element niedostępny')}</b><small>${escapeHtml(operationTypeNames[item.entity_type] || item.entity_type)} · ${escapeHtml(badgeText(item.entity?.status))}</small></span></button><div class="meeting-plan-fields"><label class="meeting-priority-field"><span>Priorytet P1–P4 ${meetingPriorityBadge(item.meeting_priority)}</span><select data-meeting-priority>${selectOptions(meetingPriorityOptions(), meetingPriorityValue(item.meeting_priority, item.entity?.priority), null)}</select></label><label><span>Cel</span><select data-meeting-objective>${selectOptions(meetingGoals, item.objective || 'Kontynuacja', null)}</select></label><label><span>Odpowiedzialni</span>${meetingUsersHtml('data-meeting-assignee', item.assignee_user_ids || (item.owner_user_id ? [item.owner_user_id] : []), 'Wybierz osoby odpowiedzialne')}</label><label><span>Deadline</span><input data-meeting-due type="date" value="${escapeHtml(item.due_date || item.entity?.due_date || '')}"></label><label class="meeting-decision"><span>Co jest do zrobienia</span><textarea data-meeting-decision rows="1" placeholder="Krótkie ustalenie / następny krok">${escapeHtml(item.decision || '')}</textarea></label></div><div class="meeting-item-actions"><button type="button" class="mini meeting-order" data-meeting-move="up" title="Przesuń wyżej">↑</button><button type="button" class="mini meeting-order" data-meeting-move="down" title="Przesuń niżej">↓</button><button type="button" class="mini danger-text" data-meeting-remove="${item.entity_type}:${item.entity_id}">Usuń</button></div></header></article>`;
   };
   const itemHtml = meetingItemGroups(meeting.items).map(group => group.key
-    ? `<section class="meeting-group-block" data-meeting-group-block="${escapeHtml(group.key)}"><header class="meeting-group-divider"><span><small>${group.items.length} połączone elementy</small></span>${reviewMode ? '' : `<button type="button" class="mini" data-meeting-group-config="${escapeHtml(group.key)}">Ustawienia wspólne</button><button type="button" class="mini" data-meeting-group-clear="${escapeHtml(group.key)}">Rozgrupuj</button>`}</header><div class="meeting-group-items">${group.items.map(itemCardHtml).join('')}</div></section>`
+    ? `<section class="meeting-group-block" data-meeting-group-block="${escapeHtml(group.key)}"><header class="meeting-group-divider"><span><small>Pakiet pracy · ${group.items.length} elementy</small></span>${reviewMode ? '' : `<button type="button" class="mini" data-meeting-group-clear="${escapeHtml(group.key)}">Rozgrupuj</button>`}</header><div class="meeting-group-items">${group.items.map(itemCardHtml).join('')}</div></section>`
     : `<section class="meeting-single-block">${itemCardHtml(group.items[0])}</section>`).join('');
   const heading = reviewMode
     ? `<section class="meeting-summary-head"><span class="meeting-summary-title"><small>Odprawa</small><b>${escapeHtml(meeting.title || '')}</b>${meetingLifecycleBadge(meeting)}</span><span><small>Zakres planu</small><b>${displayDate(meeting.period_from || meeting.meeting_date)}–${displayDate(meeting.period_to || meeting.meeting_date)}</b></span><span><small>Postęp podsumowania</small><b data-review-progress>${confirmedCount}/${meeting.items.length} zatwierdzone</b></span></section>`
-    : `<header class="meeting-plan-head"><label class="field meeting-title-field"><span class="meeting-title-label">Nazwa odprawy ${meetingLifecycleBadge(meeting)}</span><input id="meeting-title" value="${escapeHtml(meeting.title || '')}" required></label><label class="field"><span>Plan od</span><input id="meeting-period-from" type="date" value="${escapeHtml(meeting.period_from || meeting.meeting_date)}"></label><label class="field"><span>Plan do</span><input id="meeting-period-to" type="date" value="${escapeHtml(meeting.period_to || meeting.meeting_date)}"></label><label class="field meeting-agenda-field"><span>Cel / agenda</span><textarea id="meeting-summary" rows="2">${escapeHtml(meeting.summary || '')}</textarea></label><div class="meeting-plan-tools"><button type="button" class="mini secondary" id="meeting-add-items">+ Dodaj tematy z list</button><button type="button" class="mini secondary" id="meeting-group-selected">Grupuj zaznaczone</button><button type="button" class="mini secondary" id="meeting-sort-priority">Sortuj 1 → 10</button></div></header>`;
+    : `<header class="meeting-plan-head"><label class="field meeting-title-field"><span class="meeting-title-label">Nazwa odprawy ${meetingLifecycleBadge(meeting)}</span><input id="meeting-title" value="${escapeHtml(meeting.title || '')}" required></label><label class="field"><span>Plan od</span><input id="meeting-period-from" type="date" value="${escapeHtml(meeting.period_from || meeting.meeting_date)}"></label><label class="field"><span>Plan do</span><input id="meeting-period-to" type="date" value="${escapeHtml(meeting.period_to || meeting.meeting_date)}"></label><label class="field meeting-agenda-field"><span>Cel / agenda</span><textarea id="meeting-summary" rows="2">${escapeHtml(meeting.summary || '')}</textarea></label><div class="meeting-plan-tools"><button type="button" class="mini secondary" id="meeting-add-items">+ Dodaj tematy z list</button><button type="button" class="mini secondary" id="meeting-group-selected">Połącz w pakiet</button><button type="button" class="mini secondary" id="meeting-sort-priority">Sortuj P1 → P4</button></div></header>`;
   const publishLabel = meeting.published_at ? 'Zaktualizuj odprawę w Informatorze' : 'Opublikuj w Informatorze';
   const allConfirmed = meeting.items.length > 0 && confirmedCount === meeting.items.length;
   const footer = reviewMode
@@ -1827,29 +1915,14 @@ function openProjectMeeting(meeting, requestedMode = null) {
   };
 
   $('#meeting-add-items')?.addEventListener('click', () => addMeetingItems(localMeeting()));
-  const applyGroupSettings = async (keys, existingGroupKey = '') => {
-    const items = collectItems(); const first = items.find(item => keys.includes(`${item.entity_type}:${item.entity_id}`)); if (!first) return;
-    const result = await uiForm({ title: existingGroupKey ? 'Ustawienia grupy' : 'Grupuj elementy odprawy', description: 'Wartości zostaną przypisane do całej grupy, a każdy element nadal można zmienić osobno.', submitLabel: 'Zastosuj do grupy', fields: [
-      { name: 'meeting_priority', label: 'Priorytet 1–10', type: 'select', value: meetingPriorityValue(first.meeting_priority), options: meetingPriorityOptions() },
-      { name: 'objective', label: 'Cel', type: 'select', value: first.objective || 'Kontynuacja', options: meetingGoals },
-      { name: 'due_date', label: 'Deadline grupy', type: 'date', value: first.due_date || '' },
-      { name: 'assignee_user_ids', label: 'Odpowiedzialni', type: 'user-multiselect', value: first.assignee_user_ids || [], options: assignableUsers(first.assignee_user_ids).map(user => ({ value: user.id, label: user.display_name })), full: true }
-    ] });
-    if (!result) return;
-    const groupKey = existingGroupKey || `group:${Date.now()}:${Math.random().toString(16).slice(2)}`;
-    const changed = items.map(item => keys.includes(`${item.entity_type}:${item.entity_id}`) ? { ...item, group_key: groupKey, group_name: '', meeting_priority: result.meeting_priority, objective: result.objective, due_date: result.due_date || '', assignee_user_ids: (result.assignee_user_ids || []).map(Number) } : item);
-    openProjectMeeting(currentMeeting(mergeMeetingItems(changed)), 'plan');
-  };
   $('#meeting-group-selected')?.addEventListener('click', () => {
     const keys = $$('#insight-content [data-meeting-item]').filter(root => root.querySelector('[data-meeting-select]')?.checked).map(root => root.dataset.meetingItem);
-    if (keys.length < 2) return toast('Zaznacz co najmniej dwa elementy, które mają tworzyć grupę.', true);
-    applyGroupSettings(keys).catch(error => toast(error.message, true));
+    if (keys.length < 2) return toast('Zaznacz co najmniej dwa elementy, które mają tworzyć pakiet pracy.', true);
+    const groupKey = `group:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+    const changed = collectItems().map(item => keys.includes(`${item.entity_type}:${item.entity_id}`) ? { ...item, group_key: groupKey, group_name: '' } : item);
+    openProjectMeeting(currentMeeting(mergeMeetingItems(changed)), 'plan');
+    toast('Elementy połączono wizualnie. Ich priorytety, terminy i odpowiedzialni pozostają indywidualne.');
   });
-  $$('[data-meeting-group-config]').forEach(button => button.addEventListener('click', () => {
-    const groupKey = button.dataset.meetingGroupConfig;
-    const keys = $$('#insight-content [data-meeting-item]').filter(root => root.dataset.meetingGroupKey === groupKey).map(root => root.dataset.meetingItem);
-    applyGroupSettings(keys, groupKey).catch(error => toast(error.message, true));
-  }));
   $$('[data-meeting-group-clear]').forEach(button => button.addEventListener('click', () => {
     const groupKey = button.dataset.meetingGroupClear;
     const changed = collectItems().map(item => item.group_key === groupKey ? { ...item, group_key: '', group_name: '' } : item);
@@ -1858,7 +1931,7 @@ function openProjectMeeting(meeting, requestedMode = null) {
   $('#meeting-sort-priority')?.addEventListener('click', () => {
     const groups = meetingItemGroups(collectItems()).map((group, index) => ({ ...group, index, priority: Math.min(...group.items.map(item => meetingPriorityValue(item.meeting_priority))), items: group.items.slice().sort((first, second) => meetingPriorityValue(first.meeting_priority) - meetingPriorityValue(second.meeting_priority)) }));
     groups.sort((first, second) => first.priority - second.priority || first.index - second.index);
-    openProjectMeeting(currentMeeting(mergeMeetingItems(groups.flatMap(group => group.items))), 'plan'); toast('Elementy posortowano od priorytetu 1 do 10');
+    openProjectMeeting(currentMeeting(mergeMeetingItems(groups.flatMap(group => group.items))), 'plan'); toast('Elementy posortowano od P1 do P4');
   });
   $$('.multi-choice-search').forEach(search => search.addEventListener('input', () => { const term = search.value.trim().toLocaleLowerCase('pl'); search.parentElement.querySelectorAll(':scope > label').forEach(label => { label.hidden = Boolean(term) && !label.textContent.toLocaleLowerCase('pl').includes(term); }); }));
   $$('[data-meeting-priority]').forEach(select => select.addEventListener('change', () => { const current = select.closest('.meeting-priority-field')?.querySelector('.meeting-priority-badge'); if (current) current.outerHTML = meetingPriorityBadge(select.value); }));
@@ -1945,6 +2018,7 @@ async function openAutomationEditor(existing = null) {
 function canCoordinate() { return ['moderator', 'project_admin', 'system_admin'].includes(state.me.role); }
 
 function renderPlanner() {
+  queueMicrotask(decorateUnifiedWorkspace);
   const data = state.planner || { users: [], entries: [], work: [], summary: [], area_summary: [], shift_summary: [] };
   if (state.plannerRequirementEdit && (state.requirementProjectId !== Number(state.me.current_project?.id || 0) || state.requirementData !== data || state.requirementFrom !== state.plannerFrom || state.requirementDays !== state.plannerDays)) prepareInlinePlannerRequirements();
   const days = dateRange(state.plannerFrom, addDays(state.plannerFrom, state.plannerDays - 1));
@@ -3051,6 +3125,7 @@ async function openEmployeeReview(userId, reviewId = null) {
 }
 
 function renderCalendar() {
+  queueMicrotask(decorateUnifiedWorkspace);
   const events = state.calendar?.events || [];
   const days = dateRange(state.calendarFrom, state.calendarTo);
   const holidayMap = new Map((state.calendar?.holidays || []).map(item => [item.holiday_date, item.name]));
@@ -3218,6 +3293,7 @@ function showCalendarAnnotationContext(event, record) {
 }
 
 function renderHistory() {
+  queueMicrotask(decorateUnifiedWorkspace);
   const types = [['status', 'Status'], ['task', 'Zadania'], ['point', 'Otwarte punkty'], ['note', 'Przekazanie statusu']];
   $('#content').innerHTML = `<section class="history-shell"><div class="history-tools"><strong>Rejestr zmian projektu</strong><div>${types.map(([type, label]) => `<label class="mention"><input type="checkbox" data-history-type value="${type}" checked>${label}</label>`).join('')}</div><label>Grupuj <select id="history-group"><option value="hierarchy">Hierarchia projektu</option><option value="controller">Sterownik</option><option value="none">Bez grupowania</option></select></label><input id="history-search" type="search" placeholder="Szukaj osoby, elementu lub zmienionego pola…"></div><div id="history-feed" class="history-feed"></div></section>`;
   $('#history-group').value = state.grouping.history || 'hierarchy';
@@ -3649,20 +3725,13 @@ function drawDependencyQueue(type, rows, targetSelector) {
 
 function renderStatus() {
   const d = state.dashboard;
-  if (state.statusMode === 'queue') {
-    $('#content').innerHTML = `<div class="panel compact-data-panel" id="status-panel"><div class="toolbar module-toolbar"><strong>Lista statusowa</strong><button id="status-list-mode" class="secondary">Lista</button><button id="status-queue-mode" class="secondary active-toggle">Kolejka</button><div class="status-inline-metrics"><span><b>${d.progress || 0}%</b> postęp</span><span><b>${d.in_progress || 0}</b> w trakcie</span><span class="${d.blocked ? 'danger-text' : ''}"><b>${d.blocked || 0}</b> blokady/NOK</span></div></div><div id="status-queue"></div></div>`;
-    bindStatusModeButtons();
-    drawDependencyQueue('status', state.status, '#status-queue');
-    return;
-  }
   if (state.statusMode !== 'list') state.statusMode = 'list';
   const visibilityColumns = [...statusGroups().flatMap(group => [...(group.columns || []).map(column => ({ key: `matrix_${column.id}`, label: `${group.name} · ${column.name}` })), ...(group.subgroups || []).flatMap(subgroup => (subgroup.columns || []).map(column => ({ key: `matrix_${column.id}`, label: `${group.name} / ${subgroup.name} · ${column.name}` }))) ]), { key: 'progress_updated', label: 'Ostatnia aktualizacja' }];
   state.statusColumns = visibilityColumns;
   const functionGroupsInStatus = [...new Map(state.status.filter(item => item.function_group_id).map(item => [Number(item.function_group_id), { id: Number(item.function_group_id), name: item.function_group_name || `Grupa ${item.function_group_id}` }])).values()].sort((a, b) => a.name.localeCompare(b.name, 'pl', { numeric: true }));
   if (state.statusFunctionGroupFilter && !functionGroupsInStatus.some(item => Number(item.id) === Number(state.statusFunctionGroupFilter))) state.statusFunctionGroupFilter = '';
   const unassignedCount = state.status.filter(item => !item.status_group_id).length;
-  $('#content').innerHTML = `<div class="panel status-matrix-panel" id="status-panel"><div class="toolbar module-toolbar"><strong>Tabele statusowe</strong><button id="status-list-mode" class="secondary active-toggle">Lista</button><button id="status-queue-mode" class="secondary">Kolejka</button><input id="status-matrix-search" class="compact-search" type="search" placeholder="Szukaj punktu lub wartości…" value="${escapeHtml(state.statusMatrixQuery)}"><select id="status-function-group-filter" aria-label="Filtr grupy funkcyjnej">${selectOptions(functionGroupsInStatus.map(item => ({ value: item.id, label: item.name })), state.statusFunctionGroupFilter, 'Wszystkie grupy funkcyjne')}</select><button type="button" class="mini ${state.statusGroupByFunction ? 'active-toggle' : ''}" id="status-group-functional" aria-pressed="${state.statusGroupByFunction}">Grupuj wg grupy funkcyjnej</button><button type="button" class="mini ${state.statusShowUnassigned ? 'active-toggle' : ''}" id="status-show-unassigned" aria-pressed="${state.statusShowUnassigned}">Pokaż nieprzypisane${unassignedCount ? ` · ${unassignedCount}` : ''}</button><button type="button" class="mini" id="status-collapse-all">Zwiń wszystkie</button><button type="button" class="mini" id="status-expand-all">Rozwiń wszystkie</button>${savedViewsToolbar('status')}<div class="status-inline-metrics"><span><b>${d.progress || 0}%</b> postęp</span><span><b>${d.in_progress || 0}</b> w trakcie</span><span class="${d.blocked ? 'danger-text' : ''}"><b>${d.blocked || 0}</b> blokady/NOK</span></div></div><div class="table-view-tools status-table-view-tools">${columnVisibilityControl('status', visibilityColumns)}${statusSymbolLegend()}</div><div id="status-matrix-content" class="status-matrix-content"></div></div>`;
-  bindStatusModeButtons();
+  $('#content').innerHTML = `<div class="panel status-matrix-panel" id="status-panel"><div class="toolbar module-toolbar"><strong>Tabele statusowe</strong><input id="status-matrix-search" class="compact-search" type="search" placeholder="Szukaj punktu lub wartości…" value="${escapeHtml(state.statusMatrixQuery)}"><select id="status-function-group-filter" aria-label="Filtr grupy funkcyjnej">${selectOptions(functionGroupsInStatus.map(item => ({ value: item.id, label: item.name })), state.statusFunctionGroupFilter, 'Wszystkie grupy funkcyjne')}</select><button type="button" class="mini ${state.statusGroupByFunction ? 'active-toggle' : ''}" id="status-group-functional" aria-pressed="${state.statusGroupByFunction}">Grupuj wg grupy funkcyjnej</button><button type="button" class="mini ${state.statusShowUnassigned ? 'active-toggle' : ''}" id="status-show-unassigned" aria-pressed="${state.statusShowUnassigned}">Pokaż nieprzypisane${unassignedCount ? ` · ${unassignedCount}` : ''}</button><button type="button" class="mini" id="status-collapse-all">Zwiń wszystkie</button><button type="button" class="mini" id="status-expand-all">Rozwiń wszystkie</button>${savedViewsToolbar('status')}<div class="status-inline-metrics"><span><b>${d.progress || 0}%</b> postęp</span><span><b>${d.in_progress || 0}</b> w trakcie</span><span class="${d.blocked ? 'danger-text' : ''}"><b>${d.blocked || 0}</b> blokady/NOK</span></div></div><div class="table-view-tools status-table-view-tools">${columnVisibilityControl('status', visibilityColumns)}${statusSymbolLegend()}</div><div id="status-matrix-content" class="status-matrix-content"></div></div>`;
   $('#status-matrix-search').insertAdjacentHTML('beforebegin', '<button id="bulk-status-open" class="secondary">+ Dodaj wiele punktów</button>');
   $('#bulk-status-open').addEventListener('click', openBulkStatus);
   $('#status-matrix-search').addEventListener('input', event => { state.statusMatrixQuery = event.target.value; drawStatusRows(); });
@@ -3933,11 +4002,12 @@ async function taskStatusChangePayload(item, nextStatus) {
 }
 
 function renderTasks() {
+  queueMicrotask(decorateUnifiedWorkspace);
+  if (state.taskMode === 'queue') state.taskMode = 'list';
   const listTools = state.taskMode === 'list' ? `<select id="task-group" aria-label="Grupowanie zadań"><option value="">Bez grupowania</option><option value="function_group_name">Grupa funkcyjna</option><option value="function_group_element_name">Element grupy</option><option value="category">Kategoria</option><option value="subcategory">Podkategoria</option><option value="status">Status</option><option value="owner_name">Odpowiedzialny</option><option value="scope_label">Zakres hierarchii</option></select><button type="button" class="mini" id="task-collapse-all">Zwiń wszystkie</button><button type="button" class="mini" id="task-expand-all">Rozwiń wszystkie</button><button type="button" class="mini" id="task-table-clear">Wyczyść filtry tabeli</button><button type="button" class="mini completed-toggle ${state.taskShowCompleted ? 'active-toggle' : ''}" id="task-show-completed" aria-pressed="${state.taskShowCompleted}">Pokaż ukończone</button>` : '';
-  $('#content').innerHTML = `<div class="panel compact-data-panel task-filter-panel"><div class="toolbar module-toolbar" id="task-filter-bar"><strong>Zadania</strong><button id="task-board-mode" class="secondary ${state.taskMode === 'board' ? 'active-toggle' : ''}">Tablica</button><button id="task-list-mode" class="secondary ${state.taskMode === 'list' ? 'active-toggle' : ''}">Lista</button><button id="task-queue-mode" class="secondary ${state.taskMode === 'queue' ? 'active-toggle' : ''}">Kolejka</button><input id="task-search" placeholder="Szukaj we wszystkich polach">${listTools}${savedViewsToolbar('tasks')}</div></div><div id="task-content"></div>`;
+  $('#content').innerHTML = `<div class="panel compact-data-panel task-filter-panel"><div class="toolbar module-toolbar" id="task-filter-bar"><strong>Zadania</strong><button id="task-board-mode" class="secondary ${state.taskMode === 'board' ? 'active-toggle' : ''}">Tablica</button><button id="task-list-mode" class="secondary ${state.taskMode === 'list' ? 'active-toggle' : ''}">Lista</button><input id="task-search" placeholder="Szukaj we wszystkich polach">${listTools}${savedViewsToolbar('tasks')}</div></div><div id="task-content"></div>`;
   $('#task-board-mode').addEventListener('click', () => { state.taskMode = 'board'; renderTasks(); });
   $('#task-list-mode').addEventListener('click', () => { state.taskMode = 'list'; renderTasks(); });
-  $('#task-queue-mode').addEventListener('click', () => { state.taskMode = 'queue'; renderTasks(); });
   $('#task-search').addEventListener('input', drawTasks);
   bindTableFilters('#task-filter-bar', drawTasks);
   bindSavedViews('tasks', '#task-filter-bar', drawTasks);
@@ -4048,6 +4118,7 @@ function entityLabel(type, item) {
 }
 
 function renderGoals() {
+  queueMicrotask(decorateUnifiedWorkspace);
   $('#content').innerHTML = `<div class="goalgrid">${state.goals.map(goal => {
     const links = goal.links || [];
     const done = links.filter(link => ['Done', 'Closed'].includes(entity(link.entity_type, link.entity_id)?.status)).length;
@@ -4066,16 +4137,15 @@ function renderGoals() {
 }
 
 function renderPoints() {
+  queueMicrotask(decorateUnifiedWorkspace);
+  if (state.pointMode === 'queue') state.pointMode = 'list';
   const searchable = ['list', 'queue'].includes(state.pointMode);
   const activeDependencies = (state.externalDependencies || []).filter(item => item.dependency_status !== 'resolved' || Number(item.configuration_pending)).length;
-  const pointTools = state.pointSection === 'points' ? `<button id="point-reminder-mode" class="secondary ${state.pointMode === 'reminders' ? 'active-toggle' : ''}">Tablica</button><button id="point-list-mode" class="secondary ${state.pointMode === 'list' ? 'active-toggle' : ''}">Lista</button><button id="point-queue-mode" class="secondary ${state.pointMode === 'queue' ? 'active-toggle' : ''}">Kolejka</button>${searchable ? '<input id="point-search" type="search" placeholder="Szukaj we wszystkich informacjach">' : ''}${state.pointMode === 'list' ? '<button type="button" class="mini" id="point-clear-filters">Wyczyść filtry</button>' : ''}${savedViewsToolbar('points')}` : '';
-  $('#content').innerHTML = `<div class="panel compact-data-panel"><div class="toolbar module-toolbar point-section-toolbar" id="point-filter-bar"><strong>Otwarte punkty</strong><nav class="point-section-tabs"><button type="button" id="point-section-points" class="mini secondary ${state.pointSection === 'points' ? 'active-toggle' : ''}">Punkty <b>${state.points.length}</b></button><button type="button" id="point-section-external" class="mini secondary ${state.pointSection === 'external' ? 'active-toggle' : ''}">Zależności zewnętrzne <b>${activeDependencies}</b></button></nav>${pointTools}</div></div><div id="point-content"></div>`;
-  $('#point-section-points').addEventListener('click', () => { state.pointSection = 'points'; renderPoints(); });
-  $('#point-section-external').addEventListener('click', () => { state.pointSection = 'external'; renderPoints(); });
+  const pointTools = state.pointSection === 'points' ? `<button id="point-reminder-mode" class="secondary ${state.pointMode === 'reminders' ? 'active-toggle' : ''}">Tablica</button><button id="point-list-mode" class="secondary ${state.pointMode === 'list' ? 'active-toggle' : ''}">Lista</button>${searchable ? '<input id="point-search" type="search" placeholder="Szukaj we wszystkich informacjach">' : ''}${state.pointMode === 'list' ? '<button type="button" class="mini" id="point-clear-filters">Wyczyść filtry</button>' : ''}${savedViewsToolbar('points')}` : '';
+  $('#content').innerHTML = `<div class="panel compact-data-panel"><div class="toolbar module-toolbar point-section-toolbar" id="point-filter-bar"><strong>${state.pointSection === 'external' ? `Zależności zewnętrzne · ${activeDependencies}` : `Otwarte punkty · ${state.points.length}`}</strong>${pointTools}</div></div><div id="point-content"></div>`;
   if (state.pointSection === 'external') { renderExternalDependencies(); return; }
   $('#point-list-mode').addEventListener('click', () => { state.pointMode = 'list'; renderPoints(); });
   $('#point-reminder-mode').addEventListener('click', () => { state.pointMode = 'reminders'; renderPoints(); });
-  $('#point-queue-mode').addEventListener('click', () => { state.pointMode = 'queue'; renderPoints(); });
   if (state.pointMode === 'reminders') drawReminderView();
   else if (state.pointMode === 'queue') drawDependencyQueue('point', filteredPoints(), '#point-content');
   else drawPointList();
@@ -4182,6 +4252,7 @@ function drawReminderView() {
 }
 
 function renderNotes() {
+  queueMicrotask(decorateUnifiedWorkspace);
   const weeks = [...new Map(state.notes.map(item => { const week = isoWeek(item.note_date); return [week.key, week]; })).values()];
   $('#content').innerHTML = `<div class="panel"><div class="toolbar"><strong>Historia wpisów</strong><label>Od <input type="date" id="notes-from" value="${state.notesFrom}"></label><label>Do <input type="date" id="notes-to" value="${state.notesTo}"></label><select id="week-filter" aria-label="Numer tygodnia kalendarzowego">${selectOptions(weeks.map(week => ({ value: week.key, label: week.label })), state.notesWeek, 'Wszystkie CW')}</select><select id="notes-group" aria-label="Grupowanie"><option value="scope">Zakres projektu</option><option value="type">Typ wpisu</option><option value="shift">Zmiana</option><option value="cw">Tydzień kalendarzowy</option><option value="">Bez grupowania</option></select><button id="notes-refresh" class="secondary">Odśwież zakres</button></div></div><div id="notes-list" class="notes"></div>`;
   $('#notes-group').value = state.grouping.notes;

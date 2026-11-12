@@ -6,10 +6,10 @@
   <meta name="theme-color" content="#172554">
   <title>PLC Commissioning Hub</title>
   <link rel="icon" type="image/png" href="/assets/favicon.png">
-  <link rel="stylesheet" href="/styles.css?v=1.7.0">
-  <link rel="stylesheet" href="/styles/modules/meetings.css?v=1.7.0">
+  <link rel="stylesheet" href="/styles.css?v=1.8.0">
+  <link rel="stylesheet" href="/styles/modules/meetings.css?v=1.8.0">
   <link rel="stylesheet" href="/styles/modules/open-points.css?v=1.7.0">
-  <script type="module" src="/app.js?v=1.7.0"></script>
+  <script type="module" src="/app.js?v=1.8.0"></script>
 </head>
 <body class="sidebar-collapsed">
   <header class="topbar">
@@ -19,7 +19,7 @@
       <span class="brand"><strong>Commissioning Hub</strong><span>Status projektów i przestrzeń zespołu</span></span>
     </button>
     <div id="top-news" class="top-news" aria-label="Najnowsze wiadomości projektu"></div>
-    <div class="top-actions"><button id="notification-open" class="ghost notification-button" title="Powiadomienia" aria-label="Powiadomienia"><b id="notification-count">0</b></button><button id="daily-summary-open" class="ghost" title="Podsumowanie zmian">☀ Podsumowanie</button><button id="project-switch" class="ghost project-chip">Wybierz projekt</button><button id="theme-switch" class="ghost" title="Zmień wygląd">◐ Motyw</button><div class="userbox"><span id="me"></span><button id="security-manage" class="ghost" title="Bezpieczeństwo konta">Bezpieczeństwo</button><button id="password-change" class="ghost" title="Zmień hasło">Hasło</button><button id="logout" class="ghost">Wyloguj</button></div></div>
+    <div class="top-actions"><button id="notification-open" class="ghost notification-button" title="Centrum wiadomości" aria-label="Centrum wiadomości"><b id="notification-count">0</b></button><button id="daily-summary-open" class="ghost" title="Podsumowanie zmian">☀ Podsumowanie</button><button id="project-switch" class="ghost project-chip">Wybierz projekt</button><button id="theme-switch" class="ghost" title="Zmień wygląd">◐ Motyw</button><div class="userbox"><span id="me"></span><button id="security-manage" class="ghost" title="Bezpieczeństwo konta">Bezpieczeństwo</button><button id="password-change" class="ghost" title="Zmień hasło">Hasło</button><button id="logout" class="ghost">Wyloguj</button></div></div>
   </header>
   <div class="layout">
     <button id="sidebar-backdrop" class="sidebar-backdrop" aria-label="Zamknij menu"></button>
@@ -31,18 +31,12 @@
         <div id="controller-picker-host"><input type="hidden" id="controller" value="all"></div>
       </label>
       <nav id="nav">
-        <button data-view="mine" class="active"><span>◉</span><span>Moje podsumowanie</span></button>
-        <button data-view="overview"><span>◫</span><span>Przegląd</span></button>
-        <button data-view="announcements"><span>◆</span><span>Informator</span><b id="n-announcements">0</b></button>
-        <button data-view="operations"><span>⌁</span><span>Centrum operacyjne</span><b id="n-operations">0</b></button>
-        <button data-view="planner"><span>▥</span><span>Planner</span></button>
-        <button data-view="calendar"><span>▣</span><span>Kalendarz</span></button>
+        <button data-view="mine" class="active"><span>◉</span><span>Start</span></button>
         <button data-view="status"><span>▦</span><span>Status</span><b id="n-status">0</b></button>
-        <button data-view="tasks"><span>✓</span><span>Zadania</span><b id="n-tasks">0</b></button>
-        <button data-view="goals"><span>◎</span><span>Cele</span><b id="n-goals">0</b></button>
-        <button data-view="points"><span>!</span><span>Otwarte punkty</span><b id="n-points">0</b></button>
-        <button data-view="notes"><span>▤</span><span>Przekazanie statusu</span><b id="n-notes">0</b></button>
-        <button data-view="history"><span>↺</span><span>Historia</span></button>
+        <button data-view="tasks"><span>✓</span><span>Praca</span><b id="n-tasks">0</b></button>
+        <button data-view="planner"><span>▥</span><span>Plan</span></button>
+        <button data-view="operations"><span>⌁</span><span>Priorytety i odprawy</span><b id="n-operations">0</b></button>
+        <button data-view="announcements"><span>◆</span><span>Komunikacja</span><b id="n-announcements">0</b></button>
         <button data-view="settings" id="settings-nav"><span>⚙</span><span>Konfiguracja</span></button>
       </nav>
       <footer class="app-credit" title="Marcin Defitowski @ AI"><b>Marcin Defitowski <em>@ AI</em></b></footer>

@@ -9,6 +9,27 @@ export const PRIORITY_DEFINITIONS = freezeDefinitions([
 
 export const PRIORITY_VALUES = Object.freeze(PRIORITY_DEFINITIONS.map(item => item.value));
 
+export const MEETING_PRIORITY_DEFINITIONS = freezeDefinitions([
+  { value: '1', short_label: 'P1', label: 'P1 — krytyczny', tone: 'red' },
+  { value: '2', short_label: 'P2', label: 'P2 — wysoki', tone: 'amber' },
+  { value: '3', short_label: 'P3', label: 'P3 — standardowy', tone: 'blue' },
+  { value: '4', short_label: 'P4', label: 'P4 — niski', tone: 'green' }
+]);
+
+export function normalizeMeetingPriority(value, fallback = 'Medium') {
+  const legacy = { Critical: '1', High: '2', Medium: '3', Low: '4' };
+  const numeric = Number(value);
+  if (Number.isInteger(numeric) && numeric >= 1 && numeric <= 4) return String(numeric);
+  if (Number.isInteger(numeric) && numeric <= 7) return '3';
+  if (Number.isInteger(numeric) && numeric <= 10) return '4';
+  return legacy[value] || legacy[fallback] || '3';
+}
+
+export function meetingPriorityDefinition(value, fallback = 'Medium') {
+  const normalized = normalizeMeetingPriority(value, fallback);
+  return MEETING_PRIORITY_DEFINITIONS.find(item => item.value === normalized) || MEETING_PRIORITY_DEFINITIONS[2];
+}
+
 export const DEFAULT_STATUS_WORKFLOW_STATES = freezeDefinitions([
   { system_key: 'never_checked', value: 'Never checked', label: 'Nigdy nie sprawdzone', icon: '◎', description: 'Nikt jeszcze nie zweryfikował tego punktu.', included: 1, counts_as_done: 0, tone: 'gray' },
   { system_key: 'ready', value: 'Ready to test', label: 'Gotowe do sprawdzenia', icon: '○', description: 'Można rozpocząć lub kontynuować pracę.', included: 1, counts_as_done: 0, tone: 'amber' },

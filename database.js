@@ -8,6 +8,7 @@ import { ENTITY_TABLES as TABLES } from './database/constants.js';
 import { hashPassword, validPassword, verifyPassword } from './database/security.js';
 import {
   PRIORITY_VALUES,
+  normalizeMeetingPriority,
   normalizeWorkflowStatus,
   requiresStatusComment,
   statusValues as sharedStatusValues,
@@ -3090,10 +3091,7 @@ function createRepository(db, defaultProjectId) {
       prepared.forEach(({ item, entity }, index) => {
         const key = `${item.entity_type}:${Number(item.entity_id)}`; requestedKeys.add(key);
         const itemStatus = ['open', 'decided', 'deferred'].includes(item.item_status) ? item.item_status : 'open';
-        const requestedPriority = Number(item.meeting_priority);
-        const legacyPriority = ({ Critical: 1, High: 3, Medium: 5, Low: 8 })[clean(item.meeting_priority)];
-        const entityPriority = ({ Critical: 1, High: 3, Medium: 5, Low: 8 })[entity.priority] || 5;
-        const meetingPriority = String(Number.isInteger(requestedPriority) && requestedPriority >= 1 && requestedPriority <= 10 ? requestedPriority : legacyPriority || entityPriority);
+        const meetingPriority = normalizeMeetingPriority(item.meeting_priority, entity.priority);
         const groupKey = clean(item.group_key || (clean(item.group_name) ? `legacy:${clean(item.group_name)}` : '')).slice(0, 160);
         const assignmentIds = Array.isArray(item.assignee_user_ids) ? item.assignee_user_ids : (item.owner_user_id ? [item.owner_user_id] : entity.assignee_user_ids || []);
         const statusChangedByUserId = asId(item.status_changed_by_user_id); if (statusChangedByUserId && !projectUserIds.has(statusChangedByUserId)) throw appError('Osoba zmieniająca status nie należy do projektu');
@@ -3125,7 +3123,7 @@ function createRepository(db, defaultProjectId) {
       meeting.summary ? `Cel / agenda: ${meeting.summary}` : '',
       '',
       'Lp. | Priorytet | Typ | Temat | Obszar | Odpowiedzialni | Deadline',
-      ...meeting.items.map((item, index) => `${index + 1}. | ${item.meeting_priority || '5'} | ${typeNames[item.entity_type] || item.entity_type} | ${item.entity?.title || 'Element projektu'} | ${item.entity?.scope_label || 'Cały projekt'} | ${item.assignee_names?.join(', ') || 'Nieprzypisane'} | ${item.due_date || item.entity?.due_date || 'bez terminu'}${item.decision ? `\n   Plan: ${item.decision}` : ''}`)
+      ...meeting.items.map((item, index) => `${index + 1}. | P${normalizeMeetingPriority(item.meeting_priority)} | ${typeNames[item.entity_type] || item.entity_type} | ${item.entity?.title || 'Element projektu'} | ${item.entity?.scope_label || 'Cały projekt'} | ${item.assignee_names?.join(', ') || 'Nieprzypisane'} | ${item.due_date || item.entity?.due_date || 'bez terminu'}${item.decision ? `\n   Plan: ${item.decision}` : ''}`)
     ].filter((line, index, list) => line || list[index - 1]);
     const wasPublished = Boolean(meeting.published_at);
     const announcement = saveAnnouncement(asId(meeting.published_announcement_id), {

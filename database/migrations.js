@@ -74,7 +74,35 @@ export function prepareDatabase(db, { seedDemo, demoLimit = 100 }) {
   runMigration(db, '046-status-matrix', () => migrateStatusMatrix(db));
   runMigration(db, '047-migration-audit', () => seedMigrationAudit(db, defaultProjectId));
   runMigration(db, '048-current-schema-marker', () => db.prepare("INSERT INTO app_meta(key,value) VALUES('schema_version','current') ON CONFLICT(key) DO UPDATE SET value='current'").run());
+  runMigration(db, '049-meeting-priority-p1-p4', () => migrateMeetingPrioritiesToP1P4(db));
   return defaultProjectId;
+}
+
+function migrateMeetingPrioritiesToP1P4(db) {
+  db.exec(`UPDATE project_meeting_items SET meeting_priority=CASE
+    WHEN meeting_priority IN ('Critical','1','2') THEN '1'
+    WHEN meeting_priority IN ('High','3','4') THEN '2'
+    WHEN meeting_priority IN ('Medium','5','6','7') THEN '3'
+    WHEN meeting_priority IN ('Low','8','9','10') THEN '4'
+    ELSE '3' END`);
+  const meetings = db.prepare("SELECT id,published_snapshot_json FROM project_meetings WHERE COALESCE(published_snapshot_json,'{}')!='{}'").all();
+  const normalize = value => {
+    const number = Number(value);
+    if (['Critical', '1', '2'].includes(String(value))) return '1';
+    if (value === 'High' || number === 3 || number === 4) return '2';
+    if (value === 'Medium' || (number >= 5 && number <= 7)) return '3';
+    if (value === 'Low' || (number >= 8 && number <= 10)) return '4';
+    return '3';
+  };
+  const update = db.prepare('UPDATE project_meetings SET published_snapshot_json=? WHERE id=?');
+  for (const meeting of meetings) {
+    try {
+      const snapshot = JSON.parse(meeting.published_snapshot_json);
+      if (!Array.isArray(snapshot.items)) continue;
+      snapshot.items = snapshot.items.map(item => ({ ...item, meeting_priority: normalize(item.meeting_priority) }));
+      update.run(JSON.stringify(snapshot), meeting.id);
+    } catch { /* historyczne uszkodzone migawki pozostają bez zmian */ }
+  }
 }
 
 function ensureMigrationTable(db) {
