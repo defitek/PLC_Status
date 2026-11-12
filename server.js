@@ -406,6 +406,7 @@ async function handleProjectApi(request, response, url, user) {
     if (method === 'DELETE') { repository.deleteAnnouncement(announcementId); response.writeHead(204); return response.end(); }
   }
   if (method === 'GET' && path === '/api/notifications') return json(response, 200, repository.notifications(user, url.searchParams.get('limit')));
+  if (method === 'POST' && path === '/api/notifications/read-all') return json(response, 200, repository.markAllNotificationsRead(user));
   const notificationRead = path.match(/^\/api\/notifications\/(\d+)\/read$/);
   if (notificationRead && method === 'POST') return json(response, 200, repository.markNotificationRead(Number(notificationRead[1]), user));
   if (method === 'POST' && path === '/api/comments') return json(response, 201, repository.addComment(await readJson(request), user));

@@ -6,10 +6,10 @@
   <meta name="theme-color" content="#172554">
   <title>PLC Commissioning Hub</title>
   <link rel="icon" type="image/png" href="/assets/favicon.png">
-  <link rel="stylesheet" href="/styles.css?v=1.8.0">
-  <link rel="stylesheet" href="/styles/modules/meetings.css?v=1.8.0">
+  <link rel="stylesheet" href="/styles.css?v=1.9.0">
+  <link rel="stylesheet" href="/styles/modules/meetings.css?v=1.9.0">
   <link rel="stylesheet" href="/styles/modules/open-points.css?v=1.7.0">
-  <script type="module" src="/app.js?v=1.8.0"></script>
+  <script type="module" src="/app.js?v=1.9.0"></script>
 </head>
 <body class="sidebar-collapsed">
   <header class="topbar">
@@ -18,8 +18,7 @@
       <span class="logo"><span class="logo-art" aria-hidden="true"></span></span>
       <span class="brand"><strong>Commissioning Hub</strong><span>Status projektów i przestrzeń zespołu</span></span>
     </button>
-    <div id="top-news" class="top-news" aria-label="Najnowsze wiadomości projektu"></div>
-    <div class="top-actions"><button id="notification-open" class="ghost notification-button" title="Centrum wiadomości" aria-label="Centrum wiadomości"><b id="notification-count">0</b></button><button id="daily-summary-open" class="ghost" title="Podsumowanie zmian">☀ Podsumowanie</button><button id="project-switch" class="ghost project-chip">Wybierz projekt</button><button id="theme-switch" class="ghost" title="Zmień wygląd">◐ Motyw</button><div class="userbox"><span id="me"></span><button id="security-manage" class="ghost" title="Bezpieczeństwo konta">Bezpieczeństwo</button><button id="password-change" class="ghost" title="Zmień hasło">Hasło</button><button id="logout" class="ghost">Wyloguj</button></div></div>
+    <div class="top-actions"><button id="notification-open" class="ghost notification-button" title="Centrum wiadomości" aria-label="Centrum wiadomości"><b id="notification-count">0</b></button><button id="project-switch" class="ghost project-chip">Wybierz projekt</button><button id="theme-switch" class="ghost" title="Zmień wygląd">◐ Motyw</button><div class="userbox"><span id="me"></span><button id="security-manage" class="ghost" title="Bezpieczeństwo konta">Bezpieczeństwo</button><button id="password-change" class="ghost" title="Zmień hasło">Hasło</button><button id="logout" class="ghost">Wyloguj</button></div></div>
   </header>
   <div class="layout">
     <button id="sidebar-backdrop" class="sidebar-backdrop" aria-label="Zamknij menu"></button>
@@ -68,7 +67,7 @@
   </dialog>
 
   <dialog id="goal-picker" class="picker-dialog">
-    <header class="dialog-head"><div><h2>Wybierz elementy celu</h2><p>Status, zadania i otwarte punkty</p></div><button type="button" class="x" id="picker-close">×</button></header>
+    <header class="dialog-head"><div><h2>Wybierz elementy kamienia milowego</h2><p>Status, zadania i otwarte punkty</p></div><button type="button" class="x" id="picker-close">×</button></header>
     <div class="picker-tools"><input id="picker-search" type="search" placeholder="Szukaj elementu…"></div>
     <div id="picker-content" class="picker-content"></div>
     <footer class="dialog-actions"><span></span><button type="button" class="secondary" id="picker-cancel">Anuluj</button><button type="button" class="primary" id="picker-apply">Zastosuj wybór</button></footer>
@@ -125,8 +124,8 @@
 
   <dialog id="link-picker-dialog" class="wide-dialog">
     <header class="dialog-head"><div><h2>Wybierz powiązane elementy</h2><p>Lista blokuje powtórne wskazanie tego samego rekordu.</p></div><button type="button" class="x" id="link-picker-close">×</button></header>
-    <div class="picker-tools"><input id="link-picker-search" type="search" placeholder="Szukaj po nazwie, sterowniku lub statusie…"><select id="link-picker-type"><option value="all">Wszystkie typy</option><option value="status">Status</option><option value="task">Zadania</option><option value="point">Otwarte punkty</option><option value="goal">Cele</option><option value="note">Przekazanie statusu</option></select><select id="link-picker-sort"><option value="hierarchy">Hierarchia projektu</option><option value="label">Nazwa</option><option value="status">Status</option></select></div>
-    <div class="picker-legend"><span><i class="type-dot status"></i>Status</span><span><i class="type-dot task"></i>Zadanie</span><span><i class="type-dot point"></i>Otwarty punkt</span><span><i class="type-dot goal"></i>Cel</span><span><i class="type-dot note"></i>Przekazanie statusu</span></div>
+    <div class="picker-tools"><input id="link-picker-search" type="search" placeholder="Szukaj po nazwie, sterowniku lub statusie…"><select id="link-picker-type"><option value="all">Wszystkie typy</option><option value="status">Status</option><option value="task">Zadania</option><option value="point">Otwarte punkty</option><option value="goal">Kamienie milowe</option><option value="note">Przekazanie statusu</option></select><select id="link-picker-sort"><option value="hierarchy">Hierarchia projektu</option><option value="label">Nazwa</option><option value="status">Status</option></select></div>
+    <div class="picker-legend"><span><i class="type-dot status"></i>Status</span><span><i class="type-dot task"></i>Zadanie</span><span><i class="type-dot point"></i>Otwarty punkt</span><span><i class="type-dot goal"></i>Kamień milowy</span><span><i class="type-dot note"></i>Przekazanie statusu</span></div>
     <div id="link-picker-content" class="picker-content link-picker-content"></div>
     <footer class="dialog-actions"><span id="link-picker-count"></span><span></span><button type="button" class="secondary" id="link-picker-cancel">Anuluj</button><button type="button" class="primary" id="link-picker-apply">Zastosuj wybór</button></footer>
   </dialog>
@@ -152,8 +151,6 @@
 
   <dialog id="bulk-status-dialog" class="record-dialog"><header class="dialog-head"><div><h2>Szybkie dodawanie punktów statusu</h2><p>Każdy wiersz utworzy osobny punkt z wybranymi parametrami.</p></div><button type="button" class="x" id="bulk-status-close">×</button></header><form id="bulk-status-form"><div id="bulk-status-fields" class="formgrid"></div><footer class="dialog-actions"><span></span><button type="button" class="secondary" id="bulk-status-cancel">Anuluj</button><button class="primary">Utwórz punkty</button></footer></form></dialog>
 
-  <dialog id="notifications-dialog" class="record-dialog"><header class="dialog-head"><div><h2>Powiadomienia</h2><p>Przypisania, komentarze i wiadomości Informatora.</p></div><button type="button" class="x" id="notifications-close">×</button></header><div id="notifications-list" class="notifications-list"></div></dialog>
-
   <dialog id="calendar-filter-dialog" class="choice-dialog">
     <form id="calendar-filter-form"><header class="dialog-head"><div><h2>Widok Kalendarza</h2><p>Wybierz dokładnie te informacje, które chcesz zobaczyć.</p></div><button type="button" class="x" id="calendar-filter-close">×</button></header><div id="calendar-filter-fields" class="formgrid"></div><footer class="dialog-actions"><span></span><button type="button" class="secondary" id="calendar-filter-cancel">Anuluj</button><button class="primary">Zastosuj filtry</button></footer></form>
   </dialog>
@@ -173,7 +170,7 @@
   <dialog id="entity-selection-dialog" class="wide-dialog">
     <header class="dialog-head"><div><h2 id="entity-selection-title">Wybierz elementy</h2><p id="entity-selection-description"></p></div><button type="button" class="x" id="entity-selection-close">×</button></header>
     <div class="picker-tools"><input id="entity-selection-search" type="search" placeholder="Szukaj po nazwie, obszarze lub osobie…"><select id="entity-selection-type"></select><div id="entity-selection-scope"></div></div>
-    <div class="picker-legend"><span><i class="type-dot status"></i>Status</span><span><i class="type-dot task"></i>Zadanie</span><span><i class="type-dot point"></i>Otwarty punkt</span><span><i class="type-dot goal"></i>Cel</span><span><i class="type-dot note"></i>Przekazanie statusu</span></div>
+    <div class="picker-legend"><span><i class="type-dot status"></i>Status</span><span><i class="type-dot task"></i>Zadanie</span><span><i class="type-dot point"></i>Otwarty punkt</span><span><i class="type-dot goal"></i>Kamień milowy</span><span><i class="type-dot note"></i>Przekazanie statusu</span></div>
     <div id="entity-selection-content" class="picker-content link-picker-content"></div>
     <footer class="dialog-actions"><span id="entity-selection-count"></span><span></span><button type="button" class="secondary" id="entity-selection-cancel">Anuluj</button><button type="button" class="primary" id="entity-selection-apply">Zastosuj wybór</button></footer>
   </dialog>
@@ -197,7 +194,6 @@
   </dialog>
 
   <div id="context-menu" class="context-menu hidden"></div>
-  <div id="push-stack" class="push-stack" aria-live="polite"></div>
 
   <div id="toast" class="toast"></div>
 </body>

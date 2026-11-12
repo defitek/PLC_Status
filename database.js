@@ -2157,7 +2157,7 @@ function createRepository(db, defaultProjectId) {
       if (date < range.from || date > range.to) continue;
       push({ entity_type: 'status', entity_id: row.id, title: row.function_detail, start_date: date, end_date: date, controller: row.controller, controller_label: row.controller_label, controller_id: row.controller_id, controller_group_id: row.controller_group_id, category: row.category, priority: row.criticality, status: row.status, assigned_names: row.responsible_name, color: row.status === 'Done' ? 'green' : row.status === 'Blocked' ? 'red' : 'violet', related_to_me: row.responsible_user_ids.includes(currentUser.id) || row.created_by === currentUser.id });
     }
-    if (types.has('goal')) for (const row of goalList) if (row.due_date && row.due_date >= range.from && row.due_date <= range.to) push({ entity_type: 'goal', entity_id: row.id, title: row.title, start_date: row.due_date, end_date: row.due_date, controller: row.controller, controller_label: row.controller_label, controller_id: row.controller_id, controller_group_id: row.controller_group_id, category: 'Cel', priority: row.priority, status: row.status, assigned_names: row.created_by_name, due_date: row.due_date, color: row.status === 'Done' ? 'green' : 'blue', related_to_me: row.created_by === currentUser.id });
+    if (types.has('goal')) for (const row of goalList) if (row.due_date && row.due_date >= range.from && row.due_date <= range.to) push({ entity_type: 'goal', entity_id: row.id, title: row.title, start_date: row.due_date, end_date: row.due_date, controller: row.controller, controller_label: row.controller_label, controller_id: row.controller_id, controller_group_id: row.controller_group_id, category: 'Kamień milowy', priority: row.priority, status: row.status, assigned_names: row.created_by_name, due_date: row.due_date, color: row.status === 'Done' ? 'green' : 'blue', related_to_me: row.created_by === currentUser.id });
     if (types.has('note')) for (const row of noteList) if (row.note_date >= range.from && row.note_date <= range.to) push({ entity_type: 'note', entity_id: row.id, title: `${row.type} · ${row.content.slice(0, 70)}`, start_date: row.note_date, end_date: row.note_date, controller: row.controller, controller_label: row.controller_label, controller_id: row.controller_id, category: row.type, status: row.shift, assigned_names: row.created_by_name || row.author, color: 'gray', related_to_me: row.created_by === currentUser.id || isMentioned('note', row.id) });
     if (types.has('annotation')) {
       const groupControllers = new Map();
@@ -2184,7 +2184,7 @@ function createRepository(db, defaultProjectId) {
       if (!types.has(placement.entity_type)) continue;
       const row = maps[placement.entity_type]?.get(placement.entity_id);
       if (!row) continue;
-      const common = { entity_type: placement.entity_type, entity_id: row.id, start_date: placement.calendar_date, end_date: placement.calendar_date, controller: row.controller, controller_label: row.controller_label, controller_id: row.controller_id, controller_group_id: row.controller_group_id, category: row.category || row.type || (placement.entity_type === 'goal' ? 'Cel' : ''), priority: row.priority || row.criticality || 'Medium', status: row.status || row.shift, due_date: row.due_date, scheduled: true };
+      const common = { entity_type: placement.entity_type, entity_id: row.id, start_date: placement.calendar_date, end_date: placement.calendar_date, controller: row.controller, controller_label: row.controller_label, controller_id: row.controller_id, controller_group_id: row.controller_group_id, category: row.category || row.type || (placement.entity_type === 'goal' ? 'Kamień milowy' : ''), priority: row.priority || row.criticality || 'Medium', status: row.status || row.shift, due_date: row.due_date, scheduled: true };
       if (placement.entity_type === 'task' && row.start_date && row.due_date) push({ ...common, start_date: row.start_date, end_date: row.due_date, title: row.title, assigned_names: row.owner_name, color: 'blue', related_to_me: row.assignee_user_ids.includes(currentUser.id) || row.created_by === currentUser.id || isMentioned('task', row.id) });
       if (placement.entity_type === 'point') push({ ...common, title: row.title, assigned_names: row.owner_name, color: 'amber', related_to_me: row.owner_user_id === currentUser.id || row.created_by === currentUser.id || isMentioned('point', row.id) });
       if (placement.entity_type === 'status') push({ ...common, title: row.function_detail, assigned_names: row.responsible_name, color: 'violet', related_to_me: row.responsible_user_ids.includes(currentUser.id) || row.created_by === currentUser.id });
@@ -2401,6 +2401,12 @@ function createRepository(db, defaultProjectId) {
     return { ...row, read_at: row.read_at || new Date().toISOString() };
   }
 
+  function markAllNotificationsRead(currentUser) {
+    const result = db.prepare(`UPDATE notifications SET read_at=COALESCE(read_at,CURRENT_TIMESTAMP)
+      WHERE project_id=? AND user_id=? AND read_at IS NULL`).run(activeProjectId(), currentUser.id);
+    return { updated: Number(result.changes || 0), notifications: notificationsData(currentUser, 100) };
+  }
+
   function addComment(input, currentUser) {
     const type = clean(input.entity_type);
     const entityId = asId(input.entity_id);
@@ -2607,7 +2613,7 @@ function createRepository(db, defaultProjectId) {
 
   function triageRows(currentUser, dueSoonDays = 7, code = 'all') {
     const collections = operationCollections(currentUser, code);
-    const labels = { status: 'Status', task: 'Zadanie', point: 'Otwarty punkt', goal: 'Cel' };
+    const labels = { status: 'Status', task: 'Zadanie', point: 'Otwarty punkt', goal: 'Kamień milowy' };
     return Object.entries(collections).flatMap(([type, rows]) => rows.map(row => {
       const signals = triageSignals(type, row, dueSoonDays);
       return signals.length ? {
@@ -2642,7 +2648,7 @@ function createRepository(db, defaultProjectId) {
       if (!row.reminder_date) add('point', row, 'missing_reminder', 'medium', 'Brak daty przypomnienia');
       if (!clean(row.next_action)) add('point', row, 'missing_next_action', 'medium', 'Brak następnego kroku');
     }
-    for (const row of collections.goal) if (!isClosedEntity('goal', row) && !row.due_date) add('goal', row, 'missing_deadline', 'medium', 'Brak terminu celu');
+    for (const row of collections.goal) if (!isClosedEntity('goal', row) && !row.due_date) add('goal', row, 'missing_deadline', 'medium', 'Brak terminu kamienia milowego');
     const invalidLinks = all(`SELECT el.id,el.source_type,el.source_id,el.target_type,el.target_id FROM entity_links el WHERE el.project_id=?`, activeProjectId()).map(link => {
       const sourceTable = TABLES[link.source_type]; const targetTable = TABLES[link.target_type];
       const sourceExists = Boolean(sourceTable && one(`SELECT 1 FROM ${sourceTable} WHERE id=? AND project_id=?`, link.source_id, activeProjectId()));
@@ -3117,7 +3123,7 @@ function createRepository(db, defaultProjectId) {
     const meeting = projectMeetingRows(currentUser, [asId(id)])[0];
     if (!meeting) throw appError('Nie znaleziono odprawy', 404);
     if (!meeting.items.length) throw appError('Dodaj co najmniej jeden element przed opublikowaniem odprawy');
-    const typeNames = { status: 'Punkt statusu', task: 'Zadanie', point: 'Otwarty punkt', goal: 'Cel', note: 'Przekazanie statusu' };
+    const typeNames = { status: 'Punkt statusu', task: 'Zadanie', point: 'Otwarty punkt', goal: 'Kamień milowy', note: 'Przekazanie statusu' };
     const lines = [
       `Plan i priorytety: ${meeting.period_from}–${meeting.period_to}.`,
       meeting.summary ? `Cel / agenda: ${meeting.summary}` : '',
@@ -4603,6 +4609,7 @@ function createRepository(db, defaultProjectId) {
     acknowledgeAnnouncement(id, currentUser) { return acknowledgeAnnouncement(id, currentUser); },
     notifications(currentUser, limit) { return notificationsData(currentUser, limit); },
     markNotificationRead(id, currentUser) { return markNotificationRead(id, currentUser); },
+    markAllNotificationsRead(currentUser) { return markAllNotificationsRead(currentUser); },
     addComment(input, currentUser) { return addComment(input, currentUser); },
     setEntityEditLock(type, id, input, currentUser) { return setEntityEditLock(type, id, input, currentUser); },
     clearEntityEditLock(type, id, currentUser) { return clearEntityEditLock(type, id, currentUser); },
@@ -5127,12 +5134,12 @@ function createRepository(db, defaultProjectId) {
     goals(code, currentUser) { return goalRows(code, currentUser); },
     saveGoal(id, input, currentUser) {
       const before = id ? baseSnapshot('goal', id) : null;
-      if (id && !before) throw appError('Nie znaleziono celu', 404);
+      if (id && !before) throw appError('Nie znaleziono kamienia milowego', 404);
       assertEntityEditable('goal', id, currentUser);
       assertFresh('goal', id, input.updated_at);
       const hierarchyScope = resolveHierarchyTarget(input, before);
       const values = { project_id: activeProjectId(), controller_id: hierarchyScope.controller.id, controller_group_id: hierarchyScope.controller_group_id, title: clean(input.title), description: clean(input.description), status: clean(input.status) || 'Open', priority: clean(input.priority) || 'Medium', due_date: nullableDate(input.due_date) };
-      if (!values.title) throw appError('Nazwa celu jest wymagana');
+      if (!values.title) throw appError('Nazwa kamienia milowego jest wymagana');
       ensureDuplicateChanged('goal', input.duplicate_source_id, { ...values, links: input.links || [] });
       let recordId = id;
       if (id) updateRecord('goals', id, values, Object.keys(values));
@@ -5140,7 +5147,7 @@ function createRepository(db, defaultProjectId) {
       if (Array.isArray(input.links)) {
         for (const link of input.links) {
           if (!['status', 'task', 'point'].includes(link.entity_type) || !asId(link.entity_id)) continue;
-          if (!one(`SELECT 1 FROM ${TABLES[link.entity_type]} WHERE id=? AND project_id=?`, asId(link.entity_id), activeProjectId())) throw appError('Powiązany element celu nie należy do bieżącego projektu');
+          if (!one(`SELECT 1 FROM ${TABLES[link.entity_type]} WHERE id=? AND project_id=?`, asId(link.entity_id), activeProjectId())) throw appError('Powiązany element kamienia milowego nie należy do bieżącego projektu');
         }
         setEntityLinks('goal', recordId, input.links, currentUser);
       }

@@ -75,9 +75,15 @@ test('uproszczona nawigacja łączy pracę, plan i komunikację', async ({ page 
   const navigation = page.locator('#nav button[data-view]');
   await expect(navigation).toHaveCount(7);
   await expect(navigation.locator(':scope > span:nth-child(2)')).toHaveText(['Start', 'Status', 'Praca', 'Plan', 'Priorytety i odprawy', 'Komunikacja', 'Konfiguracja']);
+  await expect(page.locator('#top-news')).toHaveCount(0);
+  await expect(page.locator('#daily-summary-open')).toHaveCount(0);
+  await expect(page.locator('#notifications-dialog')).toHaveCount(0);
+  await expect(page.locator('#daily-summary-dialog')).not.toBeVisible();
+  await expect(page.locator('.start-shortcuts')).toContainText('Do działania');
 
   await openView(page, 'tasks');
   await expect(page.locator('.workspace-tabs')).toContainText('Zależności zewnętrzne');
+  await expect(page.locator('.workspace-tabs')).toContainText('Kamienie milowe');
   await expect(page.locator('#task-queue-mode')).toHaveCount(0);
 
   await page.locator('[data-view="planner"]').evaluate(button => button.click());
@@ -88,6 +94,11 @@ test('uproszczona nawigacja łączy pracę, plan i komunikację', async ({ page 
   await page.locator('[data-view="announcements"]').evaluate(button => button.click());
   await expect(page.locator('.workspace-tabs')).toContainText('Centrum wiadomości');
   await expect(page.locator('.message-center-section h2').first()).toHaveText('Do działania');
+  await expect(page.getByRole('button', { name: 'Moje', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Zespół', exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Historia zmian', exact: true }).click();
+  await expect(page.locator('#history-summary-open')).toHaveText('Podsumuj zakres');
   await expectViewportContained(page);
 });
 

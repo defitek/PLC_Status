@@ -209,6 +209,9 @@ test('V23 publishes meeting snapshots, supports unnamed groups and targets statu
     const notification = repository.notifications(workerOne).find(item => item.entity_type === 'announcement' && item.entity_id === announcement.id);
     repository.markNotificationRead(notification.id, workerOne);
     assert.ok(repository.dailySummary('2026-10-25', '2026-10-25', workerOne).pending_announcements.some(item => item.id === announcement.id), 'reading a notification should not acknowledge the Informator item');
+    const readAll = repository.markAllNotificationsRead(workerOne);
+    assert.equal(readAll.notifications.some(item => !item.read_at), false, 'bulk read should clear every notification in the current project');
+    assert.ok(repository.dailySummary('2026-10-25', '2026-10-25', workerOne).pending_announcements.some(item => item.id === announcement.id), 'bulk notification read must not acknowledge a required message');
     repository.acknowledgeAnnouncement(announcement.id, workerOne);
     assert.equal(repository.dailySummary('2026-10-25', '2026-10-25', workerOne).pending_announcements.some(item => item.id === announcement.id), false);
     repository.deleteProjectMeeting(meeting.id);
