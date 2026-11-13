@@ -76,7 +76,25 @@ export function prepareDatabase(db, { seedDemo, demoLimit = 100 }) {
   runMigration(db, '048-current-schema-marker', () => db.prepare("INSERT INTO app_meta(key,value) VALUES('schema_version','current') ON CONFLICT(key) DO UPDATE SET value='current'").run());
   runMigration(db, '049-meeting-priority-p1-p4', () => migrateMeetingPrioritiesToP1P4(db));
   runMigration(db, '050-communication-workflow', () => migrateCommunicationWorkflow(db));
+  runMigration(db, '051-professional-themes', () => migrateProfessionalThemes(db));
   return defaultProjectId;
+}
+
+function migrateProfessionalThemes(db) {
+  db.exec(`UPDATE users SET theme=CASE theme
+    WHEN 'dark' THEN 'industrial-pro'
+    WHEN 'graphite' THEN 'dark-professional'
+    WHEN 'contrast' THEN 'minimal-pro'
+    WHEN 'aurora' THEN 'tech-purple'
+    WHEN 'oceanic' THEN 'siemens-inspired'
+    WHEN 'nord' THEN 'steel-blue'
+    WHEN 'solar' THEN 'amber-industrial'
+    WHEN 'sakura' THEN 'modern-light'
+    WHEN 'cyber' THEN 'dark-professional'
+    WHEN 'classic' THEN 'modern-light'
+    WHEN 'blue' THEN 'industrial-pro'
+    WHEN '' THEN 'industrial-pro'
+    ELSE CASE WHEN theme IN ('industrial-pro','modern-light','dark-professional','siemens-inspired','rockwell-inspired','green-automation','amber-industrial','tech-purple','steel-blue','minimal-pro') THEN theme ELSE 'industrial-pro' END END`);
 }
 
 function migrateCommunicationWorkflow(db) {

@@ -397,7 +397,7 @@ async function initialize() {
   try {
     state.me = await api('/api/me');
     state.projects = state.me.projects || [];
-    applyTheme(state.me.theme || 'dark');
+    applyTheme(state.me.theme || 'industrial-pro');
     bindShell();
     updateIdentity();
     if (!state.me.current_project) openProjectDialog(true);
@@ -677,23 +677,31 @@ function openProjectDialog(mandatory = false) {
 }
 
 const themes = [
-  ['dark', 'Nocny', 'Ciemny granat do pracy wieczorem', '#08111e', '#071426', '#101c2c'],
-  ['graphite', 'Grafitowy', 'Neutralny ciemny interfejs', '#191b1f', '#24262b', '#30333a'],
-  ['contrast', 'Wysoki kontrast', 'Wyraźne obramowania i czytelność', '#fff', '#000', '#fff'],
-  ['aurora', 'Aurora', 'Fiolet, morska zieleń i miękkie światło', '#0f1023', '#181437', '#191a35'],
-  ['oceanic', 'Oceaniczny', 'Jasny turkus i spokojny błękit techniczny', '#eef9fa', '#042f3e', '#fff'],
-  ['nord', 'Nord Frost', 'Chłodna, stonowana paleta skandynawska', '#e9edf2', '#344052', '#f8fafc'],
-  ['solar', 'Solar', 'Ciepły papier, bursztyn i spokojny brąz', '#f7f0e6', '#553728', '#fffaf3'],
-  ['sakura', 'Sakura', 'Nowoczesny jasny motyw z różowym akcentem', '#faf2f6', '#542d47', '#fff'],
-  ['cyber', 'Cyber Grid', 'Czerń, neonowa zieleń i techniczna typografia', '#030605', '#050806', '#09100d']
+  { id: 'industrial-pro', name: 'Industrial Pro', description: 'Techniczny granat i elektryczny błękit.', mode: 'Ciemny', colors: ['#081B30', '#0057C8', '#74C7F8', '#41546A', '#F8FAFC'] },
+  { id: 'modern-light', name: 'Modern Light', description: 'Jasny, minimalistyczny interfejs do codziennej pracy.', mode: 'Jasny', colors: ['#F3F7FC', '#1139D8', '#62A0FF', '#DCE5F0', '#17243F'] },
+  { id: 'dark-professional', name: 'Dark Professional', description: 'Stonowany grafit z zielonym akcentem.', mode: 'Ciemny', colors: ['#101719', '#235E41', '#65C466', '#354F48', '#E8EDF0'] },
+  { id: 'siemens-inspired', name: 'Siemens Inspired', description: 'Przemysłowy turkus i czyste powierzchnie.', mode: 'Jasny', colors: ['#07556C', '#099DAD', '#D3EFF2', '#D8E3EB', '#152C39'] },
+  { id: 'rockwell-inspired', name: 'Rockwell Inspired', description: 'Grafit z mocnym czerwonym akcentem.', mode: 'Ciemny', colors: ['#181B20', '#C51D35', '#EA8796', '#444B55', '#F1F4F8'] },
+  { id: 'green-automation', name: 'Green Automation', description: 'Mięta i zieleń dla czytelnego interfejsu automatyki.', mode: 'Jasny', colors: ['#EAF8F1', '#06754E', '#58BA68', '#D4F4DA', '#193B30'] },
+  { id: 'amber-industrial', name: 'Amber Industrial', description: 'Antracyt, pomarańcz i bursztyn.', mode: 'Ciemny', colors: ['#141719', '#F58A00', '#FFBB21', '#515B68', '#F0F2F5'] },
+  { id: 'tech-purple', name: 'Tech Purple', description: 'Granat z eleganckim technologicznym fioletem.', mode: 'Ciemny', colors: ['#1A142C', '#6630CA', '#B88AFF', '#45425D', '#F7F3FF'] },
+  { id: 'steel-blue', name: 'Steel Blue', description: 'Stalowe odcienie niebieskiego dla zespołów inżynierskich.', mode: 'Jasny', colors: ['#E7EFF9', '#164A86', '#2378CC', '#AECDEA', '#172A45'] },
+  { id: 'minimal-pro', name: 'Minimal Pro', description: 'Biel, grafit i chłodne szarości bez rozpraszaczy.', mode: 'Jasny', colors: ['#F7F9FC', '#182638', '#788796', '#CBD4DE', '#FFFFFF'] }
 ];
+const legacyThemeAliases = {
+  dark: 'industrial-pro', graphite: 'dark-professional', contrast: 'minimal-pro', aurora: 'tech-purple',
+  oceanic: 'siemens-inspired', nord: 'steel-blue', solar: 'amber-industrial', sakura: 'modern-light',
+  cyber: 'dark-professional', classic: 'modern-light'
+};
 function applyTheme(theme) {
-  const selected = themes.some(item => item[0] === theme) ? theme : 'dark';
+  const selected = themes.some(item => item.id === theme) ? theme : legacyThemeAliases[theme] || 'industrial-pro';
+  const definition = themes.find(item => item.id === selected);
   document.documentElement.dataset.theme = selected;
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', definition.colors[0]);
   state.me.theme = selected;
 }
 function openThemeDialog() {
-  $('#theme-list').innerHTML = themes.map(([id, name, description, bg, nav, card]) => `<button type="button" class="theme-card ${state.me.theme === id ? 'active' : ''}" data-theme="${id}"><span class="theme-preview" style="--preview-bg:${bg};--preview-nav:${nav};--preview-card:${card}"><i></i><span></span></span><strong>${name}</strong><small class="sub">${description}</small></button>`).join('');
+  $('#theme-list').innerHTML = themes.map(({ id, name, description, mode, colors }) => `<button type="button" class="theme-card ${state.me.theme === id ? 'active' : ''}" data-theme="${id}" style="--preview-bg:${colors[0]};--preview-accent:${colors[1]};--preview-secondary:${colors[2]};--preview-line:${colors[3]};--preview-contrast:${colors[4]}"><span class="theme-preview" aria-hidden="true"><i></i><span></span><b></b></span><span class="theme-card-title"><strong>${name}</strong><em>${mode}</em></span><small>${description}</small><span class="theme-swatches" aria-label="Paleta kolorów">${colors.map(color => `<i style="--swatch:${color}" title="${color}"></i>`).join('')}</span></button>`).join('');
   $$('.theme-card').forEach(button => button.addEventListener('click', async () => {
     const theme = button.dataset.theme;
     applyTheme(theme);

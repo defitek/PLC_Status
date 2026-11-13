@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS users (
   mfa_pending_secret_cipher TEXT NOT NULL DEFAULT '',
   mfa_enabled INTEGER NOT NULL DEFAULT 0 CHECK(mfa_enabled IN (0,1)),
   mfa_recovery_codes_json TEXT NOT NULL DEFAULT '[]',
-  theme TEXT NOT NULL DEFAULT 'dark',
+  theme TEXT NOT NULL DEFAULT 'industrial-pro',
   active INTEGER NOT NULL DEFAULT 1,
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP

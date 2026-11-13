@@ -3944,8 +3944,8 @@ function createRepository(db, defaultProjectId) {
       };
     },
     setPreference(userId, input) {
-      const allowedThemes = ['dark', 'graphite', 'contrast', 'aurora', 'oceanic', 'nord', 'solar', 'sakura', 'cyber'];
-      const theme = allowedThemes.includes(clean(input.theme)) ? clean(input.theme) : 'dark';
+      const allowedThemes = ['industrial-pro', 'modern-light', 'dark-professional', 'siemens-inspired', 'rockwell-inspired', 'green-automation', 'amber-industrial', 'tech-purple', 'steel-blue', 'minimal-pro'];
+      const theme = allowedThemes.includes(clean(input.theme)) ? clean(input.theme) : 'industrial-pro';
       db.prepare('UPDATE users SET theme=? WHERE id=?').run(theme, userId);
       return { theme };
     },

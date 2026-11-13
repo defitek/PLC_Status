@@ -77,6 +77,7 @@ test('uproszczona nawigacja łączy pracę, plan i komunikację', async ({ page 
   const navigation = page.locator('#nav button[data-view]');
   await expect(navigation).toHaveCount(7);
   await expect(navigation.locator(':scope > span:nth-child(2)')).toHaveText(['Start', 'Status', 'Praca', 'Plan', 'Priorytety i odprawy', 'Komunikacja', 'Konfiguracja']);
+  await expect(navigation.locator(':scope > .nav-icon > svg')).toHaveCount(7);
   await expect(page.locator('#top-news')).toHaveCount(0);
   await expect(page.locator('#daily-summary-open')).toHaveCount(0);
   await expect(page.locator('#notifications-dialog')).toHaveCount(0);
@@ -104,6 +105,53 @@ test('uproszczona nawigacja łączy pracę, plan i komunikację', async ({ page 
   await page.getByRole('button', { name: 'Historia zmian', exact: true }).click();
   await expect(page.locator('#history-summary-open')).toHaveText('Podsumuj zakres');
   await expectViewportContained(page);
+});
+
+test('menedżer motywów udostępnia dziesięć profesjonalnych palet', async ({ page }) => {
+  const palettes = {
+    'industrial-pro': ['#081B30', '#0057C8', '#74C7F8', '#41546A', '#F8FAFC'],
+    'modern-light': ['#F3F7FC', '#1139D8', '#62A0FF', '#DCE5F0', '#17243F'],
+    'dark-professional': ['#101719', '#235E41', '#65C466', '#354F48', '#E8EDF0'],
+    'siemens-inspired': ['#07556C', '#099DAD', '#D3EFF2', '#D8E3EB', '#152C39'],
+    'rockwell-inspired': ['#181B20', '#C51D35', '#EA8796', '#444B55', '#F1F4F8'],
+    'green-automation': ['#EAF8F1', '#06754E', '#58BA68', '#D4F4DA', '#193B30'],
+    'amber-industrial': ['#141719', '#F58A00', '#FFBB21', '#515B68', '#F0F2F5'],
+    'tech-purple': ['#1A142C', '#6630CA', '#B88AFF', '#45425D', '#F7F3FF'],
+    'steel-blue': ['#E7EFF9', '#164A86', '#2378CC', '#AECDEA', '#172A45'],
+    'minimal-pro': ['#F7F9FC', '#182638', '#788796', '#CBD4DE', '#FFFFFF']
+  };
+  await page.locator('#theme-switch').evaluate(button => button.click());
+  const cards = page.locator('#theme-list .theme-card');
+  await expect(cards).toHaveCount(10);
+  await expect(page.locator('#theme-list .theme-swatches i')).toHaveCount(50);
+  await expect(cards.locator('.theme-card-title strong')).toHaveText([
+    'Industrial Pro', 'Modern Light', 'Dark Professional', 'Siemens Inspired', 'Rockwell Inspired',
+    'Green Automation', 'Amber Industrial', 'Tech Purple', 'Steel Blue', 'Minimal Pro'
+  ]);
+  await expect(page.locator('#theme-list')).not.toContainText('Nocny');
+  await expect(page.locator('#theme-list')).not.toContainText('Cyber Grid');
+
+  const tokens = await page.evaluate(themePalettes => {
+    const root = document.documentElement;
+    const names = ['--theme-bg', '--theme-accent', '--theme-secondary', '--theme-line', '--theme-contrast'];
+    const result = {};
+    for (const id of Object.keys(themePalettes)) {
+      root.dataset.theme = id;
+      const styles = getComputedStyle(root);
+      result[id] = {
+        palette: names.map(name => styles.getPropertyValue(name).trim().toUpperCase()),
+        statuses: ['--status-progress', '--status-ready', '--status-done', '--status-blocked'].map(name => styles.getPropertyValue(name).trim().toUpperCase())
+      };
+    }
+    root.dataset.theme = 'industrial-pro';
+    return result;
+  }, palettes);
+  for (const [id, palette] of Object.entries(palettes)) {
+    expect(tokens[id].palette).toEqual(palette);
+    expect(tokens[id].statuses).toEqual(['#1769D2', '#925D00', '#117A4D', '#B42318']);
+  }
+  await expectViewportContained(page);
+  await page.locator('#theme-close').click();
 });
 
 test('globalne wyszukiwanie otwiera rekord z obserwowaniem, wzmiankami i osią czasu', async ({ page }, testInfo) => {

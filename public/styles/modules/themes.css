@@ -1,0 +1,69 @@
+/* Ten enterprise palettes. Status colors remain defined in the shared semantic tokens. */
+[data-theme="industrial-pro"] {
+  --theme-bg:#081B30; --theme-accent:#0057C8; --theme-secondary:#74C7F8; --theme-line:#41546A; --theme-contrast:#F8FAFC;
+  --navy:#081B30; --blue:#0057C8; --blue-soft:#12385e; --bg:#081B30; --surface:#102a45; --line:#41546A; --text:#F8FAFC; --muted:#afbdcc;
+  --panel:#102a45; --panel-alt:#17334f; --sidebar:#0b2239; --input:#16324e; --track:#31475d; --badge-soft:#223c55; --todo-soft:#152d45; --progress-soft:#153d69; --done-soft:#173c34;
+  --shadow:0 20px 55px #020b14aa; --logo-start:#F8FAFC; --logo-mid:#74C7F8; --logo-end:#0057C8; --on-accent:#fff; color-scheme:dark;
+}
+[data-theme="modern-light"] {
+  --theme-bg:#F3F7FC; --theme-accent:#1139D8; --theme-secondary:#62A0FF; --theme-line:#DCE5F0; --theme-contrast:#17243F;
+  --navy:#17243F; --blue:#1139D8; --blue-soft:#e3ecff; --bg:#F3F7FC; --surface:#fff; --line:#DCE5F0; --text:#17243F; --muted:#68778d;
+  --panel:#fff; --panel-alt:#f7faff; --sidebar:#f9fbfe; --input:#f8fbff; --track:#e6edf5; --badge-soft:#edf2f8; --todo-soft:#f1f4f8; --progress-soft:#e3ecff; --done-soft:#e4f5ec;
+  --shadow:0 16px 42px #17243F18; --logo-start:#d9e9ff; --logo-mid:#62A0FF; --logo-end:#1139D8; --on-accent:#fff; color-scheme:light;
+}
+[data-theme="dark-professional"] {
+  --theme-bg:#101719; --theme-accent:#235E41; --theme-secondary:#65C466; --theme-line:#354F48; --theme-contrast:#E8EDF0;
+  --navy:#101719; --blue:#235E41; --blue-soft:#1b3b2d; --bg:#101719; --surface:#182421; --line:#354F48; --text:#E8EDF0; --muted:#a8b7b2;
+  --panel:#182421; --panel-alt:#20302c; --sidebar:#131e1b; --input:#20302c; --track:#2d423c; --badge-soft:#263a34; --todo-soft:#1c2926; --progress-soft:#1b3b2d; --done-soft:#193a28;
+  --shadow:0 20px 52px #020605aa; --logo-start:#E8EDF0; --logo-mid:#65C466; --logo-end:#235E41; --on-accent:#fff; color-scheme:dark;
+}
+[data-theme="siemens-inspired"] {
+  --theme-bg:#07556C; --theme-accent:#099DAD; --theme-secondary:#D3EFF2; --theme-line:#D8E3EB; --theme-contrast:#152C39;
+  --navy:#07556C; --blue:#099DAD; --blue-soft:#D3EFF2; --bg:#edf8fa; --surface:#fff; --line:#D8E3EB; --text:#152C39; --muted:#617985;
+  --panel:#fff; --panel-alt:#f3fafb; --sidebar:#e6f4f6; --input:#f4fbfc; --track:#dcebed; --badge-soft:#e7f1f3; --todo-soft:#edf5f6; --progress-soft:#D3EFF2; --done-soft:#e4f5ec;
+  --shadow:0 17px 44px #07556C20; --logo-start:#fff; --logo-mid:#D3EFF2; --logo-end:#099DAD; --on-accent:#152C39; color-scheme:light;
+}
+[data-theme="rockwell-inspired"] {
+  --theme-bg:#181B20; --theme-accent:#C51D35; --theme-secondary:#EA8796; --theme-line:#444B55; --theme-contrast:#F1F4F8;
+  --navy:#181B20; --blue:#C51D35; --blue-soft:#3d1e26; --bg:#181B20; --surface:#242830; --line:#444B55; --text:#F1F4F8; --muted:#b2bac5;
+  --panel:#242830; --panel-alt:#2d323b; --sidebar:#1d2026; --input:#2d323b; --track:#3a4049; --badge-soft:#333943; --todo-soft:#292d34; --progress-soft:#3d1e26; --done-soft:#24382f;
+  --shadow:0 21px 55px #08090bcc; --logo-start:#F1F4F8; --logo-mid:#EA8796; --logo-end:#C51D35; --on-accent:#fff; color-scheme:dark;
+}
+[data-theme="green-automation"] {
+  --theme-bg:#EAF8F1; --theme-accent:#06754E; --theme-secondary:#58BA68; --theme-line:#D4F4DA; --theme-contrast:#193B30;
+  --navy:#193B30; --blue:#06754E; --blue-soft:#D4F4DA; --bg:#EAF8F1; --surface:#fff; --line:#cce4d7; --text:#193B30; --muted:#617c72;
+  --panel:#fff; --panel-alt:#f2fbf6; --sidebar:#e1f4e9; --input:#f4fbf7; --track:#d9ebe1; --badge-soft:#e5f1ea; --todo-soft:#eff6f2; --progress-soft:#dcefe6; --done-soft:#D4F4DA;
+  --shadow:0 17px 42px #06754E1c; --logo-start:#f6fff9; --logo-mid:#58BA68; --logo-end:#06754E; --on-accent:#fff; color-scheme:light;
+}
+[data-theme="amber-industrial"] {
+  --theme-bg:#141719; --theme-accent:#F58A00; --theme-secondary:#FFBB21; --theme-line:#515B68; --theme-contrast:#F0F2F5;
+  --navy:#141719; --blue:#F58A00; --blue-soft:#463014; --bg:#141719; --surface:#22262b; --line:#515B68; --text:#F0F2F5; --muted:#b6bdc6;
+  --panel:#22262b; --panel-alt:#2b3036; --sidebar:#191d20; --input:#2b3036; --track:#414952; --badge-soft:#333a42; --todo-soft:#272c31; --progress-soft:#463014; --done-soft:#25392f;
+  --shadow:0 21px 55px #050607cc; --logo-start:#F0F2F5; --logo-mid:#FFBB21; --logo-end:#F58A00; --on-accent:#141719; color-scheme:dark;
+}
+[data-theme="tech-purple"] {
+  --theme-bg:#1A142C; --theme-accent:#6630CA; --theme-secondary:#B88AFF; --theme-line:#45425D; --theme-contrast:#F7F3FF;
+  --navy:#1A142C; --blue:#6630CA; --blue-soft:#312452; --bg:#1A142C; --surface:#29203f; --line:#45425D; --text:#F7F3FF; --muted:#bab1cc;
+  --panel:#29203f; --panel-alt:#33294b; --sidebar:#211936; --input:#33294b; --track:#403952; --badge-soft:#3a3150; --todo-soft:#2e2741; --progress-soft:#312452; --done-soft:#253a34;
+  --shadow:0 22px 58px #080511cc; --logo-start:#F7F3FF; --logo-mid:#B88AFF; --logo-end:#6630CA; --on-accent:#fff; color-scheme:dark;
+}
+[data-theme="steel-blue"] {
+  --theme-bg:#E7EFF9; --theme-accent:#164A86; --theme-secondary:#2378CC; --theme-line:#AECDEA; --theme-contrast:#172A45;
+  --navy:#172A45; --blue:#164A86; --blue-soft:#d7e7f7; --bg:#E7EFF9; --surface:#fafdff; --line:#AECDEA; --text:#172A45; --muted:#61758d;
+  --panel:#fafdff; --panel-alt:#eef5fc; --sidebar:#dfeaf6; --input:#f4f8fc; --track:#d3e1ef; --badge-soft:#e1ebf5; --todo-soft:#edf3f8; --progress-soft:#d7e7f7; --done-soft:#e4f5ec;
+  --shadow:0 16px 40px #164A8620; --logo-start:#f6fbff; --logo-mid:#2378CC; --logo-end:#164A86; --on-accent:#fff; color-scheme:light;
+}
+[data-theme="minimal-pro"] {
+  --theme-bg:#F7F9FC; --theme-accent:#182638; --theme-secondary:#788796; --theme-line:#CBD4DE; --theme-contrast:#FFFFFF;
+  --navy:#182638; --blue:#182638; --blue-soft:#e5eaf0; --bg:#F7F9FC; --surface:#FFFFFF; --line:#CBD4DE; --text:#182638; --muted:#667585;
+  --panel:#FFFFFF; --panel-alt:#f2f5f8; --sidebar:#f0f3f6; --input:#f7f9fb; --track:#dfe5eb; --badge-soft:#e8edf2; --todo-soft:#f0f3f6; --progress-soft:#e5eaf0; --done-soft:#e4f5ec;
+  --shadow:0 13px 34px #18263814; --logo-start:#FFFFFF; --logo-mid:#788796; --logo-end:#182638; --on-accent:#fff; color-scheme:light;
+}
+
+[data-theme="industrial-pro"] .login-logo img,
+[data-theme="dark-professional"] .login-logo img,
+[data-theme="rockwell-inspired"] .login-logo img,
+[data-theme="amber-industrial"] .login-logo img,
+[data-theme="tech-purple"] .login-logo img {
+  filter:brightness(0) saturate(100%) invert(88%) sepia(13%) saturate(477%) hue-rotate(169deg) brightness(107%) contrast(96%) drop-shadow(0 7px 12px #0008);
+}

@@ -398,6 +398,36 @@ test('migration ledger applies every migration only once', () => {
   }
 });
 
+test('professional themes replace legacy palettes and persist user preference', () => {
+  const temporary = temporaryDatabase();
+  let repository = openDatabase(temporary.path);
+  const account = repository.authenticate('admin');
+  const themes = ['industrial-pro', 'modern-light', 'dark-professional', 'siemens-inspired', 'rockwell-inspired', 'green-automation', 'amber-industrial', 'tech-purple', 'steel-blue', 'minimal-pro'];
+  try {
+    assert.equal(repository.me(account.id).theme, 'industrial-pro');
+    for (const theme of themes) assert.equal(repository.setPreference(account.id, { theme }).theme, theme);
+    assert.equal(repository.setPreference(account.id, { theme: 'unsupported' }).theme, 'industrial-pro');
+    repository.close();
+
+    const legacy = new DatabaseSync(temporary.path);
+    legacy.prepare('UPDATE users SET theme=? WHERE id=?').run('sakura', account.id);
+    legacy.prepare("DELETE FROM schema_migrations WHERE id='051-professional-themes'").run();
+    legacy.close();
+
+    repository = openDatabase(temporary.path);
+    assert.equal(repository.me(account.id).theme, 'modern-light');
+    const database = new DatabaseSync(temporary.path);
+    try {
+      assert.ok(database.prepare("SELECT 1 FROM schema_migrations WHERE id='051-professional-themes'").get());
+    } finally {
+      database.close();
+    }
+  } finally {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
 test('database reopens after project 1 was replaced on a persistent volume', () => {
   const temporary = temporaryDatabase();
   let repository = openDatabase(temporary.path);
