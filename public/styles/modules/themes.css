@@ -21,7 +21,7 @@
   --theme-bg:#07556C; --theme-accent:#099DAD; --theme-secondary:#D3EFF2; --theme-line:#D8E3EB; --theme-contrast:#152C39;
   --navy:#07556C; --blue:#099DAD; --blue-soft:#D3EFF2; --bg:#edf8fa; --surface:#fff; --line:#D8E3EB; --text:#152C39; --muted:#617985;
   --panel:#fff; --panel-alt:#f3fafb; --sidebar:#e6f4f6; --input:#f4fbfc; --track:#dcebed; --badge-soft:#e7f1f3; --todo-soft:#edf5f6; --progress-soft:#D3EFF2; --done-soft:#e4f5ec;
-  --shadow:0 17px 44px #07556C20; --logo-start:#fff; --logo-mid:#D3EFF2; --logo-end:#099DAD; --on-accent:#152C39; color-scheme:light;
+  --shadow:0 17px 44px #07556C20; --logo-start:#fff; --logo-mid:#D3EFF2; --logo-end:#099DAD; --on-accent:#102936; color-scheme:light;
 }
 [data-theme="rockwell-inspired"] {
   --theme-bg:#181B20; --theme-accent:#C51D35; --theme-secondary:#EA8796; --theme-line:#444B55; --theme-contrast:#F1F4F8;
@@ -59,6 +59,25 @@
   --panel:#FFFFFF; --panel-alt:#f2f5f8; --sidebar:#f0f3f6; --input:#f7f9fb; --track:#dfe5eb; --badge-soft:#e8edf2; --todo-soft:#f0f3f6; --progress-soft:#e5eaf0; --done-soft:#e4f5ec;
   --shadow:0 13px 34px #18263814; --logo-start:#FFFFFF; --logo-mid:#788796; --logo-end:#182638; --on-accent:#fff; color-scheme:light;
 }
+
+/* Dark themes use the same semantic hues with accessible foregrounds and
+   restrained dark surfaces instead of light pastel feedback backgrounds. */
+:is([data-theme="industrial-pro"],[data-theme="dark-professional"],[data-theme="rockwell-inspired"],[data-theme="amber-industrial"],[data-theme="tech-purple"]) {
+  --green:#65d49c; --green-soft:#153c30;
+  --amber:#ffd076; --amber-soft:#3c321c;
+  --red:#ff8b82; --red-soft:#47242a;
+  --status-progress:#74c7f8; --status-progress-soft:#12324e;
+  --status-ready:#ffd076; --status-ready-soft:#3c321c;
+  --status-done:#65d49c; --status-done-soft:#153c30;
+  --status-blocked:#ff8b82; --status-blocked-soft:#47242a;
+}
+
+/* Theme-sensitive emphasis stays subtle: a line and a lightly tinted surface
+   identify today without turning the entire calendar column into an accent. */
+.calendar-day.today { background:color-mix(in srgb,var(--blue) 3%,var(--surface)); box-shadow:inset 0 0 0 1px var(--today-border); }
+.calendar-day-head.today,.planner-table th.today { background:var(--today-surface); }
+.calendar-day-head.today { box-shadow:inset 0 2px var(--today-border); }
+.planner-cell.today,.planner-table td.today,.planner-table th.today { box-shadow:inset 0 0 0 1px var(--today-border); }
 
 [data-theme="industrial-pro"] .login-logo img,
 [data-theme="dark-professional"] .login-logo img,

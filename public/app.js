@@ -600,6 +600,9 @@ function bindShell() {
     document.querySelectorAll('details.table-filter-menu[open]').forEach(menu => { if (!menu.contains(event.target)) menu.open = false; });
   });
   document.addEventListener('keydown', handlePlannerClipboardShortcut);
+  document.addEventListener('close', event => {
+    if (event.target instanceof HTMLDialogElement) queueMicrotask(elevateVisibleToast);
+  }, true);
   installDropdownLayers();
   installDialogOutsideClose();
 }
@@ -1142,18 +1145,51 @@ function unifiedWorkspaceTabs() {
 
 function decorateUnifiedWorkspace() {
   const tabs = unifiedWorkspaceTabs();
-  if (!tabs.length || !$('#content')) return;
-  $('#content > .workspace-tabs')?.remove();
-  const active = item => item.view === state.view
-    && (!item.section || item.section === state.pointSection)
-    && (!item.tab || item.tab === state.announcementTab);
-  $('#content').insertAdjacentHTML('afterbegin', `<nav class="announcement-tabs workspace-tabs" aria-label="Widoki modułu">${tabs.map((item, index) => `<button type="button" data-workspace-tab="${index}" class="${active(item) ? 'active' : ''}">${escapeHtml(item.label)}${item.count ? `<b>${item.count}</b>` : ''}</button>`).join('')}</nav>`);
-  $$('[data-workspace-tab]').forEach(button => button.addEventListener('click', async () => {
-    const item = tabs[Number(button.dataset.workspaceTab)];
-    if (item.section) state.pointSection = item.section;
-    if (item.tab) state.announcementTab = item.tab;
-    await setView(item.view);
-  }));
+  const content = $('#content');
+  if (!content) return;
+  content.querySelector(':scope > .workspace-tabs')?.remove();
+  if (tabs.length) {
+    const active = item => item.view === state.view
+      && (!item.section || item.section === state.pointSection)
+      && (!item.tab || item.tab === state.announcementTab);
+    content.insertAdjacentHTML('afterbegin', `<nav class="announcement-tabs workspace-tabs" aria-label="Widoki modułu">${tabs.map((item, index) => `<button type="button" data-workspace-tab="${index}" class="${active(item) ? 'active' : ''}">${escapeHtml(item.label)}${item.count ? `<b>${item.count}</b>` : ''}</button>`).join('')}</nav>`);
+    $$('[data-workspace-tab]').forEach(button => button.addEventListener('click', async () => {
+      const item = tabs[Number(button.dataset.workspaceTab)];
+      if (item.section) state.pointSection = item.section;
+      if (item.tab) state.announcementTab = item.tab;
+      await setView(item.view);
+    }));
+  }
+  syncModulePrimaryAction();
+}
+
+function syncModulePrimaryAction() {
+  const content = $('#content');
+  const source = $('#add');
+  content?.querySelector('[data-module-primary-action]')?.remove();
+  content?.querySelector('.module-action-bar')?.remove();
+  if (!content || !source || source.hidden || !source.textContent.trim()) return;
+  if (state.view === 'points' && state.pointSection === 'external') return;
+  if (state.view === 'announcements' && state.announcementTab !== 'news') return;
+
+  const targetSelector = {
+    status: '#status-panel > .module-toolbar', tasks: '#task-filter-bar', points: '#point-filter-bar',
+    calendar: '.calendar-command', notes: '#content > .panel > .toolbar', announcements: '.announcement-range-filters .toolbar'
+  }[state.view];
+  let target = targetSelector ? $(targetSelector) : null;
+  if (!target) {
+    const tabs = content.querySelector(':scope > .workspace-tabs');
+    const markup = '<div class="module-action-bar" data-module-action-bar></div>';
+    if (tabs) tabs.insertAdjacentHTML('afterend', markup); else content.insertAdjacentHTML('afterbegin', markup);
+    target = content.querySelector('[data-module-action-bar]');
+  }
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'primary module-primary-action';
+  button.dataset.modulePrimaryAction = '';
+  button.textContent = source.textContent;
+  button.addEventListener('click', () => source.click());
+  target.append(button);
 }
 
 function canManageAnnouncements() { return ['system_admin', 'project_admin', 'moderator'].includes(state.me.role); }
@@ -6663,12 +6699,33 @@ function bindJumpItems() {
 }
 
 let toastTimer;
+function elevateVisibleToast() {
+  const element = $('#toast');
+  if (!element?.classList.contains('show')) return;
+  if (element.matches(':popover-open')) element.hidePopover();
+  const activeModal = [...document.querySelectorAll('dialog:modal')].at(-1);
+  if (activeModal) {
+    element.removeAttribute('popover');
+    activeModal.append(element);
+  } else {
+    element.setAttribute('popover', 'manual');
+    document.body.append(element);
+    if ('showPopover' in element) element.showPopover();
+  }
+}
 function toast(message, error = false) {
   const element = $('#toast');
+  if (element.matches(':popover-open')) element.hidePopover();
   element.textContent = message;
   element.className = `toast show${error ? ' error' : ''}`;
+  elevateVisibleToast();
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { element.className = 'toast'; }, 3200);
+  toastTimer = setTimeout(() => {
+    if (element.matches(':popover-open')) element.hidePopover();
+    element.className = 'toast';
+    element.setAttribute('popover', 'manual');
+    document.body.append(element);
+  }, error ? 5200 : 3200);
 }
 
 initialize();

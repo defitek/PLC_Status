@@ -146,12 +146,99 @@ test('menedżer motywów udostępnia dziesięć profesjonalnych palet', async ({
     root.dataset.theme = 'industrial-pro';
     return result;
   }, palettes);
+  const darkThemes = new Set(['industrial-pro', 'dark-professional', 'rockwell-inspired', 'amber-industrial', 'tech-purple']);
   for (const [id, palette] of Object.entries(palettes)) {
     expect(tokens[id].palette).toEqual(palette);
-    expect(tokens[id].statuses).toEqual(['#1769D2', '#925D00', '#117A4D', '#B42318']);
+    expect(tokens[id].statuses).toEqual(darkThemes.has(id)
+      ? ['#74C7F8', '#FFD076', '#65D49C', '#FF8B82']
+      : ['#1769D2', '#925D00', '#117A4D', '#B42318']);
   }
   await expectViewportContained(page);
   await page.locator('#theme-close').click();
+});
+
+test('motywy zachowują kontrast tablicy, kalendarza, statusów i zakładek', async ({ page }) => {
+  const themes = ['industrial-pro', 'modern-light', 'dark-professional', 'siemens-inspired', 'rockwell-inspired', 'green-automation', 'amber-industrial', 'tech-purple', 'steel-blue', 'minimal-pro'];
+  const contrast = await page.evaluate(themeIds => {
+    const host = document.createElement('div');
+    host.style.cssText = 'position:fixed;left:-10000px;top:0';
+    host.innerHTML = '<section class="lane progressing"><div class="lanehead">W trakcie</div></section><header class="calendar-day-head today">Dzisiaj</header><nav class="announcement-tabs workspace-tabs"><button class="active">Zadania</button></nav><button class="primary">Zapisz</button><span class="status-symbol progress">P</span><span class="status-symbol blocked">B</span>';
+    host.querySelectorAll('*').forEach(element => { element.style.transition = 'none'; });
+    document.body.append(host);
+    const parseColor = value => {
+      const rgb = value.match(/rgba?\(([^)]+)\)/i);
+      if (rgb) return rgb[1].split(/[ ,/]+/).slice(0, 3).map(Number);
+      const srgb = value.match(/color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/i);
+      return srgb ? srgb.slice(1, 4).map(value => Number(value) * 255) : [0, 0, 0];
+    };
+    const luminance = color => color.map(value => {
+      const channel = value / 255;
+      return channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4;
+    }).reduce((sum, value, index) => sum + value * [.2126, .7152, .0722][index], 0);
+    const ratio = element => {
+      const styles = getComputedStyle(element);
+      const foreground = luminance(parseColor(styles.color));
+      const background = luminance(parseColor(styles.backgroundColor));
+      return (Math.max(foreground, background) + .05) / (Math.min(foreground, background) + .05);
+    };
+    const selectors = ['.lane', '.calendar-day-head', '.workspace-tabs .active', '.primary', '.status-symbol.progress', '.status-symbol.blocked'];
+    const result = {};
+    for (const id of themeIds) {
+      document.documentElement.dataset.theme = id;
+      result[id] = selectors.map(selector => ratio(host.querySelector(selector)));
+    }
+    host.remove();
+    document.documentElement.dataset.theme = 'industrial-pro';
+    return result;
+  }, themes);
+  const surfaces = ['kolumna W trakcie', 'dzisiejszy dzień', 'aktywna zakładka', 'przycisk główny', 'status W trakcie', 'status Zablokowane'];
+  for (const id of themes) {
+    contrast[id].forEach((ratio, index) => expect(ratio, `${id} · ${surfaces[index]} powinien zachować czytelny kontrast`).toBeGreaterThanOrEqual(4.5));
+  }
+});
+
+test('akcje dodawania są w belkach modułów, a eksport pozostaje przy prawym marginesie', async ({ page }) => {
+  await openView(page, 'tasks');
+  await expect(page.locator('#task-filter-bar [data-module-primary-action]')).toHaveText('+ Nowe zadanie');
+  await expect(page.locator('.page-actions #add')).toBeHidden();
+  await expect(page.locator('.page-actions #export')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Otwarte punkty', exact: true }).click();
+  await expect(page.locator('#title')).toHaveText('Praca · Otwarte punkty');
+  await expect(page.locator('#point-filter-bar [data-module-primary-action]')).toHaveText('+ Nowy punkt');
+
+  await page.getByRole('button', { name: 'Zależności zewnętrzne', exact: true }).click();
+  await expect(page.locator('[data-module-primary-action]')).toHaveCount(0);
+  await expect(page.locator('#external-add')).toBeVisible();
+
+  await openView(page, 'status');
+  await expect(page.locator('#status-panel > .module-toolbar [data-module-primary-action]')).toHaveText('+ Dodaj punkt');
+  const alignment = await page.evaluate(() => {
+    const main = document.querySelector('main').getBoundingClientRect();
+    const button = document.querySelector('#export').getBoundingClientRect();
+    return Math.abs(main.right - button.right);
+  });
+  expect(alignment).toBeLessThanOrEqual(22);
+  await expectViewportContained(page);
+});
+
+test('komunikat błędu pozostaje nad otwartym popupem', async ({ page }) => {
+  await openView(page, 'tasks');
+  await page.route('**/api/tasks', async route => {
+    if (route.request().method() === 'POST') {
+      await route.fulfill({ status: 422, contentType: 'application/json', body: JSON.stringify({ error: 'Testowy błąd zapisu zadania' }) });
+    } else await route.continue();
+  });
+  await page.locator('#task-filter-bar [data-module-primary-action]').click();
+  await expect(page.locator('#modal')).toBeVisible();
+  await page.locator('#fields [name="title"]').fill('Test widoczności błędu');
+  await page.locator('#fields [name="status"]').selectOption({ index: 1 });
+  await page.locator('#record-save').click();
+  const toast = page.locator('#toast');
+  await expect(toast).toContainText('Testowy błąd zapisu zadania');
+  await expect(toast).toBeVisible();
+  expect(await toast.evaluate(element => element.parentElement?.id)).toBe('modal');
+  await expect(page.locator('#modal')).toBeVisible();
 });
 
 test('globalne wyszukiwanie otwiera rekord z obserwowaniem, wzmiankami i osią czasu', async ({ page }, testInfo) => {
