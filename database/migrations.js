@@ -75,7 +75,72 @@ export function prepareDatabase(db, { seedDemo, demoLimit = 100 }) {
   runMigration(db, '047-migration-audit', () => seedMigrationAudit(db, defaultProjectId));
   runMigration(db, '048-current-schema-marker', () => db.prepare("INSERT INTO app_meta(key,value) VALUES('schema_version','current') ON CONFLICT(key) DO UPDATE SET value='current'").run());
   runMigration(db, '049-meeting-priority-p1-p4', () => migrateMeetingPrioritiesToP1P4(db));
+  runMigration(db, '050-communication-workflow', () => migrateCommunicationWorkflow(db));
   return defaultProjectId;
+}
+
+function migrateCommunicationWorkflow(db) {
+  const notificationSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='notifications'").get()?.sql || '';
+  const notificationColumns = columnNames(db, 'notifications');
+  if (!notificationSql.includes("'watch'") || !notificationColumns.has('event_count') || !notificationColumns.has('snoozed_until') || !notificationColumns.has('updated_at')) {
+    db.exec(`
+      BEGIN IMMEDIATE;
+      CREATE TABLE notifications_v50 (
+        id INTEGER PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK(kind IN ('assignment','announcement','comment','handover','automation','meeting','mention','watch')),
+        entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point','goal','note','announcement','handover','meeting')),
+        entity_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        message TEXT NOT NULL DEFAULT '',
+        event_count INTEGER NOT NULL DEFAULT 1,
+        snoozed_until TEXT,
+        read_at TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      ) STRICT;
+      INSERT INTO notifications_v50(id,project_id,user_id,kind,entity_type,entity_id,title,message,event_count,snoozed_until,read_at,created_at,updated_at)
+        SELECT id,project_id,user_id,kind,entity_type,entity_id,title,message,1,NULL,read_at,created_at,created_at FROM notifications;
+      DROP TABLE notifications;
+      ALTER TABLE notifications_v50 RENAME TO notifications;
+      COMMIT;
+    `);
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS entity_notification_preferences (
+      project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point','goal')),
+      entity_id INTEGER NOT NULL,
+      mode TEXT NOT NULL CHECK(mode IN ('watching','muted')),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(project_id,user_id,entity_type,entity_id)
+    ) STRICT, WITHOUT ROWID;
+    CREATE TABLE IF NOT EXISTS user_communication_preferences (
+      project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      digest_enabled INTEGER NOT NULL DEFAULT 0 CHECK(digest_enabled IN (0,1)),
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(project_id,user_id)
+    ) STRICT, WITHOUT ROWID;
+    CREATE TABLE IF NOT EXISTS announcement_snoozes (
+      announcement_id INTEGER NOT NULL REFERENCES announcements(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      snoozed_until TEXT NOT NULL,
+      PRIMARY KEY(announcement_id,user_id)
+    ) STRICT, WITHOUT ROWID;
+    CREATE TABLE IF NOT EXISTS comment_mentions (
+      comment_id INTEGER NOT NULL REFERENCES entity_comments(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      PRIMARY KEY(comment_id,user_id)
+    ) STRICT, WITHOUT ROWID;
+    DROP INDEX IF EXISTS idx_notifications_user;
+    CREATE INDEX idx_notifications_user ON notifications(project_id,user_id,read_at,snoozed_until,updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_notification_preferences_entity ON entity_notification_preferences(project_id,entity_type,entity_id,mode);
+    CREATE INDEX IF NOT EXISTS idx_comment_mentions_user ON comment_mentions(user_id,comment_id);
+  `);
 }
 
 function migrateMeetingPrioritiesToP1P4(db) {

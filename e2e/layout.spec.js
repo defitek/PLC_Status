@@ -17,6 +17,8 @@ async function login(page) {
 async function openView(page, view) {
   await page.locator(`[data-view="${view}"]`).evaluate(button => button.click());
   await expect(page.locator(`[data-view="${view}"]`)).toHaveClass(/active/);
+  const titles = { status: 'Status', tasks: 'Praca · Zadania', operations: 'Priorytety i odprawy', announcements: 'Komunikacja', planner: 'Plan' };
+  if (titles[view]) await expect(page.locator('#title')).toHaveText(titles[view]);
   await expect(page.locator('#content .loading')).toHaveCount(0);
   const dailySummary = page.locator('#daily-summary-dialog');
   if (await dailySummary.isVisible().catch(() => false)) await page.locator('#daily-summary-close').click();
@@ -96,9 +98,39 @@ test('uproszczona nawigacja łączy pracę, plan i komunikację', async ({ page 
   await expect(page.locator('.message-center-section h2').first()).toHaveText('Do działania');
   await expect(page.getByRole('button', { name: 'Moje', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Zespół', exact: true })).toBeVisible();
+  await expect(page.locator('#digest-enabled')).toBeVisible();
+  await expect(page.locator('#daily-summary-dialog')).not.toBeVisible();
 
   await page.getByRole('button', { name: 'Historia zmian', exact: true }).click();
   await expect(page.locator('#history-summary-open')).toHaveText('Podsumuj zakres');
+  await expectViewportContained(page);
+});
+
+test('globalne wyszukiwanie otwiera rekord z obserwowaniem, wzmiankami i osią czasu', async ({ page }, testInfo) => {
+  const suffix = `${testInfo.project.name}-search-${Date.now()}`;
+  const { source } = await createRelatedData(page, suffix);
+  await page.locator('#global-search').fill(source.title);
+  const result = page.locator(`[data-global-result="task:${source.id}"]`);
+  await expect(result).toBeVisible();
+  await result.click();
+  await expect(page.locator('#modal')).toBeVisible();
+  await expect(page.locator('#fields [name="title"]')).toHaveValue(source.title);
+  await expect(page.locator('#watch-record')).toBeVisible();
+  await expect(page.locator('#mute-record')).toBeVisible();
+  await page.locator('#watch-record').click();
+  await expect(page.locator('#watch-record')).toContainText('Obserwujesz');
+
+  await page.locator('#comment-content').fill('@');
+  await expect(page.locator('#comment-mention-suggestions')).toBeVisible();
+  await expect(page.locator('#comment-mention-suggestions button').first()).toBeVisible();
+  await page.locator('#comment-mention-suggestions button').first().click();
+  await page.locator('#comment-content').pressSequentially('sprawdź proszę.');
+  await page.locator('#comment-add').click();
+  await expect(page.locator('.entity-comment').last()).toContainText('sprawdź proszę');
+
+  await page.locator('#audit-toggle').click();
+  await expect(page.locator('#audit-section')).toBeVisible();
+  await expect(page.locator('.timeline-entry.comment').first()).toBeVisible();
   await expectViewportContained(page);
 });
 

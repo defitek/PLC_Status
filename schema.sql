@@ -608,18 +608,53 @@ CREATE TABLE IF NOT EXISTS entity_comments (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS comment_mentions (
+  comment_id INTEGER NOT NULL REFERENCES entity_comments(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY(comment_id,user_id)
+) STRICT, WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS notifications (
   id INTEGER PRIMARY KEY,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL CHECK(kind IN ('assignment','announcement','comment','handover','automation','meeting','mention')),
+  kind TEXT NOT NULL CHECK(kind IN ('assignment','announcement','comment','handover','automation','meeting','mention','watch')),
   entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point','goal','note','announcement','handover','meeting')),
   entity_id INTEGER NOT NULL,
   title TEXT NOT NULL,
   message TEXT NOT NULL DEFAULT '',
+  event_count INTEGER NOT NULL DEFAULT 1,
+  snoozed_until TEXT,
   read_at TEXT,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS entity_notification_preferences (
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  entity_type TEXT NOT NULL CHECK(entity_type IN ('status','task','point','goal')),
+  entity_id INTEGER NOT NULL,
+  mode TEXT NOT NULL CHECK(mode IN ('watching','muted')),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(project_id,user_id,entity_type,entity_id)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS user_communication_preferences (
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  digest_enabled INTEGER NOT NULL DEFAULT 0 CHECK(digest_enabled IN (0,1)),
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(project_id,user_id)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS announcement_snoozes (
+  announcement_id INTEGER NOT NULL REFERENCES announcements(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  snoozed_until TEXT NOT NULL,
+  PRIMARY KEY(announcement_id,user_id)
+) STRICT, WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS completion_requirements (
   id INTEGER PRIMARY KEY,
@@ -1064,7 +1099,9 @@ CREATE INDEX IF NOT EXISTS idx_calendar_annotations_date ON calendar_annotations
 CREATE INDEX IF NOT EXISTS idx_calendar_annotation_scopes ON calendar_annotation_scopes(scope_type,scope_id,annotation_id);
 CREATE INDEX IF NOT EXISTS idx_calendar_item_dates ON calendar_item_dates(project_id,calendar_date,entity_type);
 CREATE INDEX IF NOT EXISTS idx_comments_entity ON entity_comments(project_id,entity_type,entity_id,created_at);
-CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(project_id,user_id,read_at,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(project_id,user_id,read_at,snoozed_until,updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notification_preferences_entity ON entity_notification_preferences(project_id,entity_type,entity_id,mode);
+CREATE INDEX IF NOT EXISTS idx_comment_mentions_user ON comment_mentions(user_id,comment_id);
 CREATE INDEX IF NOT EXISTS idx_daily_note_section_recipients_user ON daily_note_section_recipients(user_id,section_id);
 CREATE INDEX IF NOT EXISTS idx_entity_requirements_entity ON entity_requirements(project_id,entity_type,entity_id);
 CREATE INDEX IF NOT EXISTS idx_planner_holidays_date ON planner_holidays(project_id,holiday_date);

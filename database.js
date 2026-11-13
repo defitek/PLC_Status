@@ -536,6 +536,7 @@ function createRepository(db, defaultProjectId) {
     db.prepare('INSERT INTO audit_log(project_id,entity_type,entity_id,action,user_id,changes_json,snapshot_json) VALUES(?,?,?,?,?,?,?)').run(
       activeProjectId(), type, id, action, user?.id || null, JSON.stringify(changes), JSON.stringify(after || before || {})
     );
+    if (action === 'update') notifyEntityWatchers(type, id, user, changes);
     return true;
   }
 
@@ -544,6 +545,7 @@ function createRepository(db, defaultProjectId) {
     db.prepare('INSERT INTO audit_log(project_id,entity_type,entity_id,action,user_id,changes_json,snapshot_json) VALUES(?,?,?,?,?,?,?)').run(
       activeProjectId(), type, id, 'update', user?.id || null, JSON.stringify(changes), JSON.stringify(snapshot || baseSnapshot(type, id) || {})
     );
+    notifyEntityWatchers(type, id, user, changes);
     return true;
   }
 
@@ -560,7 +562,11 @@ function createRepository(db, defaultProjectId) {
   function commentRows(type, id) {
     return all(`SELECT ec.*,u.display_name user_name FROM entity_comments ec
       JOIN users u ON u.id=ec.user_id WHERE ec.project_id=? AND ec.entity_type=? AND ec.entity_id=?
-      ORDER BY ec.created_at,ec.id`, activeProjectId(), type, id);
+      ORDER BY ec.created_at,ec.id`, activeProjectId(), type, id).map(row => ({
+        ...row,
+        mentions: all(`SELECT u.id,u.username,u.display_name FROM comment_mentions cm JOIN users u ON u.id=cm.user_id
+          WHERE cm.comment_id=? ORDER BY u.display_name`, row.id)
+      }));
   }
 
   function requirementRows(type, id) {
@@ -581,10 +587,39 @@ function createRepository(db, defaultProjectId) {
   }
 
   function createNotification(userId, kind, entityType, entityId, title, message = '') {
-    if (!asId(userId)) return;
-    if (!one('SELECT 1 FROM project_memberships WHERE project_id=? AND user_id=? AND active=1', activeProjectId(), asId(userId))) return;
-    db.prepare(`INSERT INTO notifications(project_id,user_id,kind,entity_type,entity_id,title,message)
-      VALUES(?,?,?,?,?,?,?)`).run(activeProjectId(), asId(userId), kind, entityType, entityId, clean(title), clean(message));
+    const recipientId = asId(userId);
+    if (!recipientId) return null;
+    if (!one('SELECT 1 FROM project_memberships WHERE project_id=? AND user_id=? AND active=1', activeProjectId(), recipientId)) return null;
+    if (['status', 'task', 'point', 'goal'].includes(entityType) && !['mention', 'assignment'].includes(kind)) {
+      const preference = one(`SELECT mode FROM entity_notification_preferences
+        WHERE project_id=? AND user_id=? AND entity_type=? AND entity_id=?`, activeProjectId(), recipientId, entityType, asId(entityId));
+      if (preference?.mode === 'muted') return null;
+    }
+    const aggregate = ['comment', 'automation', 'watch'].includes(kind) && ['status', 'task', 'point', 'goal'].includes(entityType)
+      ? one(`SELECT id,event_count FROM notifications WHERE project_id=? AND user_id=? AND entity_type=? AND entity_id=?
+          AND read_at IS NULL ORDER BY updated_at DESC,id DESC LIMIT 1`, activeProjectId(), recipientId, entityType, asId(entityId))
+      : null;
+    if (aggregate) {
+      db.prepare(`UPDATE notifications SET kind=?,title=?,message=?,event_count=event_count+1,snoozed_until=NULL,
+        updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(kind, clean(title), clean(message), aggregate.id);
+      return aggregate.id;
+    }
+    const result = db.prepare(`INSERT INTO notifications(project_id,user_id,kind,entity_type,entity_id,title,message)
+      VALUES(?,?,?,?,?,?,?)`).run(activeProjectId(), recipientId, kind, entityType, asId(entityId), clean(title), clean(message));
+    return Number(result.lastInsertRowid);
+  }
+
+  function notifyEntityWatchers(type, id, currentUser, changes = {}) {
+    if (!['status', 'task', 'point', 'goal'].includes(type) || !asId(id)) return;
+    const changedLabels = Object.keys(changes).filter(key => !['updated_at', 'progress_updated_at', 'progress_updated_by'].includes(key));
+    if (!changedLabels.length) return;
+    const title = entityDisplayTitle(type, id);
+    for (const watcher of all(`SELECT user_id FROM entity_notification_preferences
+      WHERE project_id=? AND entity_type=? AND entity_id=? AND mode='watching'`, activeProjectId(), type, asId(id))) {
+      if (Number(watcher.user_id) === Number(currentUser?.id)) continue;
+      createNotification(watcher.user_id, 'watch', type, id, `Zmiana obserwowanego elementu: ${title}`,
+        `${currentUser?.display_name || 'Użytkownik'} zmienił: ${changedLabels.slice(0, 5).join(', ')}${changedLabels.length > 5 ? '…' : ''}`);
+    }
   }
 
   function notifyProjectMeeting(meetingId, title, message) {
@@ -1413,7 +1448,8 @@ function createRepository(db, defaultProjectId) {
     ['daily_note_sections', 'project_id=?'], ['daily_note_section_scopes', 'section_id IN (SELECT id FROM daily_note_sections WHERE project_id=?)'],
     ['daily_note_section_links', 'section_id IN (SELECT id FROM daily_note_sections WHERE project_id=?)'],
     ['daily_note_section_recipients', 'section_id IN (SELECT id FROM daily_note_sections WHERE project_id=?)'],
-    ['goal_links', 'project_id=?'], ['entity_mentions', 'project_id=?'], ['entity_links', 'project_id=?'], ['entity_requirements', 'project_id=?'], ['entity_comments', 'project_id=?'], ['notifications', 'project_id=?'],
+    ['goal_links', 'project_id=?'], ['entity_mentions', 'project_id=?'], ['entity_links', 'project_id=?'], ['entity_requirements', 'project_id=?'], ['entity_comments', 'project_id=?'],
+    ['comment_mentions', 'comment_id IN (SELECT id FROM entity_comments WHERE project_id=?)'], ['entity_notification_preferences', 'project_id=?'], ['user_communication_preferences', 'project_id=?'], ['notifications', 'project_id=?'],
     ['entity_edit_locks', 'project_id=?'],
     ['announcements', 'project_id=?'],
     ['announcement_labels', 'project_id=?'],
@@ -1421,7 +1457,7 @@ function createRepository(db, defaultProjectId) {
     ['announcement_scopes', 'announcement_id IN (SELECT id FROM announcements WHERE project_id=?)'],
     ['announcement_users', 'announcement_id IN (SELECT id FROM announcements WHERE project_id=?)'],
     ['announcement_links', 'announcement_id IN (SELECT id FROM announcements WHERE project_id=?)'],
-    ['announcement_reads', 'announcement_id IN (SELECT id FROM announcements WHERE project_id=?)'],
+    ['announcement_reads', 'announcement_id IN (SELECT id FROM announcements WHERE project_id=?)'], ['announcement_snoozes', 'announcement_id IN (SELECT id FROM announcements WHERE project_id=?)'],
     ['shift_handovers', 'project_id=?'], ['shift_handover_items', 'handover_id IN (SELECT id FROM shift_handovers WHERE project_id=?)'],
     ['automation_rules', 'project_id=?'], ['automation_rule_hits', 'rule_id IN (SELECT id FROM automation_rules WHERE project_id=?)'],
     ['saved_views', 'project_id=?'],
@@ -1438,9 +1474,9 @@ function createRepository(db, defaultProjectId) {
     'controller_groups', 'controllers', 'categories', 'subcategories', 'task_categories', 'task_subcategories',
     'options', 'settings', 'completion_requirements', 'function_groups', 'function_group_elements', 'function_group_subcategories', 'function_group_checks',
     'function_group_check_subcategories', 'status_groups', 'status_subgroups', 'status_columns', 'status_workflow_states', 'status_items', 'status_cell_values', 'status_assignees', 'tasks', 'task_dependencies', 'task_checklist', 'task_scope_checklist', 'task_assignees', 'open_points', 'entity_dependencies',
-    'daily_notes', 'daily_note_sections', 'daily_note_section_scopes', 'daily_note_section_links', 'daily_note_section_recipients', 'goals', 'goal_links', 'entity_mentions', 'entity_links', 'entity_requirements', 'entity_edit_locks', 'entity_comments', 'notifications', 'audit_log',
+    'daily_notes', 'daily_note_sections', 'daily_note_section_scopes', 'daily_note_section_links', 'daily_note_section_recipients', 'goals', 'goal_links', 'entity_mentions', 'entity_links', 'entity_requirements', 'entity_edit_locks', 'entity_comments', 'comment_mentions', 'entity_notification_preferences', 'user_communication_preferences', 'notifications', 'audit_log',
     'export_templates', 'project_sequences', 'project_user_areas', 'planner_entries', 'planner_requirements', 'planner_holidays', 'planner_absences', 'planner_overlap_reviews', 'planner_time_adjustments',
-    'announcements', 'announcement_labels', 'announcement_scopes', 'announcement_users', 'announcement_links', 'announcement_label_links', 'announcement_reads', 'calendar_annotations', 'calendar_annotation_scopes', 'calendar_item_dates',
+    'announcements', 'announcement_labels', 'announcement_scopes', 'announcement_users', 'announcement_links', 'announcement_label_links', 'announcement_reads', 'announcement_snoozes', 'calendar_annotations', 'calendar_annotation_scopes', 'calendar_item_dates',
     'shift_handovers', 'shift_handover_items', 'automation_rules', 'automation_rule_hits', 'saved_views',
     'project_meetings', 'project_meeting_items', 'project_meeting_item_assignees', 'project_meeting_item_workers', 'external_dependencies', 'external_dependency_updates',
     'monthly_employee_reviews', 'monthly_employee_review_items', 'monthly_employee_review_audit'
@@ -2291,8 +2327,9 @@ function createRepository(db, defaultProjectId) {
         WHERE ar.announcement_id=? ORDER BY ar.read_at,u.display_name`, row.id);
       const projectAudienceIds = all(`SELECT pm.user_id FROM project_memberships pm JOIN users u ON u.id=pm.user_id
         WHERE pm.project_id=? AND pm.active=1 AND u.active=1 ORDER BY u.sort_order,u.display_name`, activeProjectId()).map(item => Number(item.user_id));
+      const critical = clean(row.importance).toLocaleLowerCase('pl-PL').includes('krytycz');
       const audienceIds = recipientIds.length ? recipientIds.map(Number) : projectAudienceIds;
-      const acknowledgementAudience = audienceIds.filter(userId => Number(userId) !== Number(row.created_by));
+      const acknowledgementAudience = (recipientIds.length || critical ? audienceIds : []).filter(userId => Number(userId) !== Number(row.created_by));
       const acknowledgementSet = new Set(acknowledgementAudience);
       const audienceReads = reads.filter(item => acknowledgementSet.has(Number(item.user_id)));
       const labels = all(`SELECT al.* FROM announcement_label_links allk JOIN announcement_labels al ON al.id=allk.label_id
@@ -2309,6 +2346,8 @@ function createRepository(db, defaultProjectId) {
         accepted_by_me: reads.some(item => item.user_id === currentUser?.id),
         accepted_at: reads.find(item => item.user_id === currentUser?.id)?.read_at || null,
         requires_ack: acknowledgementSet.has(Number(currentUser?.id)),
+        critical,
+        snoozed_until: one('SELECT snoozed_until FROM announcement_snoozes WHERE announcement_id=? AND user_id=?', row.id, currentUser?.id)?.snoozed_until || null,
         targeted_audience: recipientIds.length > 0,
         accepted_count: audienceReads.length, audience_count: acknowledgementAudience.length,
         accepted_users: ['system_admin', 'project_admin', 'moderator'].includes(currentUser?.role) ? audienceReads : [],
@@ -2380,18 +2419,19 @@ function createRepository(db, defaultProjectId) {
   }
 
   function acknowledgeAnnouncement(id, currentUser) {
-    if (!one('SELECT 1 FROM announcements WHERE id=? AND project_id=?', asId(id), activeProjectId())) throw appError('Nie znaleziono wiadomości', 404);
-    const targeted = one('SELECT 1 FROM announcement_users WHERE announcement_id=? LIMIT 1', asId(id));
-    if (targeted && !one('SELECT 1 FROM announcement_users WHERE announcement_id=? AND user_id=?', asId(id), currentUser.id)) throw appError('Ta wiadomość nie wymaga potwierdzenia od tego użytkownika', 403);
+    const announcement = announcementRows(currentUser).find(item => item.id === asId(id));
+    if (!announcement) throw appError('Nie znaleziono wiadomości', 404);
+    if (!announcement.requires_ack) throw appError('Ta wiadomość nie wymaga potwierdzenia od tego użytkownika', 403);
     db.prepare(`INSERT INTO announcement_reads(announcement_id,user_id,read_at) VALUES(?,?,CURRENT_TIMESTAMP)
       ON CONFLICT(announcement_id,user_id) DO UPDATE SET read_at=CURRENT_TIMESTAMP`).run(asId(id), currentUser.id);
+    db.prepare('DELETE FROM announcement_snoozes WHERE announcement_id=? AND user_id=?').run(asId(id), currentUser.id);
     db.prepare(`UPDATE notifications SET read_at=COALESCE(read_at,CURRENT_TIMESTAMP)
       WHERE project_id=? AND user_id=? AND kind='announcement' AND entity_type='announcement' AND entity_id=?`).run(activeProjectId(), currentUser.id, asId(id));
     return announcementRows(currentUser).find(item => item.id === asId(id));
   }
 
   function notificationsData(currentUser, limit = 100) {
-    return all(`SELECT * FROM notifications WHERE project_id=? AND user_id=? ORDER BY read_at IS NULL DESC,created_at DESC,id DESC LIMIT ?`, activeProjectId(), currentUser.id, Math.max(10, Math.min(250, Number(limit) || 100)));
+    return all(`SELECT * FROM notifications WHERE project_id=? AND user_id=? ORDER BY read_at IS NULL DESC,updated_at DESC,id DESC LIMIT ?`, activeProjectId(), currentUser.id, Math.max(10, Math.min(250, Number(limit) || 100)));
   }
 
   function markNotificationRead(id, currentUser) {
@@ -2403,8 +2443,62 @@ function createRepository(db, defaultProjectId) {
 
   function markAllNotificationsRead(currentUser) {
     const result = db.prepare(`UPDATE notifications SET read_at=COALESCE(read_at,CURRENT_TIMESTAMP)
-      WHERE project_id=? AND user_id=? AND read_at IS NULL`).run(activeProjectId(), currentUser.id);
+      WHERE project_id=? AND user_id=? AND read_at IS NULL
+        AND (snoozed_until IS NULL OR snoozed_until<=CURRENT_TIMESTAMP)`).run(activeProjectId(), currentUser.id);
     return { updated: Number(result.changes || 0), notifications: notificationsData(currentUser, 100) };
+  }
+
+  function snoozeNotification(id, until, currentUser) {
+    const row = one('SELECT * FROM notifications WHERE id=? AND project_id=? AND user_id=?', asId(id), activeProjectId(), currentUser.id);
+    if (!row) throw appError('Nie znaleziono powiadomienia', 404);
+    const value = new Date(until);
+    if (!until || Number.isNaN(value.getTime()) || value <= new Date()) throw appError('Wybierz przyszły termin przypomnienia');
+    const normalized = value.toISOString().replace('T', ' ').slice(0, 19);
+    db.prepare('UPDATE notifications SET snoozed_until=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(normalized, row.id);
+    return one('SELECT * FROM notifications WHERE id=?', row.id);
+  }
+
+  function snoozeAnnouncement(id, until, currentUser) {
+    const row = announcementRows(currentUser).find(item => item.id === asId(id));
+    if (!row) throw appError('Nie znaleziono wiadomości', 404);
+    if (!row.requires_ack || row.accepted_by_me) throw appError('Tę wiadomość można odłożyć tylko przed wymaganym potwierdzeniem');
+    const value = new Date(until);
+    if (!until || Number.isNaN(value.getTime()) || value <= new Date()) throw appError('Wybierz przyszły termin przypomnienia');
+    const normalized = value.toISOString().replace('T', ' ').slice(0, 19);
+    db.prepare(`INSERT INTO announcement_snoozes(announcement_id,user_id,snoozed_until) VALUES(?,?,?)
+      ON CONFLICT(announcement_id,user_id) DO UPDATE SET snoozed_until=excluded.snoozed_until`).run(row.id, currentUser.id, normalized);
+    db.prepare(`UPDATE notifications SET snoozed_until=?,updated_at=CURRENT_TIMESTAMP
+      WHERE project_id=? AND user_id=? AND entity_type='announcement' AND entity_id=? AND read_at IS NULL`).run(normalized, activeProjectId(), currentUser.id, row.id);
+    return announcementRows(currentUser).find(item => item.id === row.id);
+  }
+
+  function communicationPreferences(currentUser) {
+    return one(`SELECT digest_enabled,updated_at FROM user_communication_preferences
+      WHERE project_id=? AND user_id=?`, activeProjectId(), currentUser.id) || { digest_enabled: 0, updated_at: null };
+  }
+
+  function saveCommunicationPreferences(input, currentUser) {
+    const enabled = Number(input.digest_enabled) ? 1 : 0;
+    db.prepare(`INSERT INTO user_communication_preferences(project_id,user_id,digest_enabled,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP)
+      ON CONFLICT(project_id,user_id) DO UPDATE SET digest_enabled=excluded.digest_enabled,updated_at=CURRENT_TIMESTAMP`).run(activeProjectId(), currentUser.id, enabled);
+    return communicationPreferences(currentUser);
+  }
+
+  function entityNotificationPreference(type, id, currentUser) {
+    if (!['status', 'task', 'point', 'goal'].includes(type) || !baseSnapshot(type, asId(id))) throw appError('Nie znaleziono elementu', 404);
+    return one(`SELECT mode,updated_at FROM entity_notification_preferences
+      WHERE project_id=? AND user_id=? AND entity_type=? AND entity_id=?`, activeProjectId(), currentUser.id, type, asId(id)) || { mode: 'default', updated_at: null };
+  }
+
+  function saveEntityNotificationPreference(type, id, input, currentUser) {
+    entityNotificationPreference(type, id, currentUser);
+    const mode = ['watching', 'muted'].includes(clean(input.mode)) ? clean(input.mode) : 'default';
+    if (mode === 'default') db.prepare(`DELETE FROM entity_notification_preferences
+      WHERE project_id=? AND user_id=? AND entity_type=? AND entity_id=?`).run(activeProjectId(), currentUser.id, type, asId(id));
+    else db.prepare(`INSERT INTO entity_notification_preferences(project_id,user_id,entity_type,entity_id,mode,updated_at) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP)
+      ON CONFLICT(project_id,user_id,entity_type,entity_id) DO UPDATE SET mode=excluded.mode,updated_at=CURRENT_TIMESTAMP`)
+      .run(activeProjectId(), currentUser.id, type, asId(id), mode);
+    return entityNotificationPreference(type, id, currentUser);
   }
 
   function addComment(input, currentUser) {
@@ -2417,6 +2511,20 @@ function createRepository(db, defaultProjectId) {
     const snapshot = baseSnapshot(type, entityId);
     if (!snapshot) throw appError('Nie znaleziono komentowanego elementu', 404);
     const commentId = insertRecord('entity_comments', { project_id: activeProjectId(), entity_type: type, entity_id: entityId, content, user_id: currentUser.id });
+    const normalizedContent = content.toLocaleLowerCase('pl-PL');
+    const hasMention = token => {
+      const normalizedToken = String(token).toLocaleLowerCase('pl-PL');
+      for (let index = normalizedContent.indexOf(normalizedToken); index >= 0; index = normalizedContent.indexOf(normalizedToken, index + 1)) {
+        const before = normalizedContent[index - 1] || ''; const after = normalizedContent[index + normalizedToken.length] || '';
+        if (!/[\p{L}\p{N}_]/u.test(before) && !/[\p{L}\p{N}_]/u.test(after)) return true;
+      }
+      return false;
+    };
+    const mentionedUsers = all(`SELECT u.id,u.username,u.display_name FROM users u JOIN project_memberships pm ON pm.user_id=u.id
+      WHERE pm.project_id=? AND pm.active=1 AND u.active=1 ORDER BY length(u.display_name) DESC`, activeProjectId())
+      .filter(user => [`@${user.display_name}`, `@${user.username}`].some(hasMention));
+    const insertMention = db.prepare('INSERT OR IGNORE INTO comment_mentions(comment_id,user_id) VALUES(?,?)');
+    mentionedUsers.forEach(user => insertMention.run(commentId, user.id));
     if (type === 'status') db.prepare("UPDATE status_items SET updated_at=strftime('%Y-%m-%d %H:%M:%f','now'),progress_updated_at=strftime('%Y-%m-%d %H:%M:%f','now'),progress_updated_by=? WHERE id=? AND project_id=?").run(currentUser.id, entityId, activeProjectId());
     else db.prepare("UPDATE " + TABLES[type] + " SET updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND project_id=?").run(entityId, activeProjectId());
     const entityState = one(`SELECT updated_at${type === 'status' ? ',progress_updated_at' : ''} FROM ${TABLES[type]} WHERE id=? AND project_id=?`, entityId, activeProjectId()) || {};
@@ -2430,10 +2538,87 @@ function createRepository(db, defaultProjectId) {
     }
     if (type === 'status') (snapshot.responsible_user_ids || []).forEach(id => recipients.add(id));
     if (type === 'point') recipients.add(snapshot.owner_user_id);
+    all(`SELECT user_id FROM entity_notification_preferences WHERE project_id=? AND entity_type=? AND entity_id=? AND mode='watching'`, activeProjectId(), type, entityId).forEach(row => recipients.add(row.user_id));
     recipients.delete(currentUser.id); recipients.delete(null); recipients.delete(undefined);
+    const mentionedIds = new Set(mentionedUsers.map(user => Number(user.id)));
     const label = entityDisplayTitle(type, entityId);
-    recipients.forEach(userId => createNotification(userId, 'comment', type, entityId, `Nowy komentarz: ${label}`, `${currentUser.display_name}: ${content.slice(0, 200)}`));
-    return { ...one(`SELECT ec.*,u.display_name user_name FROM entity_comments ec JOIN users u ON u.id=ec.user_id WHERE ec.id=?`, commentId), entity_updated_at: entityState.updated_at || null, progress_updated_at: entityState.progress_updated_at || null };
+    mentionedUsers.filter(user => Number(user.id) !== Number(currentUser.id)).forEach(user => createNotification(user.id, 'mention', type, entityId, `Wzmianka w komentarzu: ${label}`, `${currentUser.display_name}: ${content.slice(0, 200)}`));
+    recipients.forEach(userId => { if (!mentionedIds.has(Number(userId))) createNotification(userId, 'comment', type, entityId, `Nowy komentarz: ${label}`, `${currentUser.display_name}: ${content.slice(0, 200)}`); });
+    return { ...one(`SELECT ec.*,u.display_name user_name FROM entity_comments ec JOIN users u ON u.id=ec.user_id WHERE ec.id=?`, commentId), mentions: mentionedUsers, entity_updated_at: entityState.updated_at || null, progress_updated_at: entityState.progress_updated_at || null };
+  }
+
+  function entityTimeline(type, id, currentUser) {
+    const entityId = asId(id);
+    if (!['status', 'task', 'point', 'goal'].includes(type) || !baseSnapshot(type, entityId)) throw appError('Nie znaleziono elementu', 404);
+    const items = [];
+    all(`SELECT a.*,u.display_name user_name FROM audit_log a LEFT JOIN users u ON u.id=a.user_id
+      WHERE a.project_id=? AND a.entity_type=? AND a.entity_id=? ORDER BY a.changed_at DESC,a.id DESC`, activeProjectId(), type, entityId).forEach(row => {
+      let changes = {};
+      try { changes = JSON.parse(row.changes_json || '{}'); } catch {}
+      if (Object.keys(changes).length === 1 && changes.comment) return;
+      items.push({ id: `audit:${row.id}`, event_type: 'change', occurred_at: row.changed_at, author: row.user_name || 'System', title: row.action === 'create' ? 'Utworzono element' : row.action === 'delete' ? 'Usunięto element' : 'Zmieniono element', changes });
+    });
+    commentRows(type, entityId).forEach(row => items.push({ id: `comment:${row.id}`, event_type: 'comment', occurred_at: row.created_at, author: row.user_name, title: 'Komentarz', description: row.content, mentions: row.mentions }));
+    const meetingVisibility = ['system_admin', 'project_admin', 'moderator'].includes(currentUser?.role) ? '' : ' AND pm.published_at IS NOT NULL';
+    all(`SELECT pmi.id,pmi.decision,pmi.objective,pmi.outcome_comment,pmi.item_status,pm.id meeting_id,pm.title,pm.meeting_date,pm.updated_at,pm.published_at
+      FROM project_meeting_items pmi JOIN project_meetings pm ON pm.id=pmi.meeting_id
+      WHERE pm.project_id=? AND pmi.entity_type=? AND pmi.entity_id=?${meetingVisibility} ORDER BY pm.updated_at DESC`, activeProjectId(), type, entityId)
+      .forEach(row => items.push({ id: `meeting:${row.id}`, event_type: 'meeting', occurred_at: row.published_at || row.updated_at, author: 'Odprawa', title: row.title, description: [row.objective, row.decision, row.outcome_comment].filter(Boolean).join(' · '), meeting_id: row.meeting_id, status: row.item_status }));
+    all(`SELECT a.id,a.title,a.content,a.importance,a.created_at,u.display_name author FROM announcement_links al
+      JOIN announcements a ON a.id=al.announcement_id LEFT JOIN users u ON u.id=a.created_by
+      WHERE a.project_id=? AND al.entity_type=? AND al.entity_id=? ORDER BY a.created_at DESC`, activeProjectId(), type, entityId)
+      .forEach(row => items.push({ id: `announcement:${row.id}`, event_type: 'announcement', occurred_at: row.created_at, author: row.author || 'System', title: row.title, description: row.content, announcement_id: row.id, importance: row.importance }));
+    all(`SELECT ed.id dependency_id,ed.party,ed.note,ed.created_at,u.display_name author FROM external_dependencies ed
+      LEFT JOIN users u ON u.id=ed.created_by WHERE ed.project_id=? AND ed.entity_type=? AND ed.entity_id=?`, activeProjectId(), type, entityId)
+      .forEach(row => items.push({ id: `external:${row.dependency_id}`, event_type: 'external', occurred_at: row.created_at, author: row.author || 'System', title: `Utworzono komunikację zewnętrzną · ${row.party}`, description: row.note, dependency_id: row.dependency_id }));
+    all(`SELECT edu.*,ed.party,u.display_name author FROM external_dependency_updates edu
+      JOIN external_dependencies ed ON ed.id=edu.dependency_id LEFT JOIN users u ON u.id=edu.created_by
+      WHERE edu.project_id=? AND ed.entity_type=? AND ed.entity_id=? ORDER BY edu.created_at DESC,edu.id DESC`, activeProjectId(), type, entityId)
+      .forEach(row => items.push({ id: `external-update:${row.id}`, event_type: 'external', occurred_at: row.created_at, author: row.author || 'System', title: `Aktualizacja komunikacji zewnętrznej · ${row.party}`, description: row.response_context, dependency_id: row.dependency_id, status: row.dependency_status }));
+    return items.sort((left, right) => String(right.occurred_at || '').localeCompare(String(left.occurred_at || '')) || String(right.id).localeCompare(String(left.id)));
+  }
+
+  function createWorkFromAnnouncement(id, input, currentUser) {
+    const announcement = one('SELECT * FROM announcements WHERE id=? AND project_id=?', asId(id), activeProjectId());
+    if (!announcement) throw appError('Nie znaleziono wiadomości', 404);
+    const entityType = clean(input.entity_type);
+    if (!['task', 'point'].includes(entityType)) throw appError('Z wiadomości można utworzyć zadanie albo otwarty punkt');
+    const groupId = one('SELECT controller_group_id FROM announcement_scopes WHERE announcement_id=? ORDER BY controller_group_id LIMIT 1', announcement.id)?.controller_group_id;
+    const controllerCode = one('SELECT code FROM controllers WHERE project_id=? ORDER BY sort_order,id LIMIT 1', activeProjectId())?.code;
+    if (!groupId && !controllerCode) throw appError('Projekt nie ma zakresu, do którego można przypisać element');
+    const hierarchyTarget = groupId ? `group:${groupId}` : `controller:${controllerCode}`;
+    const priority = clean(announcement.importance).toLocaleLowerCase('pl-PL').match(/wysok|krytycz/) ? 'High' : 'Medium';
+    const created = entityType === 'task'
+      ? repository.saveTask(null, { hierarchy_target: hierarchyTarget, title: announcement.title, description: announcement.content, status: 'To do', priority, direct_assignee_user_ids: [currentUser.id], recurrence_enabled: 0 }, currentUser)
+      : repository.savePoint(null, { hierarchy_target: hierarchyTarget, title: announcement.title, description: announcement.content, status: 'Open', priority, owner_user_id: currentUser.id }, currentUser);
+    db.prepare('INSERT OR IGNORE INTO announcement_links(announcement_id,entity_type,entity_id) VALUES(?,?,?)').run(announcement.id, entityType, created.id);
+    return { entity_type: entityType, entity: created };
+  }
+
+  function globalSearch(query, currentUser) {
+    const value = clean(query);
+    if (value.length < 2) return [];
+    const like = `%${value}%`;
+    const hierarchy = hierarchyData();
+    const scopeLabel = row => {
+      const group = row.controller_group_id ? hierarchy.groupMap.get(Number(row.controller_group_id)) : null;
+      const controllerItem = hierarchy.controllers.find(item => item.id === Number(row.controller_id));
+      return group?.path_label || controllerItem?.hierarchy_label || controllerItem?.display_name || 'Cały projekt';
+    };
+    const results = [];
+    const append = (type, rows, title, detail = row => row.description || '', status = row => row.status || '') => rows.forEach(row => results.push({ type, id: row.id, title: title(row), detail: detail(row), status: status(row), scope: scopeLabel(row), updated_at: row.updated_at || row.created_at || '' }));
+    append('status', all(`SELECT * FROM status_items WHERE project_id=? AND (function_detail LIKE ? COLLATE NOCASE OR current_note LIKE ? COLLATE NOCASE OR station LIKE ? COLLATE NOCASE) ORDER BY updated_at DESC LIMIT 20`, activeProjectId(), like, like, like), row => row.function_detail || 'Punkt statusu', row => row.current_note || row.station);
+    append('task', all(`SELECT * FROM tasks WHERE project_id=? AND (title LIKE ? COLLATE NOCASE OR description LIKE ? COLLATE NOCASE) ORDER BY updated_at DESC LIMIT 20`, activeProjectId(), like, like), row => row.title);
+    append('point', all(`SELECT * FROM open_points WHERE project_id=? AND (title LIKE ? COLLATE NOCASE OR description LIKE ? COLLATE NOCASE OR next_action LIKE ? COLLATE NOCASE) ORDER BY updated_at DESC LIMIT 20`, activeProjectId(), like, like, like), row => row.title, row => row.description || row.next_action);
+    append('goal', all(`SELECT * FROM goals WHERE project_id=? AND (title LIKE ? COLLATE NOCASE OR description LIKE ? COLLATE NOCASE) ORDER BY updated_at DESC LIMIT 20`, activeProjectId(), like, like), row => row.title);
+    append('note', all(`SELECT * FROM daily_notes WHERE project_id=? AND (title LIKE ? COLLATE NOCASE OR content LIKE ? COLLATE NOCASE) ORDER BY updated_at DESC LIMIT 20`, activeProjectId(), like, like), row => row.title, row => row.content, row => row.type);
+    append('announcement', all(`SELECT * FROM announcements WHERE project_id=? AND (title LIKE ? COLLATE NOCASE OR content LIKE ? COLLATE NOCASE) ORDER BY updated_at DESC LIMIT 20`, activeProjectId(), like, like), row => row.title, row => row.content, row => row.importance);
+    const meetingVisibility = ['system_admin', 'project_admin', 'moderator'].includes(currentUser?.role) ? '' : ' AND published_at IS NOT NULL';
+    append('meeting', all(`SELECT * FROM project_meetings WHERE project_id=? AND (title LIKE ? COLLATE NOCASE OR summary LIKE ? COLLATE NOCASE)${meetingVisibility} ORDER BY updated_at DESC LIMIT 20`, activeProjectId(), like, like), row => row.title, row => row.summary, row => row.status);
+    append('external', all(`SELECT ed.*,op.controller_id,op.controller_group_id,op.title point_title FROM external_dependencies ed LEFT JOIN open_points op ON op.id=ed.entity_id AND ed.entity_type='point'
+      WHERE ed.project_id=? AND (ed.party LIKE ? COLLATE NOCASE OR ed.note LIKE ? COLLATE NOCASE OR ed.contact_person LIKE ? COLLATE NOCASE OR op.title LIKE ? COLLATE NOCASE)
+      ORDER BY ed.updated_at DESC LIMIT 20`, activeProjectId(), like, like, like, like), row => row.point_title || row.party, row => [row.party, row.note].filter(Boolean).join(' · '), row => row.dependency_status);
+    return results.sort((left, right) => String(right.updated_at).localeCompare(String(left.updated_at))).slice(0, 60);
   }
 
   function saveCompletionRequirement(id, input) {
@@ -2506,9 +2691,10 @@ function createRepository(db, defaultProjectId) {
     }));
     const totals = { added: 0, closed: 0, changed: 0, removed: 0, total: 0 };
     Object.values(modules).forEach(module => { totals.total += module.total; for (const key of ['added', 'closed', 'changed', 'removed']) totals[key] += module.counts[key]; });
-    const priority_notifications = currentUser ? notificationsData(currentUser, 100).filter(item => !item.read_at && ['assignment', 'comment', 'automation', 'handover', 'mention'].includes(item.kind)) : [];
+    const snoozedNow = value => value && new Date(`${String(value).replace(' ', 'T')}Z`) > new Date();
+    const priority_notifications = currentUser ? notificationsData(currentUser, 100).filter(item => !item.read_at && !snoozedNow(item.snoozed_until) && ['assignment', 'comment', 'automation', 'handover', 'mention', 'watch'].includes(item.kind)) : [];
     const meetingAnnouncementIds = new Set(all('SELECT published_announcement_id id FROM project_meetings WHERE project_id=? AND published_announcement_id IS NOT NULL', activeProjectId()).map(row => Number(row.id)));
-    const pending_announcements = currentUser ? announcementRows(currentUser).filter(item => item.requires_ack && !item.accepted_by_me && !meetingAnnouncementIds.has(Number(item.id))) : [];
+    const pending_announcements = currentUser ? announcementRows(currentUser).filter(item => item.requires_ack && !item.accepted_by_me && !snoozedNow(item.snoozed_until) && !meetingAnnouncementIds.has(Number(item.id))) : [];
     return { ...range, totals, modules, pending_announcements, priority_notifications };
   }
 
@@ -4607,10 +4793,19 @@ function createRepository(db, defaultProjectId) {
     saveAnnouncement(id, input, currentUser) { return saveAnnouncement(id, input, currentUser); },
     deleteAnnouncement(id) { return deleteAnnouncement(id); },
     acknowledgeAnnouncement(id, currentUser) { return acknowledgeAnnouncement(id, currentUser); },
+    snoozeAnnouncement(id, until, currentUser) { return snoozeAnnouncement(id, until, currentUser); },
+    createWorkFromAnnouncement(id, input, currentUser) { return createWorkFromAnnouncement(id, input, currentUser); },
     notifications(currentUser, limit) { return notificationsData(currentUser, limit); },
     markNotificationRead(id, currentUser) { return markNotificationRead(id, currentUser); },
     markAllNotificationsRead(currentUser) { return markAllNotificationsRead(currentUser); },
+    snoozeNotification(id, until, currentUser) { return snoozeNotification(id, until, currentUser); },
+    communicationPreferences(currentUser) { return communicationPreferences(currentUser); },
+    saveCommunicationPreferences(input, currentUser) { return saveCommunicationPreferences(input, currentUser); },
+    entityNotificationPreference(type, id, currentUser) { return entityNotificationPreference(type, id, currentUser); },
+    saveEntityNotificationPreference(type, id, input, currentUser) { return saveEntityNotificationPreference(type, id, input, currentUser); },
     addComment(input, currentUser) { return addComment(input, currentUser); },
+    entityTimeline(type, id, currentUser) { return entityTimeline(type, id, currentUser); },
+    globalSearch(query, currentUser) { return globalSearch(query, currentUser); },
     setEntityEditLock(type, id, input, currentUser) { return setEntityEditLock(type, id, input, currentUser); },
     clearEntityEditLock(type, id, currentUser) { return clearEntityEditLock(type, id, currentUser); },
     saveCompletionRequirement(id, input) { return saveCompletionRequirement(id, input); },

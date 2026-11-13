@@ -1646,3 +1646,57 @@ test('project-scoped generic updates cannot move records between projects', () =
     rmSync(temporary.directory, { recursive: true, force: true });
   }
 });
+
+test('communication workflow supports watch, mute, snooze, mentions, digest, timeline and global search', () => {
+  const temporary = temporaryDatabase();
+  const repository = openDatabase(temporary.path);
+  try {
+    const account = repository.authenticate('admin');
+    const admin = repository.me(account.id);
+    const worker = repository.me(repository.saveUser(null, { username: 'flow.worker', display_name: 'Flow Worker', password: 'secret123', project_role: 'user' }).id);
+    const controller = repository.controllers()[0];
+    const task = repository.saveTask(null, { controller: controller.code, title: 'Przepływ komunikacji', description: 'Rekord do obserwowania' }, admin);
+
+    assert.equal(repository.entityNotificationPreference('task', task.id, worker).mode, 'default');
+    assert.equal(repository.saveEntityNotificationPreference('task', task.id, { mode: 'watching' }, worker).mode, 'watching');
+    const firstUpdate = repository.saveTask(task.id, { ...task, controller: controller.code, title: 'Przepływ komunikacji A' }, admin);
+    repository.saveTask(task.id, { ...firstUpdate, controller: controller.code, title: 'Przepływ komunikacji B' }, admin);
+    const grouped = repository.notifications(worker).find(item => item.entity_type === 'task' && item.entity_id === task.id && item.kind === 'watch');
+    assert.equal(grouped.event_count, 2, 'two changes of the same record should share one notification');
+
+    repository.saveEntityNotificationPreference('task', task.id, { mode: 'muted' }, worker);
+    const latest = repository.tasks('all', admin).find(item => item.id === task.id);
+    repository.saveTask(task.id, { ...latest, controller: controller.code, description: 'Wyciszona aktualizacja' }, admin);
+    assert.equal(repository.notifications(worker).find(item => item.id === grouped.id).event_count, 2, 'muted records should not append ordinary notifications');
+
+    const comment = repository.addComment({ entity_type: 'task', entity_id: task.id, content: '@Flow Worker sprawdź proszę ten rekord.' }, admin);
+    assert.deepEqual(comment.mentions.map(item => item.id), [worker.id]);
+    assert.ok(repository.notifications(worker).some(item => item.kind === 'mention' && item.entity_id === task.id), 'explicit mentions bypass mute');
+    assert.ok(repository.entityTimeline('task', task.id, worker).some(item => item.event_type === 'comment' && item.description.includes('Flow Worker')));
+
+    assert.equal(repository.saveCommunicationPreferences({ digest_enabled: 1 }, worker).digest_enabled, 1);
+    assert.equal(repository.communicationPreferences(worker).digest_enabled, 1);
+
+    const normal = repository.saveAnnouncement(null, { title: 'Informacja bez potwierdzenia', content: 'Zwykła wiadomość.' }, admin);
+    assert.equal(repository.announcements(worker).find(item => item.id === normal.id).requires_ack, false);
+    const critical = repository.saveAnnouncement(null, { title: 'Krytyczna informacja', content: 'Wymaga działania.', importance: 'Krytyczna' }, admin);
+    assert.equal(repository.announcements(worker).find(item => item.id === critical.id).requires_ack, true);
+    const snoozed = repository.snoozeAnnouncement(critical.id, new Date(Date.now() + 3600000).toISOString(), worker);
+    assert.ok(snoozed.snoozed_until);
+    assert.ok(repository.notifications(worker).find(item => item.entity_type === 'announcement' && item.entity_id === critical.id).snoozed_until);
+
+    const work = repository.createWorkFromAnnouncement(normal.id, { entity_type: 'point' }, worker);
+    assert.equal(work.entity_type, 'point');
+    assert.ok(repository.announcements(worker).find(item => item.id === normal.id).links.some(link => link.entity_type === 'point' && link.entity_id === work.entity.id));
+    assert.ok(repository.globalSearch('Przepływ komunikacji', worker).some(item => item.type === 'task' && item.id === task.id));
+    assert.ok(repository.globalSearch('Informacja bez potwierdzenia', worker).some(item => item.type === 'announcement' && item.id === normal.id));
+
+    const mentionNotification = repository.notifications(worker).find(item => item.kind === 'mention' && item.entity_id === task.id);
+    assert.ok(repository.snoozeNotification(mentionNotification.id, new Date(Date.now() + 7200000).toISOString(), worker).snoozed_until);
+    repository.markAllNotificationsRead(worker);
+    assert.equal(repository.notifications(worker).find(item => item.id === mentionNotification.id).read_at, null, 'bulk read should preserve deferred reminders');
+  } finally {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});

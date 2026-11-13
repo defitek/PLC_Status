@@ -300,6 +300,14 @@ async function handleProjectApi(request, response, url, user) {
   if (method === 'GET' && path === '/api/my-summary') return json(response, 200, repository.mySummary(user));
   if (method === 'GET' && path === '/api/navigation-counts') return json(response, 200, repository.navigationCounts(user));
   if (method === 'GET' && path === '/api/audit') return json(response, 200, repository.audit(url.searchParams.get('type'), Number(url.searchParams.get('id'))));
+  if (method === 'GET' && path === '/api/search') return json(response, 200, repository.globalSearch(url.searchParams.get('q'), user));
+  const timelineMatch = path.match(/^\/api\/timeline\/(status|task|point|goal)\/(\d+)$/);
+  if (timelineMatch && method === 'GET') return json(response, 200, repository.entityTimeline(timelineMatch[1], Number(timelineMatch[2]), user));
+  const notificationPreferenceMatch = path.match(/^\/api\/entity-notification-preferences\/(status|task|point|goal)\/(\d+)$/);
+  if (notificationPreferenceMatch) {
+    if (method === 'GET') return json(response, 200, repository.entityNotificationPreference(notificationPreferenceMatch[1], Number(notificationPreferenceMatch[2]), user));
+    if (method === 'PUT') return json(response, 200, repository.saveEntityNotificationPreference(notificationPreferenceMatch[1], Number(notificationPreferenceMatch[2]), await readJson(request), user));
+  }
   if (method === 'GET' && path === '/api/history') return json(response, 200, repository.history({ types: url.searchParams.getAll('type'), limit: url.searchParams.get('limit') }));
   if (method === 'GET' && path === '/api/daily-summary') return json(response, 200, repository.dailySummary(url.searchParams.get('from'), url.searchParams.get('to'), user));
   if (method === 'GET' && path === '/api/saved-views') return json(response, 200, repository.savedViews(user));
@@ -398,6 +406,10 @@ async function handleProjectApi(request, response, url, user) {
   if (method === 'POST' && path === '/api/announcements') { requireRole(user, 'moderator'); return json(response, 201, repository.saveAnnouncement(null, await readJson(request), user)); }
   const announcementAck = path.match(/^\/api\/announcements\/(\d+)\/ack$/);
   if (announcementAck && method === 'POST') return json(response, 200, repository.acknowledgeAnnouncement(Number(announcementAck[1]), user));
+  const announcementSnooze = path.match(/^\/api\/announcements\/(\d+)\/snooze$/);
+  if (announcementSnooze && method === 'POST') return json(response, 200, repository.snoozeAnnouncement(Number(announcementSnooze[1]), (await readJson(request)).until, user));
+  const announcementCreateWork = path.match(/^\/api\/announcements\/(\d+)\/create-work$/);
+  if (announcementCreateWork && method === 'POST') return json(response, 201, repository.createWorkFromAnnouncement(Number(announcementCreateWork[1]), await readJson(request), user));
   const announcementId = numericId(path, '/api/announcements');
   if (announcementId !== null) {
     if (method === 'PATCH') requireRole(user, 'moderator');
@@ -407,8 +419,12 @@ async function handleProjectApi(request, response, url, user) {
   }
   if (method === 'GET' && path === '/api/notifications') return json(response, 200, repository.notifications(user, url.searchParams.get('limit')));
   if (method === 'POST' && path === '/api/notifications/read-all') return json(response, 200, repository.markAllNotificationsRead(user));
+  if (method === 'GET' && path === '/api/communication-preferences') return json(response, 200, repository.communicationPreferences(user));
+  if (method === 'PUT' && path === '/api/communication-preferences') return json(response, 200, repository.saveCommunicationPreferences(await readJson(request), user));
   const notificationRead = path.match(/^\/api\/notifications\/(\d+)\/read$/);
   if (notificationRead && method === 'POST') return json(response, 200, repository.markNotificationRead(Number(notificationRead[1]), user));
+  const notificationSnooze = path.match(/^\/api\/notifications\/(\d+)\/snooze$/);
+  if (notificationSnooze && method === 'POST') return json(response, 200, repository.snoozeNotification(Number(notificationSnooze[1]), (await readJson(request)).until, user));
   if (method === 'POST' && path === '/api/comments') return json(response, 201, repository.addComment(await readJson(request), user));
   const entityLock = path.match(/^\/api\/entity-locks\/(status|task|point|goal)\/(\d+)$/);
   if (entityLock) {

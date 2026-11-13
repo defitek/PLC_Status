@@ -15,7 +15,7 @@ import {
 const state = {
   view: 'mine', controller: 'all', me: null, projects: [], controllerGroups: [], controllers: [], users: [],
   config: { categories: [], task_categories: [], function_groups: [], status_groups: [], options: [], announcement_labels: [], requirements: [], settings: {} },
-  overview: null, announcements: [], meetingSummaries: [], notifications: [], navigationCounts: {}, mine: null, dashboard: {}, status: [], tasks: [], points: [], externalDependencies: [], notes: [], goals: [], planner: null, calendar: null, history: [], savedViews: [], operations: null, employeeReviews: [], securityEvents: [], reviewPeriod: new Date().toISOString().slice(0, 7), loadSequence: 0,
+  overview: null, announcements: [], meetingSummaries: [], notifications: [], communicationPreferences: { digest_enabled: 0 }, navigationCounts: {}, mine: null, dashboard: {}, status: [], tasks: [], points: [], externalDependencies: [], notes: [], goals: [], planner: null, calendar: null, history: [], savedViews: [], operations: null, employeeReviews: [], securityEvents: [], reviewPeriod: new Date().toISOString().slice(0, 7), loadSequence: 0,
   dialog: null, dialogStack: [], dialogInitial: '', dirtyCloseAttempt: new WeakSet(), goalDraftLinks: [], goalPickerCollections: null, linkDraft: [], statusMode: 'list', taskMode: 'board', taskShowCompleted: false, pointMode: 'list', pointSection: 'points', trendPeriod: 'week',
   functionGroupController: '', functionPointGroup: null, functionPointDraft: [],
   notesFrom: '', notesTo: '', notesWeek: '', draggingTask: false, plannerFrom: '', plannerDays: 14, plannerShowHours: false,
@@ -119,6 +119,44 @@ async function api(path, options = {}) {
   const result = response.status === 204 ? null : await response.json();
   if (!['GET', 'HEAD', 'OPTIONS'].includes(String(options.method || 'GET').toUpperCase())) invalidateCacheForMutation(path);
   return result;
+}
+
+let globalSearchTimer;
+async function runGlobalSearch() {
+  const input = $('#global-search'); const container = $('#global-search-results');
+  const query = input.value.trim();
+  if (query.length < 2) { container.classList.add('hidden'); container.innerHTML = ''; return; }
+  container.classList.remove('hidden');
+  container.innerHTML = '<div class="global-search-state">Szukanie…</div>';
+  try {
+    const rows = await api(`/api/search?q=${encodeURIComponent(query)}`);
+    if (input.value.trim() !== query) return;
+    const labels = { status: 'Status', task: 'Zadanie', point: 'Otwarty punkt', goal: 'Kamień milowy', note: 'Przekazanie', announcement: 'Wiadomość', meeting: 'Odprawa', external: 'Zależność zewnętrzna' };
+    container.innerHTML = rows.map(item => `<button type="button" data-global-result="${escapeHtml(item.type)}:${item.id}"><span class="type-dot ${['announcement', 'meeting'].includes(item.type) ? 'goal' : item.type}"></span><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml([labels[item.type], item.scope, item.status].filter(Boolean).join(' · '))}</small></span><em>${escapeHtml(String(item.detail || '').slice(0, 90))}</em></button>`).join('') || '<div class="global-search-state">Brak wyników w modułach projektu.</div>';
+    $$('[data-global-result]').forEach(button => button.addEventListener('click', () => openGlobalSearchResult(button.dataset.globalResult)));
+  } catch (error) { container.innerHTML = `<div class="global-search-state error">${escapeHtml(error.message)}</div>`; }
+}
+
+async function openGlobalSearchResult(reference) {
+  const [type, rawId] = String(reference || '').split(':'); const id = Number(rawId);
+  $('#global-search-results').classList.add('hidden');
+  if (['status', 'task', 'point', 'goal', 'note'].includes(type)) return openEntityOverlay(type, id);
+  if (type === 'announcement') {
+    state.announcements = await api('/api/announcements'); rememberDataCache('announcements', state.announcements);
+    await setView('announcements');
+    return openAnnouncementDetails(state.announcements.find(item => Number(item.id) === id));
+  }
+  if (type === 'meeting') {
+    state.meetingSummaries = await api('/api/meeting-summaries'); rememberDataCache('meetingSummaries', state.meetingSummaries);
+    const meeting = state.meetingSummaries.find(item => Number(item.id) === id);
+    if (meeting) return openMeetingPlanDetails(meeting);
+  }
+  if (type === 'external') {
+    state.externalDependencies = await api('/api/external-dependencies');
+    const dependency = state.externalDependencies.find(item => Number(item.id) === id);
+    if (dependency) return openExternalDependencyDetails(dependency);
+  }
+  toast('Element nie jest już dostępny', true);
 }
 
 function ensureProjectCache() {
@@ -420,6 +458,14 @@ function bindShell() {
     updateNavigationToggle();
   });
   updateNavigationToggle();
+  $('#global-search').addEventListener('input', () => { clearTimeout(globalSearchTimer); globalSearchTimer = setTimeout(runGlobalSearch, 220); });
+  $('#global-search').addEventListener('keydown', event => {
+    if (event.key === 'Escape') $('#global-search-results').classList.add('hidden');
+    if (event.key === 'Enter') { const first = $('#global-search-results [data-global-result]'); if (first) { event.preventDefault(); first.click(); } }
+  });
+  document.addEventListener('keydown', event => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); $('#global-search').focus(); $('#global-search').select(); }
+  });
   $('#controller-picker-host').addEventListener('change', async event => { if (event.target.id !== 'controller') return; state.controller = event.target.value; await loadData(); });
   $('#add').addEventListener('click', () => state.view === 'calendar' ? openCalendarAnnotation() : state.view === 'notes' ? openStatusTransferEditor() : openRecord(state.view));
   $('#close').addEventListener('click', closeOrReturnRecordDialog);
@@ -441,8 +487,11 @@ function bindShell() {
   $('#duplicate').addEventListener('click', () => { const { type, record } = state.dialog || {}; if (record) openDuplicate(type, record); });
   $('#edit-record').addEventListener('click', () => setRecordDialogMode(true));
   $('#lock-record').addEventListener('click', toggleRecordEditLock);
+  $('#watch-record').addEventListener('click', () => setRecordNotificationPreference(state.dialog?.notificationMode === 'watching' ? 'default' : 'watching'));
+  $('#mute-record').addEventListener('click', () => setRecordNotificationPreference(state.dialog?.notificationMode === 'muted' ? 'default' : 'muted'));
   $('#audit-toggle').addEventListener('click', toggleAudit);
   $('#comment-add').addEventListener('click', addEntityComment);
+  $('#comment-content').addEventListener('input', renderCommentMentionSuggestions);
   $('#logout').addEventListener('click', async () => { await api('/api/logout', { method: 'POST' }); location.href = '/login.html'; });
   $('#brand-reload').addEventListener('click', () => location.reload());
   $('#project-switch').addEventListener('click', () => openProjectDialog(false));
@@ -546,6 +595,8 @@ function bindShell() {
   $('#status-transfer-audit').addEventListener('click', openStatusTransferAudit);
   document.addEventListener('click', event => {
     if (!event.target.closest('#context-menu')) $('#context-menu').classList.add('hidden');
+    if (!event.target.closest('.global-search')) $('#global-search-results').classList.add('hidden');
+    if (!event.target.closest('.comment-compose')) $('#comment-mention-suggestions').classList.add('hidden');
     document.querySelectorAll('details.table-filter-menu[open]').forEach(menu => { if (!menu.contains(event.target)) menu.open = false; });
   });
   document.addEventListener('keydown', handlePlannerClipboardShortcut);
@@ -807,6 +858,7 @@ async function loadData(silent = false) {
   if (state.view === 'mine') requests.mine = api('/api/my-summary');
   if (state.view === 'announcements' && state.announcementTab === 'inbox') {
     requests.mine = api('/api/my-summary');
+    requests.communicationPreferences = api('/api/communication-preferences');
     if (canCoordinate()) requests.operationsPayload = api(`/api/operations${query}&tab=triage`);
   }
   if (state.view === 'overview') { requests.overview = api('/api/overview' + query); requests.dashboard = api('/api/dashboard' + query); addWorkCollections(true); }
@@ -1121,10 +1173,17 @@ function informationAnnouncements() {
   });
 }
 
+function futureSnooze(value) {
+  if (!value) return false;
+  const normalized = String(value).includes('T') ? String(value) : `${String(value).replace(' ', 'T')}Z`;
+  const timestamp = new Date(normalized).getTime();
+  return Number.isFinite(timestamp) && timestamp > Date.now();
+}
+
 function communicationAttentionCount() {
-  const pending = informationAnnouncements().filter(item => item.requires_ack && !item.accepted_by_me);
+  const pending = informationAnnouncements().filter(item => item.requires_ack && !item.accepted_by_me && !futureSnooze(item.snoozed_until));
   const pendingIds = new Set(pending.map(item => Number(item.id)));
-  const otherUnread = (state.notifications || []).filter(item => !item.read_at && !(item.entity_type === 'announcement' && pendingIds.has(Number(item.entity_id))));
+  const otherUnread = (state.notifications || []).filter(item => !item.read_at && !futureSnooze(item.snoozed_until) && !(item.entity_type === 'announcement' && pendingIds.has(Number(item.entity_id))));
   return pending.length + otherUnread.length;
 }
 
@@ -1141,12 +1200,25 @@ function openAnnouncementDetails(item) {
   const acknowledgement = item.requires_ack
     ? (!item.accepted_by_me ? '<button class="primary" id="ack-announcement">Akceptuję · przeczytane</button>' : `<span class="announcement-read-self">✓ Zaakceptowano ${displayDateTime(item.accepted_at)}</span>`)
     : '<span class="announcement-read-self neutral">Wiadomość informacyjna — potwierdzenie nie jest wymagane od tego użytkownika.</span>';
+  const reminder = item.requires_ack && !item.accepted_by_me ? '<button type="button" class="secondary" id="snooze-announcement-detail">Przypomnij później</button>' : '';
   const entryLabel = ({ message: 'Komunikat', decision: 'Decyzja projektowa', scope_change: 'Zmiana zakresu' })[item.entry_type] || 'Komunikat';
-  $('#insight-content').innerHTML = `<article class="announcement-detail"><div class="announcement-tags"><span class="decision-type ${escapeHtml(item.entry_type || 'message')}">${entryLabel}</span><span class="importance importance-${escapeHtml(String(item.importance || 'normalna').toLowerCase())}">${escapeHtml(item.importance || 'Normalna')}</span>${labels}</div><p>${escapeHtml(item.content).replace(/\n/g, '<br>')}</p>${item.rationale ? `<section class="decision-rationale"><b>Uzasadnienie / wpływ</b><p>${escapeHtml(item.rationale).replace(/\n/g, '<br>')}</p><small>${item.effective_date ? `Obowiązuje od ${displayDate(item.effective_date)}` : ''} · ${escapeHtml(badgeText(item.decision_status || 'published'))}</small></section>` : ''}${href ? `<a class="announcement-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">Otwórz dołączony link ↗</a>` : ''}<div class="announcement-audience"><span><b>Zakres:</b> ${escapeHtml(announcementAudience(item))}</span><span><b>Dotyczy bezpośrednio:</b> ${escapeHtml((item.recipient_names || []).join(', ') || 'wszyscy aktywni uczestnicy projektu')}</span></div><div class="goal-links">${(item.links || []).map(link => linkChip(link.entity_type, link.entity_id, ({ status: 'Status', task: 'Zadanie', point: 'Otwarty punkt', note: 'Przekazanie', goal: 'Kamień milowy' })[link.entity_type])).join('') || '<span class="sub">Brak przypiętych elementów</span>'}</div>${acknowledgement}${canManageAnnouncements() ? `<section class="announcement-receipts"><header><b>Potwierdzenia przeczytania</b><span>${item.accepted_count || 0}/${item.audience_count || 0}</span></header><div>${(item.accepted_users || []).map(user => `<span><b>${escapeHtml(user.display_name)}</b><small>${displayDateTime(user.read_at)}</small></span>`).join('') || '<small>Brak potwierdzeń.</small>'}</div></section><button class="secondary" id="edit-announcement-detail">Edytuj wiadomość</button>` : ''}</article>`;
+  $('#insight-content').innerHTML = `<article class="announcement-detail"><div class="announcement-tags"><span class="decision-type ${escapeHtml(item.entry_type || 'message')}">${entryLabel}</span><span class="importance importance-${escapeHtml(String(item.importance || 'normalna').toLowerCase())}">${escapeHtml(item.importance || 'Normalna')}</span>${labels}</div><p>${escapeHtml(item.content).replace(/\n/g, '<br>')}</p>${item.rationale ? `<section class="decision-rationale"><b>Uzasadnienie / wpływ</b><p>${escapeHtml(item.rationale).replace(/\n/g, '<br>')}</p><small>${item.effective_date ? `Obowiązuje od ${displayDate(item.effective_date)}` : ''} · ${escapeHtml(badgeText(item.decision_status || 'published'))}</small></section>` : ''}${href ? `<a class="announcement-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">Otwórz dołączony link ↗</a>` : ''}<div class="announcement-audience"><span><b>Zakres:</b> ${escapeHtml(announcementAudience(item))}</span><span><b>Dotyczy bezpośrednio:</b> ${escapeHtml((item.recipient_names || []).join(', ') || 'wszyscy aktywni uczestnicy projektu')}</span></div><div class="goal-links">${(item.links || []).map(link => linkChip(link.entity_type, link.entity_id, ({ status: 'Status', task: 'Zadanie', point: 'Otwarty punkt', note: 'Przekazanie', goal: 'Kamień milowy' })[link.entity_type])).join('') || '<span class="sub">Brak przypiętych elementów</span>'}</div><section class="announcement-detail-actions"><div>${acknowledgement}${reminder}</div><div><b>Utwórz działanie z tej wiadomości</b><button type="button" class="secondary" data-announcement-work="task">+ Zadanie</button><button type="button" class="secondary" data-announcement-work="point">+ Otwarty punkt</button></div></section>${canManageAnnouncements() ? `<section class="announcement-receipts"><header><b>Potwierdzenia przeczytania</b><span>${item.accepted_count || 0}/${item.audience_count || 0}</span></header><div>${(item.accepted_users || []).map(user => `<span><b>${escapeHtml(user.display_name)}</b><small>${displayDateTime(user.read_at)}</small></span>`).join('') || '<small>Brak potwierdzeń.</small>'}</div></section><button class="secondary" id="edit-announcement-detail">Edytuj wiadomość</button>` : ''}</article>`;
   bindJumpItems();
   $('#ack-announcement')?.addEventListener('click', () => acknowledgeAnnouncement(item.id));
+  $('#snooze-announcement-detail')?.addEventListener('click', () => { $('#insight-dialog').close(); snoozeMessage('announcement', item.id); });
+  $$('[data-announcement-work]').forEach(button => button.addEventListener('click', () => createWorkFromAnnouncement(item.id, button.dataset.announcementWork)));
   $('#edit-announcement-detail')?.addEventListener('click', () => { $('#insight-dialog').close(); openRecord('announcements', item); });
   if (!$('#insight-dialog').open) $('#insight-dialog').showModal();
+}
+
+async function createWorkFromAnnouncement(id, entityType) {
+  try {
+    const result = await api(`/api/announcements/${id}/create-work`, { method: 'POST', body: JSON.stringify({ entity_type: entityType }) });
+    const label = entityType === 'task' ? 'Zadanie' : 'Otwarty punkt';
+    toast(`${label} został utworzony i powiązany z wiadomością`);
+    $('#insight-dialog').close();
+    await openEntityOverlay(entityType, result.entity.id);
+  } catch (error) { toast(error.message, true); }
 }
 
 function meetingPriorityValue(value, fallback = 'Medium') { return Number(normalizeMeetingPriority(value, fallback)); }
@@ -1251,24 +1323,57 @@ async function markAllNotificationsAsRead() {
   } catch (error) { toast(error.message, true); }
 }
 
+async function snoozeMessage(kind, id) {
+  const result = await uiForm({ title: 'Przypomnij później', description: 'Element zniknie z bieżącej kolejki i wróci automatycznie po wybranym czasie.', submitLabel: 'Odłóż', fields: [{ name: 'delay', label: 'Przypomnij', type: 'select', value: '4', options: [{ value: '1', label: 'Za godzinę' }, { value: '4', label: 'Za 4 godziny' }, { value: '24', label: 'Jutro' }, { value: '72', label: 'Za 3 dni' }] }] });
+  if (!result) return;
+  const until = new Date(Date.now() + Number(result.delay) * 3600000).toISOString();
+  try {
+    if (kind === 'announcement') {
+      const updated = await api(`/api/announcements/${id}/snooze`, { method: 'POST', body: JSON.stringify({ until }) });
+      const index = state.announcements.findIndex(item => Number(item.id) === Number(id)); if (index >= 0) state.announcements[index] = updated;
+      state.notifications.filter(item => item.entity_type === 'announcement' && Number(item.entity_id) === Number(id) && !item.read_at).forEach(item => { item.snoozed_until = updated.snoozed_until; });
+    } else {
+      const updated = await api(`/api/notifications/${id}/snooze`, { method: 'POST', body: JSON.stringify({ until }) });
+      const item = state.notifications.find(row => Number(row.id) === Number(id)); if (item) Object.assign(item, updated);
+    }
+    updateNotificationUi(); render(); toast('Przypomnienie zostało odłożone');
+  } catch (error) { toast(error.message, true); }
+}
+
+async function saveDigestPreference(enabled) {
+  try {
+    state.communicationPreferences = await api('/api/communication-preferences', { method: 'PUT', body: JSON.stringify({ digest_enabled: enabled ? 1 : 0 }) });
+    render(); toast(enabled ? 'Włączono jeden dzienny digest' : 'Wyłączono dzienny digest');
+  } catch (error) { toast(error.message, true); }
+}
+
 function renderMessageCenter() {
   $('#add').hidden = true;
   const actions = messageCenterActions();
-  const pending = informationAnnouncements().filter(item => item.requires_ack && !item.accepted_by_me);
+  const pendingAll = informationAnnouncements().filter(item => item.requires_ack && !item.accepted_by_me);
+  const pending = pendingAll.filter(item => !futureSnooze(item.snoozed_until));
+  const pendingAllIds = new Set(pendingAll.map(item => Number(item.id)));
   const pendingIds = new Set(pending.map(item => Number(item.id)));
-  const unread = (state.notifications || []).filter(item => !item.read_at && !(item.entity_type === 'announcement' && pendingIds.has(Number(item.entity_id))));
+  const unread = (state.notifications || []).filter(item => !item.read_at && !futureSnooze(item.snoozed_until) && !(item.entity_type === 'announcement' && pendingIds.has(Number(item.entity_id))));
+  const snoozedAnnouncements = pendingAll.filter(item => futureSnooze(item.snoozed_until));
+  const snoozedNotifications = (state.notifications || []).filter(item => !item.read_at && futureSnooze(item.snoozed_until) && !(item.entity_type === 'announcement' && pendingAllIds.has(Number(item.entity_id))));
   const activity = (state.notifications || []).filter(item => item.read_at).slice(0, 30);
-  const notificationRows = rows => rows.map(item => `<article class="message-center-row ${item.read_at ? 'read' : 'unread'}"><button type="button" data-message-notification="${item.id}"><span class="type-dot ${['announcement', 'meeting'].includes(item.entity_type) ? 'goal' : item.entity_type}"></span><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.message || '')} · ${displayDateTime(item.created_at)}</small></span></button>${item.read_at ? '' : `<button type="button" class="mini" data-message-read="${item.id}">Oznacz jako przeczytane</button>`}</article>`).join('');
-  $('#content').innerHTML = `<section class="message-center-summary"><article><b>${actions.length}</b><span>Do działania</span><small>terminy, blokady i ryzyka</small></article><article><b>${pending.length + unread.length}</b><span>Do przeczytania</span><small>wiadomości wymagające uwagi</small></article><article><b>${activity.length}</b><span>Ostatnia aktywność</span><small>przeczytane powiadomienia</small></article></section>
+  const notificationRows = (rows, isSnoozed = false) => rows.map(item => `<article class="message-center-row ${item.read_at ? 'read' : 'unread'} ${isSnoozed ? 'snoozed' : ''}"><button type="button" data-message-notification="${item.id}"><span class="type-dot ${['announcement', 'meeting'].includes(item.entity_type) ? 'goal' : item.entity_type}"></span><span><b>${escapeHtml(item.title)}${Number(item.event_count || 1) > 1 ? ` <em class="notification-group-count">${item.event_count} zmian</em>` : ''}</b><small>${escapeHtml(item.message || '')} · ${displayDateTime(item.updated_at || item.created_at)}${isSnoozed ? ` · wróci ${displayDateTime(item.snoozed_until)}` : ''}</small></span></button>${item.read_at ? '' : `<button type="button" class="mini" data-message-snooze="${item.id}">Przypomnij później</button><button type="button" class="mini" data-message-read="${item.id}">Przeczytane</button>`}</article>`).join('');
+  $('#content').innerHTML = `<section class="message-center-summary"><article><b>${actions.length}</b><span>Do działania</span><small>terminy, blokady i ryzyka</small></article><article><b>${pending.length + unread.length}</b><span>Do przeczytania</span><small>wiadomości wymagające uwagi</small></article><article><b>${activity.length}</b><span>Ostatnia aktywność</span><small>przeczytane powiadomienia</small></article><article class="digest-preference"><label><input type="checkbox" id="digest-enabled" ${Number(state.communicationPreferences?.digest_enabled) ? 'checked' : ''}><span><b>Jeden dzienny digest</b><small>Opcjonalne podsumowanie dostępne tutaj, bez automatycznego popupu.</small></span></label>${Number(state.communicationPreferences?.digest_enabled) ? '<button type="button" class="mini" id="digest-open">Pokaż dzisiejszy digest</button>' : ''}</article></section>
     <section class="message-center-grid"><article class="panel message-center-section"><header><div><h2>Do działania</h2><p>Jedna kolejka zamiast osobnych kolejek w Statusie, Zadaniach i Otwartych punktach.</p></div><div class="message-center-actions">${canCoordinate() ? `<button type="button" class="mini ${state.messageActionScope === 'mine' ? 'active-toggle' : ''}" data-message-scope="mine">Moje</button><button type="button" class="mini ${state.messageActionScope === 'team' ? 'active-toggle' : ''}" data-message-scope="team">Zespół</button>` : ''}<b>${actions.length}</b></div></header><div class="operation-list">${actions.map(({ type, item, signals }) => `<button type="button" class="operation-row" data-jump="${type}" data-id="${item.id}" data-project-id="${item.project_id || ''}"><span class="type-dot ${type}"></span><span class="operation-primary"><b>${escapeHtml(item.title || item.function_detail || 'Element projektu')}</b><small>${escapeHtml(item.scope_label || item.controller_label || item.controller || 'Cały projekt')} · ${escapeHtml(item.owner_name || item.responsible_name || 'Nieprzypisane')}</small></span><span class="operation-signals">${signals.map(signal => `<em class="signal ${signal}">${escapeHtml(triageSignalNames[signal] || signal)}</em>`).join('')}</span><span class="operation-date">${badge(item.priority || item.criticality || item.status)}<small>${item.due_date ? displayDate(item.due_date) : item.reminder_date ? displayDate(item.reminder_date) : 'Bez terminu'}</small></span></button>`).join('') || '<div class="empty">Brak elementów wymagających działania.</div>'}</div></article>
-    <article class="panel message-center-section"><header><div><h2>Do przeczytania</h2><p>Powiadomienia i komunikaty wymagające potwierdzenia.</p></div><div class="message-center-actions">${unread.length ? '<button type="button" class="mini" id="message-read-all">Oznacz wszystkie jako przeczytane</button>' : ''}<b>${pending.length + unread.length}</b></div></header><div>${pending.map(item => `<button type="button" class="message-center-announcement" data-message-announcement="${item.id}"><span>◆</span><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.created_by_name || 'System')} · wymaga potwierdzenia odczytu</small></span></button>`).join('')}${notificationRows(unread) || (!pending.length ? '<div class="empty">Wszystko przeczytane.</div>' : '')}</div></article>
+    <article class="panel message-center-section"><header><div><h2>Do przeczytania</h2><p>Potwierdzenie jest wymagane tylko od wskazanych odbiorców i przy wiadomościach krytycznych.</p></div><div class="message-center-actions">${unread.length ? '<button type="button" class="mini" id="message-read-all">Oznacz wszystkie jako przeczytane</button>' : ''}<b>${pending.length + unread.length}</b></div></header><div>${pending.map(item => `<article class="message-center-announcement"><button type="button" data-message-announcement="${item.id}"><span>◆</span><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.created_by_name || 'System')} · wymaga potwierdzenia odczytu</small></span></button><button type="button" class="mini" data-announcement-snooze="${item.id}">Przypomnij później</button></article>`).join('')}${notificationRows(unread) || (!pending.length ? '<div class="empty">Wszystko przeczytane.</div>' : '')}</div></article>
+    ${snoozedAnnouncements.length || snoozedNotifications.length ? `<article class="panel message-center-section snoozed-section"><header><div><h2>Odłożone</h2><p>Wrócą automatycznie do kolejki w wybranym terminie.</p></div><b>${snoozedAnnouncements.length + snoozedNotifications.length}</b></header><div>${snoozedAnnouncements.map(item => `<button type="button" class="message-center-announcement snoozed" data-message-announcement="${item.id}"><span>◷</span><span><b>${escapeHtml(item.title)}</b><small>wróci ${displayDateTime(item.snoozed_until)}</small></span></button>`).join('')}${notificationRows(snoozedNotifications, true)}</div></article>` : ''}
     <article class="panel message-center-section activity"><header><div><h2>Aktywność</h2><p>Ostatnie przeczytane powiadomienia.</p></div></header><div>${notificationRows(activity) || '<div class="empty">Brak aktywności.</div>'}</div></article></section>`;
   bindJumpItems();
   $$('[data-message-notification]').forEach(button => button.addEventListener('click', () => openNotification(state.notifications.find(item => item.id === Number(button.dataset.messageNotification)))));
   $$('[data-message-read]').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); markNotificationAsRead(Number(button.dataset.messageRead)); }));
+  $$('[data-message-snooze]').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); snoozeMessage('notification', Number(button.dataset.messageSnooze)); }));
+  $$('[data-announcement-snooze]').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); snoozeMessage('announcement', Number(button.dataset.announcementSnooze)); }));
   $$('[data-message-announcement]').forEach(button => button.addEventListener('click', () => openAnnouncementDetails(state.announcements.find(item => item.id === Number(button.dataset.messageAnnouncement)))));
   $$('[data-message-scope]').forEach(button => button.addEventListener('click', () => { state.messageActionScope = button.dataset.messageScope; render(); }));
   $('#message-read-all')?.addEventListener('click', markAllNotificationsAsRead);
+  $('#digest-enabled')?.addEventListener('change', event => saveDigestPreference(event.target.checked));
+  $('#digest-open')?.addEventListener('click', openDailySummary);
 }
 
 function renderAnnouncements() {
@@ -5340,7 +5445,7 @@ function captureRecordDialog() {
     auditToggle: recordButtonState('#audit-toggle'),
     auditClass: $('#audit-section').className,
     auditHtml: $('#audit-list').innerHTML,
-    buttons: Object.fromEntries(['#remove', '#skip-recurrence', '#duplicate', '#lock-record', '#cancel', '#edit-record', '#record-save'].map(id => [id, recordButtonState(id)])),
+    buttons: Object.fromEntries(['#remove', '#skip-recurrence', '#duplicate', '#watch-record', '#mute-record', '#lock-record', '#cancel', '#edit-record', '#record-save'].map(id => [id, recordButtonState(id)])),
     fieldsClass: fields.className,
     dirty: $('#modal').dataset.dirty || '',
     scrollTop: $('#modal').scrollTop
@@ -5420,7 +5525,7 @@ async function openRecord(type, record = null, prefill = null, duplicateSource =
   }
   const lockable = Boolean(record && ['status', 'tasks', 'points', 'goals'].includes(type));
   if (parentDialog) state.dialogStack.push(parentDialog);
-  state.dialog = { type, record, prefill, duplicateSource, auditLoaded: false, editing: !lockable, commentAdded: false };
+  state.dialog = { type, record, prefill, duplicateSource, auditLoaded: false, editing: !lockable, commentAdded: false, notificationMode: 'default' };
   state.goalDraftLinks = source?.links ? source.links.map(link => ({ entity_type: link.entity_type, entity_id: Number(link.entity_id) })) : [];
   state.linkDraft = source?.links ? source.links.map(link => ({ entity_type: link.entity_type, entity_id: Number(link.entity_id) })) : [];
   renderRecordDialogHeader();
@@ -5429,12 +5534,13 @@ async function openRecord(type, record = null, prefill = null, duplicateSource =
   $('#duplicate').hidden = !(record && ['status', 'tasks', 'points', 'goals'].includes(type));
   $('#skip-recurrence').hidden = !(type === 'tasks' && record && Number(record.recurrence_interval || 0) > 0 && record.status !== 'Done');
   $('#audit-toggle').hidden = !(record && ['status', 'tasks', 'points', 'goals'].includes(type));
-  $('#audit-toggle').textContent = 'Pokaż historię edycji';
+  $('#audit-toggle').textContent = 'Pokaż wspólną oś czasu';
   $('#audit-section').classList.add('hidden');
   $('#audit-list').innerHTML = '';
   const commentable = Boolean(record && ['status', 'tasks', 'points', 'goals'].includes(type));
   $('#comments-section').classList.toggle('hidden', !commentable);
   $('#comment-content').value = '';
+  $('#comment-mention-suggestions').classList.add('hidden');
   if (commentable) renderEntityComments(record.comments || []);
   resetSimilarHistory();
   const visibleFields = type === 'status' && record
@@ -5451,6 +5557,7 @@ async function openRecord(type, record = null, prefill = null, duplicateSource =
   setRecordDialogMode(state.dialog.editing);
   $('#modal').dataset.dirty = '';
   updateRecordBackButton();
+  if (commentable) await loadRecordNotificationPreference();
   if (!record && ['tasks', 'points'].includes(type)) bindSimilarHistorySearch(typeToEntity(type));
 }
 
@@ -5480,10 +5587,41 @@ function setRecordDialogMode(editing) {
   $('#remove').disabled = lockable && !dialog.editing;
   $('#duplicate').disabled = false;
   $('#skip-recurrence').disabled = false;
+  renderRecordNotificationPreference();
   const canLock = lockable && canCoordinate();
   $('#lock-record').hidden = !canLock;
   $('#lock-record').textContent = dialog.record?.edit_locked ? 'Odblokuj edycję' : 'Zablokuj edycję';
   renderRecordDialogHeader();
+}
+
+function renderRecordNotificationPreference() {
+  const dialog = state.dialog; const supported = Boolean(dialog?.record && ['status', 'tasks', 'points', 'goals'].includes(dialog.type));
+  const watch = $('#watch-record'); const mute = $('#mute-record');
+  watch.hidden = !supported; mute.hidden = !supported;
+  if (!supported) return;
+  watch.textContent = dialog.notificationMode === 'watching' ? '✓ Obserwujesz' : 'Obserwuj';
+  mute.textContent = dialog.notificationMode === 'muted' ? '✓ Wyciszono' : 'Wycisz';
+  watch.classList.toggle('active-toggle', dialog.notificationMode === 'watching');
+  mute.classList.toggle('active-toggle', dialog.notificationMode === 'muted');
+}
+
+async function loadRecordNotificationPreference() {
+  const dialog = state.dialog; const entityType = typeToEntity(dialog?.type);
+  if (!dialog?.record || !entityType || !['status', 'task', 'point', 'goal'].includes(entityType)) return;
+  try {
+    const preference = await api(`/api/entity-notification-preferences/${entityType}/${dialog.record.id}`);
+    if (state.dialog === dialog) { dialog.notificationMode = preference.mode || 'default'; renderRecordNotificationPreference(); }
+  } catch { /* brak preferencji nie blokuje podglądu */ }
+}
+
+async function setRecordNotificationPreference(mode) {
+  const dialog = state.dialog; const entityType = typeToEntity(dialog?.type);
+  if (!dialog?.record || !entityType) return;
+  try {
+    const preference = await api(`/api/entity-notification-preferences/${entityType}/${dialog.record.id}`, { method: 'PUT', body: JSON.stringify({ mode }) });
+    dialog.notificationMode = preference.mode || 'default'; renderRecordNotificationPreference();
+    toast(dialog.notificationMode === 'watching' ? 'Element jest obserwowany' : dialog.notificationMode === 'muted' ? 'Powiadomienia dla elementu wyciszono' : 'Przywrócono domyślne powiadomienia');
+  } catch (error) { toast(error.message, true); }
 }
 
 async function toggleRecordEditLock() {
@@ -5546,9 +5684,45 @@ function bindSimilarHistorySearch(entityType) {
 
 function typeToEntity(type) { return ({ status: 'status', tasks: 'task', points: 'point', notes: 'note', goals: 'goal' })[type]; }
 
+function highlightedComment(content, mentions = []) {
+  const tokens = [...new Set(mentions.flatMap(user => [`@${user.display_name}`, `@${user.username}`]).filter(token => token.length > 1))].sort((a, b) => b.length - a.length);
+  if (!tokens.length) return escapeHtml(content).replace(/\n/g, '<br>');
+  const source = String(content || ''); const lower = source.toLocaleLowerCase('pl-PL'); let cursor = 0; let html = '';
+  while (cursor < source.length) {
+    let best = null;
+    for (const token of tokens) {
+      const index = lower.indexOf(token.toLocaleLowerCase('pl-PL'), cursor);
+      if (index >= 0 && (!best || index < best.index || (index === best.index && token.length > best.token.length))) best = { index, token };
+    }
+    if (!best) { html += escapeHtml(source.slice(cursor)); break; }
+    html += escapeHtml(source.slice(cursor, best.index));
+    html += `<mark class="comment-mention">${escapeHtml(source.slice(best.index, best.index + best.token.length))}</mark>`;
+    cursor = best.index + best.token.length;
+  }
+  return html.replace(/\n/g, '<br>');
+}
+
 function renderEntityComments(comments = []) {
   $('#comments-count').textContent = `${comments.length} ${comments.length === 1 ? 'komentarz' : 'komentarzy'}`;
-  $('#comments-list').innerHTML = comments.map(item => `<article class="entity-comment"><header><b>${escapeHtml(item.user_name || 'Użytkownik')}</b><time>${displayDateTime(item.created_at)}</time></header><p>${escapeHtml(item.content).replace(/\n/g, '<br>')}</p></article>`).join('') || '<div class="empty compact-empty">Brak komentarzy. Możesz dodać pierwszą aktualizację.</div>';
+  $('#comments-list').innerHTML = comments.map(item => `<article class="entity-comment"><header><b>${escapeHtml(item.user_name || 'Użytkownik')}</b><time>${displayDateTime(item.created_at)}</time></header><p>${highlightedComment(item.content, item.mentions || [])}</p></article>`).join('') || '<div class="empty compact-empty">Brak komentarzy. Możesz dodać pierwszą aktualizację.</div>';
+}
+
+function renderCommentMentionSuggestions() {
+  const input = $('#comment-content'); const container = $('#comment-mention-suggestions');
+  const position = input.selectionStart ?? input.value.length; const before = input.value.slice(0, position); const at = before.lastIndexOf('@');
+  if (at < 0 || before.slice(at + 1).includes('\n')) { container.classList.add('hidden'); return; }
+  const query = before.slice(at + 1).toLocaleLowerCase('pl-PL');
+  const users = (state.users || []).filter(user => Number(user.active) !== 0 && (`${user.display_name} ${user.username}`).toLocaleLowerCase('pl-PL').includes(query)).slice(0, 6);
+  if (!users.length) { container.classList.add('hidden'); return; }
+  container.innerHTML = users.map(user => `<button type="button" data-comment-mention="${user.id}"><b>${escapeHtml(user.display_name)}</b><small>@${escapeHtml(user.username || '')}</small></button>`).join('');
+  container.classList.remove('hidden');
+  $$('[data-comment-mention]').forEach(button => button.addEventListener('click', () => {
+    const user = state.users.find(item => Number(item.id) === Number(button.dataset.commentMention)); if (!user) return;
+    const end = input.selectionStart ?? input.value.length; const start = input.value.slice(0, end).lastIndexOf('@');
+    input.value = `${input.value.slice(0, start)}@${user.display_name} ${input.value.slice(end)}`;
+    input.focus(); input.selectionStart = input.selectionEnd = start + user.display_name.length + 2;
+    container.classList.add('hidden');
+  }));
 }
 
 async function addEntityComment() {
@@ -5578,7 +5752,7 @@ async function addEntityComment() {
     renderEntityComments(dialog.record.comments);
     $('#comment-content').value = '';
     $('#modal').dataset.dirty = '';
-    if (dialog.auditLoaded) await loadAudit(entityType, dialog.record.id);
+    if (dialog.auditLoaded) await loadTimeline(entityType, dialog.record.id);
     toast('Komentarz został dodany jako aktualizacja');
   } catch (error) { toast(error.message, true); }
   finally { button.disabled = false; }
@@ -5590,14 +5764,14 @@ async function toggleAudit() {
   const section = $('#audit-section');
   if (!section.classList.contains('hidden')) {
     section.classList.add('hidden');
-    $('#audit-toggle').textContent = 'Pokaż historię edycji';
+    $('#audit-toggle').textContent = 'Pokaż wspólną oś czasu';
     return;
   }
   section.classList.remove('hidden');
-  $('#audit-toggle').textContent = 'Ukryj historię edycji';
+  $('#audit-toggle').textContent = 'Ukryj wspólną oś czasu';
   if (!dialog.auditLoaded) {
-    $('#audit-list').innerHTML = '<div class="loading">Ładowanie historii…</div>';
-    try { await loadAudit(typeToEntity(dialog.type), dialog.record.id); dialog.auditLoaded = true; }
+    $('#audit-list').innerHTML = '<div class="loading">Ładowanie osi czasu…</div>';
+    try { await loadTimeline(typeToEntity(dialog.type), dialog.record.id); dialog.auditLoaded = true; }
     catch (error) { $('#audit-list').innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`; }
   }
 }
@@ -6209,10 +6383,30 @@ function renderGoalLinkPreview() {
   bindDependencyJumps(container);
 }
 
-async function loadAudit(type, id) {
-  const entries = await api(`/api/audit?type=${encodeURIComponent(type)}&id=${id}`);
+async function loadTimeline(type, id) {
+  const entries = await api(`/api/timeline/${encodeURIComponent(type)}/${id}`);
   $('#audit-section').classList.remove('hidden');
-  $('#audit-list').innerHTML = entries.filter(entry => auditChangesHtml(entry.changes)).map(entry => `<article class="audit-entry"><strong>${escapeHtml(entry.user_name || 'System')} · ${displayDateTime(entry.changed_at)} · ${auditAction(entry.action)}</strong>${auditChangesHtml(entry.changes)}</article>`).join('') || '<div class="empty">Historia jest pusta</div>';
+  const labels = { change: 'Zmiana', comment: 'Komentarz', meeting: 'Odprawa', announcement: 'Wiadomość', external: 'Komunikacja zewnętrzna' };
+  $('#audit-list').innerHTML = entries.map(entry => {
+    const changes = entry.event_type === 'change' ? auditChangesHtml(entry.changes || {}) : '';
+    const description = entry.description ? `<p>${highlightedComment(entry.description, entry.mentions || [])}</p>` : '';
+    const target = entry.announcement_id ? ` data-timeline-announcement="${entry.announcement_id}"` : entry.meeting_id ? ` data-timeline-meeting="${entry.meeting_id}"` : entry.dependency_id ? ` data-timeline-external="${entry.dependency_id}"` : '';
+    return `<article class="audit-entry timeline-entry ${escapeHtml(entry.event_type)}"${target}><header><span class="timeline-icon" aria-hidden="true"></span><span><b>${escapeHtml(entry.title || labels[entry.event_type] || 'Aktualizacja')}</b><small>${escapeHtml(entry.author || 'System')} · ${displayDateTime(entry.occurred_at)} · ${escapeHtml(labels[entry.event_type] || '')}</small></span></header>${changes}${description}${target ? '<button type="button" class="mini timeline-open">Otwórz szczegóły</button>' : ''}</article>`;
+  }).join('') || '<div class="empty">Oś czasu jest pusta</div>';
+  $$('[data-timeline-announcement]').forEach(row => row.querySelector('.timeline-open')?.addEventListener('click', async () => {
+    state.announcements = await api('/api/announcements'); rememberDataCache('announcements', state.announcements);
+    openAnnouncementDetails(state.announcements.find(item => Number(item.id) === Number(row.dataset.timelineAnnouncement)));
+  }));
+  $$('[data-timeline-meeting]').forEach(row => row.querySelector('.timeline-open')?.addEventListener('click', async () => {
+    state.meetingSummaries = await api('/api/meeting-summaries'); rememberDataCache('meetingSummaries', state.meetingSummaries);
+    const meeting = state.meetingSummaries.find(item => Number(item.id) === Number(row.dataset.timelineMeeting));
+    if (meeting) openMeetingPlanDetails(meeting); else toast('Odprawa nie jest dostępna', true);
+  }));
+  $$('[data-timeline-external]').forEach(row => row.querySelector('.timeline-open')?.addEventListener('click', async () => {
+    state.externalDependencies = await api('/api/external-dependencies');
+    const dependency = state.externalDependencies.find(item => Number(item.id) === Number(row.dataset.timelineExternal));
+    if (dependency) openExternalDependencyDetails(dependency); else toast('Zależność nie jest dostępna', true);
+  }));
 }
 
 function auditAction(action) { return ({ create: 'utworzenie', update: 'edycja', delete: 'usunięcie', migrate: 'migracja danych' })[action] || action; }
