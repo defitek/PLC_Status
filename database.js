@@ -1515,6 +1515,10 @@ function createRepository(db, defaultProjectId) {
       if (table === 'planner_requirements' && !Object.hasOwn(row, 'manual_required_count')) {
         row.manual_required_count = row.note === 'Automatyczne minimum z sumy podobszarów' ? 0 : Number(row.required_count || 0);
       }
+      if (table === 'planner_entries' && !Object.hasOwn(row, 'duration_hours')) {
+        const configuredHours = Number(one("SELECT value FROM system_settings WHERE key='planner_offline_hours'")?.value || 8);
+        row.duration_hours = row.transport_mode === 'transport_only' ? Math.min(24, Math.max(0.25, configuredHours || 8)) : 0;
+      }
       const allowedColumns = columnNames(db, table);
       const columns = Object.keys(row).filter(column => allowedColumns.has(column));
       if (!columns.length) continue;
@@ -1597,11 +1601,17 @@ function createRepository(db, defaultProjectId) {
     const normalized = [];
     const seenAssignments = new Set();
     const hierarchyGroups = { work: [], transport: [] };
+    const configuredTransportHours = Number(one("SELECT value FROM system_settings WHERE key='planner_offline_hours'")?.value || 8);
+    const defaultTransportHours = Number.isFinite(configuredTransportHours) && configuredTransportHours > 0 ? Math.min(24, configuredTransportHours) : 8;
     for (const source of (Array.isArray(requested) ? requested : []).slice(0, 30)) {
       const groupId = asId(source.controller_group_id);
       const activityType = clean(source.activity_type) === 'transport' || source.transport_mode === 'transport_only' ? 'transport' : 'work';
-      const workMode = activityType === 'work' && ['online', 'offline'].includes(source.work_mode) ? source.work_mode : 'online';
+      const workMode = activityType === 'work' && ['online', 'offline'].includes(source.work_mode) ? source.work_mode : 'offline';
       const transportMode = activityType === 'transport' ? 'transport_only' : 'none';
+      const requestedDuration = Number(source.duration_hours);
+      const durationHours = activityType === 'transport'
+        ? Math.max(0.25, Math.min(24, Number.isFinite(requestedDuration) && requestedDuration > 0 ? requestedDuration : defaultTransportHours))
+        : 0;
       const shift = clean(source.shift) || 'Dzień';
       if (groupId && !one('SELECT 1 FROM controller_groups WHERE id=? AND project_id=? AND active=1', groupId, activeProjectId())) throw appError('Wybrany obszar nie należy do projektu');
       if (!one("SELECT 1 FROM options WHERE project_id=? AND kind='shift' AND value=? AND active=1", activeProjectId(), shift)) throw appError(`Nieznana zmiana: ${shift}`);
@@ -1612,7 +1622,7 @@ function createRepository(db, defaultProjectId) {
         seenAssignments.add(key);
         hierarchyGroups[activityType].push(groupId);
       }
-      normalized.push({ groupId, shift, workMode, transportMode, activityType, note: clean(source.note) });
+      normalized.push({ groupId, shift, workMode, transportMode, activityType, durationHours, note: clean(source.note) });
     }
     if (hasHierarchyOverlap(hierarchyGroups.work) || hasHierarchyOverlap(hierarchyGroups.transport)) throw appError('Nie można przypisać jednocześnie obszaru nadrzędnego i jego podobszaru dla tego samego rodzaju aktywności');
     return normalized;
@@ -1620,8 +1630,8 @@ function createRepository(db, defaultProjectId) {
 
   function replacePlannerDay(userId, planDate, normalized, currentUser) {
     db.prepare('DELETE FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=?').run(activeProjectId(), userId, planDate);
-    const insert = db.prepare(`INSERT INTO planner_entries(project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,note,created_by) VALUES(?,?,?,?,?,?,?,?,?)`);
-    normalized.forEach(entry => insert.run(activeProjectId(), userId, planDate, entry.shift, entry.groupId, entry.workMode, entry.transportMode, entry.note, currentUser.id));
+    const insert = db.prepare(`INSERT INTO planner_entries(project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,note,created_by) VALUES(?,?,?,?,?,?,?,?,?,?)`);
+    normalized.forEach(entry => insert.run(activeProjectId(), userId, planDate, entry.shift, entry.groupId, entry.workMode, entry.transportMode, entry.durationHours, entry.note, currentUser.id));
     syncPlannerOverlapReview(userId, planDate, currentUser);
   }
 
@@ -1704,9 +1714,9 @@ function createRepository(db, defaultProjectId) {
       ) GROUP BY user_id,work_date`,
       activeProjectId(), range.from, range.to, activeProjectId(), range.from, range.to,
       activeProjectId(), range.from, range.to, activeProjectId(), range.from, range.to).map(row => ({ ...row, tasks: Number(row.tasks), points: Number(row.points), statuses: Number(row.statuses), notes: Number(row.notes) }));
-    const summary = all(`SELECT pe.plan_date,COUNT(DISTINCT CASE WHEN pe.transport_mode!='transport_only' THEN pe.user_id END) headcount,
+    const summary = all(`SELECT pe.plan_date,COUNT(DISTINCT pe.user_id) headcount,
       COUNT(DISTINCT CASE WHEN pe.transport_mode!='transport_only' AND pe.work_mode='online' THEN pe.user_id END) online_headcount,
-      COUNT(DISTINCT CASE WHEN pe.transport_mode!='transport_only' AND pe.work_mode='offline' THEN pe.user_id END) offline_headcount,
+      COUNT(DISTINCT CASE WHEN pe.transport_mode='transport_only' OR pe.work_mode='offline' THEN pe.user_id END) offline_headcount,
       SUM(pe.transport_mode='transport_only') transport_only,SUM(pe.transport_mode='transport_work') transport_work
       FROM planner_entries pe JOIN project_memberships pm ON pm.project_id=pe.project_id AND pm.user_id=pe.user_id AND pm.active=1
       WHERE pe.project_id=? AND pe.plan_date BETWEEN ? AND ? AND pm.planner_enabled=1 GROUP BY pe.plan_date ORDER BY pe.plan_date`, activeProjectId(), range.from, range.to);
@@ -1719,20 +1729,20 @@ function createRepository(db, defaultProjectId) {
     const currentDate = new Date().toISOString().slice(0, 10);
     const area_summary = hierarchy.groups.filter(group => !group.parent_id).map(group => {
       const descendants = new Set(groupDescendantIds(group.id));
-      const related = entries.filter(entry => entry.transport_mode !== 'transport_only' && descendants.has(Number(entry.controller_group_id)));
+      const related = entries.filter(entry => descendants.has(Number(entry.controller_group_id)));
       const todayRelated = related.filter(entry => entry.plan_date === new Date().toISOString().slice(0, 10));
       const unique = values => new Set(values).size;
       return {
         id: group.id, name: group.name, path_label: group.path_label,
         today_people: unique(todayRelated.map(entry => entry.user_id)),
-        today_online_people: unique(todayRelated.filter(entry => entry.work_mode === 'online').map(entry => entry.user_id)),
-        today_offline_people: unique(todayRelated.filter(entry => entry.work_mode === 'offline').map(entry => entry.user_id)),
+        today_online_people: unique(todayRelated.filter(entry => entry.transport_mode !== 'transport_only' && entry.work_mode === 'online').map(entry => entry.user_id)),
+        today_offline_people: unique(todayRelated.filter(entry => entry.transport_mode === 'transport_only' || entry.work_mode === 'offline').map(entry => entry.user_id)),
         assignments: unique(related.map(entry => `${entry.user_id}:${entry.plan_date}`)),
         people: unique(related.map(entry => entry.user_id)),
-        online_assignments: unique(related.filter(entry => entry.work_mode === 'online').map(entry => `${entry.user_id}:${entry.plan_date}`)),
-        offline_assignments: unique(related.filter(entry => entry.work_mode === 'offline').map(entry => `${entry.user_id}:${entry.plan_date}`)),
-        online_people: unique(related.filter(entry => entry.work_mode === 'online').map(entry => entry.user_id)),
-        offline_people: unique(related.filter(entry => entry.work_mode === 'offline').map(entry => entry.user_id)),
+        online_assignments: unique(related.filter(entry => entry.transport_mode !== 'transport_only' && entry.work_mode === 'online').map(entry => `${entry.user_id}:${entry.plan_date}`)),
+        offline_assignments: unique(related.filter(entry => entry.transport_mode === 'transport_only' || entry.work_mode === 'offline').map(entry => `${entry.user_id}:${entry.plan_date}`)),
+        online_people: unique(related.filter(entry => entry.transport_mode !== 'transport_only' && entry.work_mode === 'online').map(entry => entry.user_id)),
+        offline_people: unique(related.filter(entry => entry.transport_mode === 'transport_only' || entry.work_mode === 'offline').map(entry => entry.user_id)),
         today_online_required: Number(requirements.find(row => row.plan_date === currentDate && row.work_mode === 'online' && Number(row.controller_group_id) === Number(group.id))?.required_count || 0),
         today_offline_required: Number(requirements.find(row => row.plan_date === currentDate && row.work_mode === 'offline' && Number(row.controller_group_id) === Number(group.id))?.required_count || 0)
       };
@@ -1744,11 +1754,11 @@ function createRepository(db, defaultProjectId) {
     const uniquePeople = list => new Set(list.map(entry => entry.user_id)).size;
     const mode_summary = {
       today_online: uniquePeople(todayEntries.filter(entry => entry.transport_mode !== 'transport_only' && entry.work_mode === 'online')),
-      today_offline: uniquePeople(todayEntries.filter(entry => entry.transport_mode !== 'transport_only' && entry.work_mode === 'offline')),
+      today_offline: uniquePeople(todayEntries.filter(entry => entry.transport_mode === 'transport_only' || entry.work_mode === 'offline')),
       range_online: uniquePeople(entries.filter(entry => entry.transport_mode !== 'transport_only' && entry.work_mode === 'online')),
-      range_offline: uniquePeople(entries.filter(entry => entry.transport_mode !== 'transport_only' && entry.work_mode === 'offline')),
+      range_offline: uniquePeople(entries.filter(entry => entry.transport_mode === 'transport_only' || entry.work_mode === 'offline')),
       online_planned_days: new Set(entries.filter(entry => entry.transport_mode !== 'transport_only' && entry.work_mode === 'online').map(entry => `${entry.user_id}:${entry.plan_date}`)).size,
-      offline_planned_days: new Set(entries.filter(entry => entry.transport_mode !== 'transport_only' && entry.work_mode === 'offline').map(entry => `${entry.user_id}:${entry.plan_date}`)).size
+      offline_planned_days: new Set(entries.filter(entry => entry.transport_mode === 'transport_only' || entry.work_mode === 'offline').map(entry => `${entry.user_id}:${entry.plan_date}`)).size
     };
     const area_day_summary = hierarchy.groups.filter(group => !group.parent_id).map(group => {
       const descendants = new Set(groupDescendantIds(group.id));
@@ -1756,12 +1766,12 @@ function createRepository(db, defaultProjectId) {
         id: group.id, name: group.name, path_label: group.path_label,
         days: range.days ? Array.from({ length: range.days }, (_, index) => {
           const date = new Date(`${range.from}T12:00:00Z`); date.setUTCDate(date.getUTCDate() + index); const value = date.toISOString().slice(0, 10);
-          const related = entries.filter(entry => entry.plan_date === value && entry.transport_mode !== 'transport_only' && descendants.has(Number(entry.controller_group_id)));
+          const related = entries.filter(entry => entry.plan_date === value && descendants.has(Number(entry.controller_group_id)));
           const required = requirements.filter(row => row.plan_date === value && Number(row.controller_group_id) === Number(group.id));
           return {
             date: value,
-            online: new Set(related.filter(entry => entry.work_mode === 'online').map(entry => entry.user_id)).size,
-            offline: new Set(related.filter(entry => entry.work_mode === 'offline').map(entry => entry.user_id)).size,
+            online: new Set(related.filter(entry => entry.transport_mode !== 'transport_only' && entry.work_mode === 'online').map(entry => entry.user_id)).size,
+            offline: new Set(related.filter(entry => entry.transport_mode === 'transport_only' || entry.work_mode === 'offline').map(entry => entry.user_id)).size,
             online_required: required.filter(row => row.work_mode === 'online').reduce((sum, row) => sum + Number(row.required_count || 0), 0),
             offline_required: required.filter(row => row.work_mode === 'offline').reduce((sum, row) => sum + Number(row.required_count || 0), 0)
           };
@@ -1833,10 +1843,18 @@ function createRepository(db, defaultProjectId) {
         credited = !isSaturday && !isSunday && !holiday ? baseHours : 0; label = 'Urlop';
       } else if (dayEntries.length) {
         const workEntries = dayEntries.filter(item => item.transport_mode !== 'transport_only');
-        if (!workEntries.length) label = 'T · sam transport';
-        else {
+        const transportHours = dayEntries.filter(item => item.transport_mode === 'transport_only')
+          .reduce((sum, item) => sum + Math.max(0, Number(item.duration_hours || 0)), 0);
+        if (!workEntries.length) {
+          actual = transportHours;
+          label = `T · OFF${transportHours ? ` · ${transportHours.toFixed(1)} h` : ''}`;
+        } else {
           actual = workEntries.some(item => item.work_mode === 'online') ? onlineHours : offlineHours;
           label = workEntries.some(item => item.work_mode === 'online') ? 'ON' : 'OFF';
+          if (transportHours) {
+            actual += transportHours;
+            label += ` + T ${transportHours.toFixed(1)} h`;
+          }
         }
       }
       const actualAdjustment = Number(adjustment.actual_hours_adjustment || 0);
@@ -1955,7 +1973,7 @@ function createRepository(db, defaultProjectId) {
     if (entry.user_id === targetUserId && entry.plan_date === targetDate) return plannerData(targetDate, targetDate, currentUser);
     const sourceRows = all('SELECT * FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=? ORDER BY id', activeProjectId(), entry.user_id, entry.plan_date);
     const targetRows = all('SELECT * FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=? ORDER BY id', activeProjectId(), targetUserId, targetDate);
-    const moved = { controller_group_id: entry.controller_group_id, work_mode: entry.work_mode, shift: entry.shift, transport_mode: entry.transport_mode, note: entry.note };
+    const moved = { controller_group_id: entry.controller_group_id, work_mode: entry.work_mode, shift: entry.shift, transport_mode: entry.transport_mode, duration_hours: entry.duration_hours, note: entry.note };
     const target = normalizePlannerEntries([...targetRows, moved]);
     const source = normalizePlannerEntries(sourceRows.filter(row => row.id !== entry.id));
     db.exec('BEGIN IMMEDIATE');
@@ -3709,12 +3727,13 @@ function createRepository(db, defaultProjectId) {
   function employeeReviewMetrics(userId, periodValue) {
     const period = employeeReviewPeriod(periodValue);
     const planned = all(`SELECT plan_date,MAX(CASE WHEN transport_mode!='transport_only' AND work_mode='online' THEN 1 ELSE 0 END) online,
-      MAX(CASE WHEN transport_mode!='transport_only' AND work_mode='offline' THEN 1 ELSE 0 END) offline,
-      SUM(transport_mode='transport_only') transports
+      MAX(CASE WHEN transport_mode!='transport_only' AND work_mode='offline' THEN 1 ELSE 0 END) offline_work,
+      SUM(transport_mode='transport_only') transports,
+      SUM(CASE WHEN transport_mode='transport_only' THEN duration_hours ELSE 0 END) transport_hours
       FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date BETWEEN ? AND ? GROUP BY plan_date`, activeProjectId(), userId, period.from, period.to);
     const onlineHours = Number(one("SELECT value FROM settings WHERE project_id=? AND key='planner_online_hours'", activeProjectId())?.value || 10.5);
     const offlineHours = Number(one("SELECT value FROM settings WHERE project_id=? AND key='planner_offline_hours'", activeProjectId())?.value || 8);
-    const plannedHours = planned.reduce((sum, day) => sum + (day.online ? onlineHours : day.offline ? offlineHours : 0), 0);
+    const plannedHours = planned.reduce((sum, day) => sum + (day.online ? onlineHours : day.offline_work ? offlineHours : 0) + Number(day.transport_hours || 0), 0);
     const tasks = one(`SELECT COUNT(DISTINCT t.id) total,SUM(t.status='Done') done,
       SUM(t.status='Done' AND date(t.updated_at) BETWEEN ? AND ?) completed_in_month,
       SUM(t.status!='Done' AND t.due_date IS NOT NULL AND t.due_date<?) overdue
@@ -3738,9 +3757,9 @@ function createRepository(db, defaultProjectId) {
     const updates = Number(one(`SELECT COUNT(*) count FROM audit_log WHERE project_id=? AND user_id=? AND date(changed_at) BETWEEN ? AND ?`, activeProjectId(), userId, period.from, period.to)?.count || 0);
     return {
       period: period.period, from: period.from, to: period.to,
-      planned_days: planned.filter(day => day.online || day.offline).length,
+      planned_days: planned.filter(day => day.online || day.offline_work || Number(day.transports) > 0).length,
       online_days: planned.filter(day => day.online).length,
-      offline_days: planned.filter(day => !day.online && day.offline).length,
+      offline_days: planned.filter(day => !day.online && (day.offline_work || Number(day.transports) > 0)).length,
       transport_days: planned.filter(day => Number(day.transports) > 0).length,
       planned_hours: Math.round(plannedHours * 10) / 10,
       tasks: Object.fromEntries(Object.entries(tasks).map(([key, value]) => [key, Number(value || 0)])),

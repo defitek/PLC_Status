@@ -18,7 +18,7 @@ const state = {
   overview: null, announcements: [], meetingSummaries: [], notifications: [], communicationPreferences: { digest_enabled: 0 }, navigationCounts: {}, mine: null, dashboard: {}, status: [], tasks: [], points: [], externalDependencies: [], notes: [], goals: [], planner: null, calendar: null, history: [], savedViews: [], operations: null, employeeReviews: [], securityEvents: [], reviewPeriod: new Date().toISOString().slice(0, 7), loadSequence: 0,
   dialog: null, dialogStack: [], dialogInitial: '', dirtyCloseAttempt: new WeakSet(), goalDraftLinks: [], goalPickerCollections: null, linkDraft: [], statusMode: 'list', taskMode: 'board', taskShowCompleted: false, pointMode: 'list', pointSection: 'points', trendPeriod: 'week',
   functionGroupController: '', functionPointGroup: null, functionPointDraft: [],
-  notesFrom: '', notesTo: '', notesWeek: '', draggingTask: false, plannerFrom: '', plannerDays: 14, plannerShowHours: false,
+  notesFrom: '', notesTo: '', notesWeek: '', draggingTask: false, plannerFrom: '', plannerDays: 14, plannerShowHours: false, plannerToolsVisible: false,
   plannerCell: null, plannerClipboard: null, plannerDragEntry: null, plannerDragDay: null, plannerDragging: false, plannerSelection: new Set(), plannerEntrySelection: new Set(), plannerSelectionAbort: null, calendarFrom: '', calendarTo: '', calendarMode: 'week', calendarTypes: ['task', 'point', 'status', 'goal', 'note', 'annotation'], calendarPriorities: [...PRIORITY_VALUES], calendarOnlyMine: false, calendarCategory: '', calendarPlanner: null, calendarPlanningVisible: false, calendarRequirementEdit: false,
   plannerRequirementEdit: false, requirementProjectId: null, requirementLevel: 'areas', requirementFrom: '', requirementDays: 14, requirementData: null, requirementDraft: new Map(), requirementBaseline: new Map(), requirementDirty: new Set(), requirementSelection: null, requirementCollapsedGroups: new Set(), requirementGridAbort: null, requirementPointerSelecting: false, requirementFill: null,
   kpiModules: ['status', 'tasks', 'points', 'goals'], globalTrendMode: 'combined', overviewDetailed: false, detailedKpiMode: 'combined', detailedKpiPeriod: 'week', linkPickerAllowed: [], linkPickerDraft: [], linkPickerCollections: null, actionResolve: null, actionDialogGeneration: 0, actionClosingGeneration: 0, configPanel: null, configScroll: 0, hierarchySelection: null, dailySummaryOpening: false,
@@ -805,7 +805,7 @@ function uiForm({ title, description = '', fields = [], submitLabel = 'Zastosuj'
           ? `<div class="ui-multiselect" data-ui-multiselect="${escapeHtml(field.name)}">${(field.options || []).map(option => { const optionValue = typeof option === 'object' ? option.value : option; const optionLabel = typeof option === 'object' ? option.label : option; return `<label><input name="${escapeHtml(field.name)}" type="checkbox" value="${escapeHtml(optionValue)}" ${selectedValues.has(String(optionValue)) ? 'checked' : ''}><span>${escapeHtml(badgeMap[optionLabel]?.[0] || optionLabel)}</span></label>`; }).join('')}</div>`
         : field.type === 'checkbox'
           ? `<input name="${escapeHtml(field.name)}" type="checkbox" value="1" ${field.value ? 'checked' : ''}>`
-          : `<input name="${escapeHtml(field.name)}" type="${field.type || 'text'}" value="${escapeHtml(field.value ?? '')}" ${field.required ? 'required' : ''}>`;
+          : `<input name="${escapeHtml(field.name)}" type="${field.type || 'text'}" value="${escapeHtml(field.value ?? '')}" ${field.required ? 'required' : ''}${field.min !== undefined ? ` min="${escapeHtml(field.min)}"` : ''}${field.max !== undefined ? ` max="${escapeHtml(field.max)}"` : ''}${field.step !== undefined ? ` step="${escapeHtml(field.step)}"` : ''}>`;
     return `<label class="field ${field.full ? 'full' : compact ? 'ui-compact-field' : ''} ${escapeHtml(field.className || '')}"><span>${escapeHtml(field.label || field.name)}</span>${input}${field.hint ? `<small class="sub">${escapeHtml(field.hint)}</small>` : ''}</label>`;
   }).join('') || `<p class="dialog-confirm-text">${escapeHtml(description || 'Czy na pewno chcesz kontynuować?')}</p>`;
   bindHierarchyMultiDropdown(dialog);
@@ -1179,9 +1179,11 @@ function syncModulePrimaryAction() {
   let target = targetSelector ? $(targetSelector) : null;
   if (!target) {
     const tabs = content.querySelector(':scope > .workspace-tabs');
-    const markup = '<div class="module-action-bar" data-module-action-bar></div>';
-    if (tabs) tabs.insertAdjacentHTML('afterend', markup); else content.insertAdjacentHTML('afterbegin', markup);
-    target = content.querySelector('[data-module-action-bar]');
+    if (tabs) target = tabs;
+    else {
+      content.insertAdjacentHTML('afterbegin', '<div class="module-action-bar" data-module-action-bar></div>');
+      target = content.querySelector('[data-module-action-bar]');
+    }
   }
   const button = document.createElement('button');
   button.type = 'button';
@@ -1680,7 +1682,7 @@ function renderMine() {
   $('#content').innerHTML = `<section class="personal-command compact"><div><span class="eyebrow">Plan pracy · ${escapeHtml(state.me.display_name)}</span><h2>${overdue.length ? `${overdue.length} pozycji wymaga reakcji` : 'Plan jest pod kontrolą'}</h2><p>Zakres z Plannera: <b>${escapeHtml(projectLabels)}</b> · ${(data.assigned_areas || []).map(item => `${item.project_code ? `${escapeHtml(item.project_code)} · ` : ''}${escapeHtml(item.path_label || item.name)}`).join(', ') || 'brak przypisania na 14 dni'}</p></div><div class="personal-stats compact"><span><b>${taskProgress}%</b>Zadania</span><span><b>${pointProgress}%</b>Punkty</span><span><b>${statusProgress}%</b>Status</span><span><b>${data.metrics.notes_mentions}</b>Wzmianki</span></div></section>
   <nav class="start-shortcuts" aria-label="Skróty pracy"><button type="button" data-start-view="announcements">Do działania <b>${messageCenterActions('mine').length}</b></button><button type="button" data-start-view="tasks">Otwórz pracę</button><button type="button" data-start-view="planner">Pokaż plan</button></nav>
   ${overdue.length ? `<section class="urgent-lane"><header><strong>Do pilnego działania</strong><span>${overdue.length} zaległych</span></header><div>${overdue.slice(0, 12).map(({ type, item }) => `<button data-jump="${type}" data-id="${item.id}" data-project-id="${item.project_id || ''}"><span>!</span><b>${item.project_code ? `<em class="project-prefix">${escapeHtml(item.project_code)}</em>` : ''}${escapeHtml(entityLabel(typeToEntity(type), item))}</b><small>${displayDate(item.due_date || item.reminder_date)}</small></button>`).join('')}</div></section>` : ''}
-  <section class="personal-plan-calendar"><header><div><strong>Mój plan manpoweru</strong><small>Wszystkie projekty · najbliższe 14 dni</small></div><span>${(data.planner || []).length} wpisów</span></header><div class="personal-plan-days">${planDays.map(date => { const entries = plannerByDate.get(date) || []; return `<article class="personal-plan-day ${date === today() ? 'today' : ''}"><header><b>${date.slice(8, 10)}</b><small>${new Intl.DateTimeFormat('pl-PL', { weekday: 'short', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`))}</small></header><div>${entries.map(entry => { const label = entry.area_path || entry.area_name || 'Transport'; return `<span class="mini-plan-chip ${entry.activity_type === 'transport' ? 'transport' : entry.work_mode || 'online'}" title="${escapeHtml(`${entry.project_code || ''} · ${label} · ${entry.shift || ''}`)}"><b>${entry.activity_type === 'transport' ? 'T' : entry.work_mode === 'offline' ? 'OFF' : 'ON'}</b><em>${escapeHtml(entry.project_code || '')}</em><span>${escapeHtml(label)}</span><small>${escapeHtml(entry.shift)}</small></span>`; }).join('') || '<i>—</i>'}</div></article>`; }).join('')}</div></section>
+  <section class="personal-plan-calendar"><header><div><strong>Mój plan manpoweru</strong><small>Wszystkie projekty · najbliższe 14 dni</small></div><span>${(data.planner || []).length} wpisów</span></header><div class="personal-plan-days">${planDays.map(date => { const entries = plannerByDate.get(date) || []; return `<article class="personal-plan-day ${date === today() ? 'today' : ''}"><header><b>${date.slice(8, 10)}</b><small>${new Intl.DateTimeFormat('pl-PL', { weekday: 'short', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`))}</small></header><div>${entries.map(entry => { const transport = entry.activity_type === 'transport'; const label = entry.area_path || entry.area_name || 'Transport'; const timing = transport ? `${Number(entry.duration_hours || 0).toFixed(1)} h · ${entry.shift || ''}` : entry.shift || ''; return `<span class="mini-plan-chip ${transport ? 'transport' : entry.work_mode || 'online'}" title="${escapeHtml(`${entry.project_code || ''} · ${label} · ${timing}`)}"><b>${transport ? 'T' : entry.work_mode === 'offline' ? 'OFF' : 'ON'}</b><em>${escapeHtml(entry.project_code || '')}</em><span>${escapeHtml(label)}</span><small>${escapeHtml(timing)}</small></span>`; }).join('') || '<i>—</i>'}</div></article>`; }).join('')}</div></section>
   <div class="workbench-grid compact"><section class="focus-lane"><header><div><strong>Moje aktywne zadania</strong><small>Bez ukończonych podzadań przypisanych tylko do Ciebie</small></div><span>${data.assigned_tasks.filter(item => item.status !== 'Done').length}</span></header>${data.assigned_tasks.filter(item => item.status !== 'Done').slice(0, 20).map(item => personalTaskRow(item)).join('') || '<div class="empty">Nie masz aktywnych zadań.</div>'}</section>
   <section class="focus-lane"><header><div><strong>Najbliższe z mojego planu</strong><small>Wszystkie zaplanowane projekty · następne 14 dni</small></div><span>${upcoming.length}</span></header>${upcoming.slice(0, 20).map(({ type, item, date }) => `<button class="focus-row" data-jump="${type}" data-id="${item.id}" data-project-id="${item.project_id || ''}"><span class="type-dot ${typeToEntity(type)}"></span><span><b>${item.project_code ? `<em class="project-prefix">${escapeHtml(item.project_code)}</em>` : ''}${escapeHtml(entityLabel(typeToEntity(type), item))}</b><small>${escapeHtml(controllerLabel(item))} · ${escapeHtml(badgeText(item.status))}</small></span><time>${date ? displayDate(date) : '→'}</time></button>`).join('') || '<div class="empty">Brak zbliżających się pozycji.</div>'}</section>
   ${summarySection('Otwarte punkty i wzmianki', data.points.filter(item => item.status !== 'Closed'), 'points', item => item.title)}
@@ -2158,10 +2160,10 @@ function renderPlanner() {
   const overlapMap = new Map((data.overlap_reviews || []).map(item => [`${item.user_id}:${item.plan_date}`, item]));
   const summaryMap = new Map((data.summary || []).map(item => [item.plan_date, item]));
   const mode = data.mode_summary || {};
-  $('#content').innerHTML = `<section class="planner-command compact"><div class="planner-controls"><button class="mini planner-shift" data-days="-${state.plannerDays}">←</button><button class="mini" id="planner-today">Dzisiaj</button><button class="mini planner-shift" data-days="${state.plannerDays}">→</button><label>Zakres <select id="planner-days"><option value="7">7 dni</option><option value="14">14 dni</option><option value="28">28 dni</option><option value="31">31 dni</option><option value="90">Kwartał</option><option value="365">Rok</option></select></label>${['project_admin', 'system_admin'].includes(state.me.role) ? '<button class="mini" id="planner-participants">Uczestnicy Plannera</button>' : ''}${data.can_manage_requirements ? `<button class="mini requirement-button ${state.plannerRequirementEdit ? 'active-toggle' : ''}" id="planner-requirements-open" aria-pressed="${state.plannerRequirementEdit}">Zapotrzebowanie${state.requirementDirty.size ? ` · ${state.requirementDirty.size}` : ''}</button><button class="mini" id="planner-config-open">Konfiguracja</button>` : ''}${data.can_manage_time ? `<button class="mini" id="planner-hours-toggle">${state.plannerShowHours ? 'Ukryj sumy godzin' : 'Pokaż sumy godzin'}</button><button class="mini" id="planner-hours-open">Czas pracy i nadgodziny</button>` : ''}<span>${displayDate(days[0])} – ${displayDate(days.at(-1))}</span></div><div class="planner-summary mode-summary"><span><b>${data.summary?.find(item => item.plan_date === today())?.headcount || 0}</b> osób dzisiaj</span><span class="online"><b>${mode.today_online || 0}</b> ON · fabryka<small>${mode.online_planned_days || 0} zaplanowanych dni</small></span><span class="offline"><b>${mode.today_offline || 0}</b> OFF · biuro<small>${mode.offline_planned_days || 0} zaplanowanych dni</small></span><span><b>${data.users.length}</b> uczestników</span>${data.can_manage_time ? `<span><b>${(data.time_details?.users || []).reduce((sum, item) => sum + item.actual_hours + item.credited_hours, 0).toFixed(1)}</b> h w zakresie</span>` : ''}${(data.shift_summary || []).map(item => `<span><b>${item.assignments}</b> ${escapeHtml(item.shift)}</span>`).join('')}</div></section>
+  $('#content').innerHTML = `<section class="planner-command compact"><div class="planner-controls"><button class="mini planner-shift" data-days="-${state.plannerDays}">←</button><button class="mini" id="planner-today">Dzisiaj</button><button class="mini planner-shift" data-days="${state.plannerDays}">→</button><label>Zakres <select id="planner-days"><option value="7">7 dni</option><option value="14">14 dni</option><option value="28">28 dni</option><option value="31">31 dni</option><option value="90">Kwartał</option><option value="365">Rok</option></select></label>${['project_admin', 'system_admin'].includes(state.me.role) ? '<button class="mini" id="planner-participants">Uczestnicy Plannera</button>' : ''}${data.can_manage_requirements ? `<button class="mini requirement-button ${state.plannerRequirementEdit ? 'active-toggle' : ''}" id="planner-requirements-open" aria-pressed="${state.plannerRequirementEdit}">Zapotrzebowanie${state.requirementDirty.size ? ` · ${state.requirementDirty.size}` : ''}</button><button class="mini" id="planner-config-open">Konfiguracja</button>` : ''}${data.can_manage_time ? `<button class="mini" id="planner-hours-toggle">${state.plannerShowHours ? 'Ukryj sumy godzin' : 'Pokaż sumy godzin'}</button><button class="mini" id="planner-hours-open">Czas pracy i nadgodziny</button>` : ''}${canCoordinate() ? `<button class="mini planner-tools-toggle ${state.plannerToolsVisible ? 'active-toggle' : ''}" id="planner-tools-toggle" aria-expanded="${state.plannerToolsVisible}">${state.plannerToolsVisible ? 'Ukryj narzędzia' : 'Pokaż narzędzia'}</button>` : ''}<span>${displayDate(days[0])} – ${displayDate(days.at(-1))}</span></div><div class="planner-summary mode-summary"><span><b>${data.summary?.find(item => item.plan_date === today())?.headcount || 0}</b> osób dzisiaj</span><span class="online"><b>${mode.today_online || 0}</b> ON · fabryka<small>${mode.online_planned_days || 0} zaplanowanych dni</small></span><span class="offline"><b>${mode.today_offline || 0}</b> OFF · biuro i transport<small>${mode.offline_planned_days || 0} zaplanowanych dni</small></span><span><b>${data.users.length}</b> uczestników</span>${data.can_manage_time ? `<span><b>${(data.time_details?.users || []).reduce((sum, item) => sum + item.actual_hours + item.credited_hours, 0).toFixed(1)}</b> h w zakresie</span>` : ''}${(data.shift_summary || []).map(item => `<span><b>${item.assignments}</b> ${escapeHtml(item.shift)}</span>`).join('')}</div></section>
   ${canCoordinate() ? plannerBulkToolbar() : ''}
   ${plannerUnifiedSection(data.users || [], days, entryMap, workMap, summaryMap, data.area_day_summary || [], data.can_manage_requirements, absenceMap, timeMap, holidayMap, data.can_manage_time && state.plannerShowHours, overlapMap, data.annotations || [])}
-  <p class="planner-legend"><span class="mode-dot online"></span> ON · fabryka <span class="mode-dot offline"></span> OFF · biuro <span><b>T</b> transport jako osobna aktywność <span class="other-project-key"></span> plan w innym projekcie <span class="workload-dot"></span> zadania / punkty / status / notatki${data.can_manage_requirements ? '<span class="requirement-shortage-key"></span> obsada poniżej zapotrzebowania' : ''}</p>`;
+  <p class="planner-legend"><span class="mode-dot online"></span> ON · fabryka <span class="mode-dot offline"></span> OFF · biuro <span><b>T</b> transport · czas OFF <span class="other-project-key"></span> plan w innym projekcie <span class="workload-dot"></span> zadania / punkty / status / notatki${data.can_manage_requirements ? '<span class="requirement-shortage-key"></span> obsada poniżej zapotrzebowania' : ''}</p>`;
   $('#planner-days').value = String(state.plannerDays);
   $('#planner-days').addEventListener('change', async event => { state.plannerDays = Number(event.target.value); clearPlannerSelections(false); await reloadPlanner(); });
   $$('.planner-shift').forEach(button => button.addEventListener('click', async () => { state.plannerFrom = addDays(state.plannerFrom, Number(button.dataset.days)); clearPlannerSelections(false); await reloadPlanner(); }));
@@ -2171,6 +2173,7 @@ function renderPlanner() {
   $('#planner-config-open')?.addEventListener('click', () => openConfigPanel('planner'));
   $('#planner-hours-toggle')?.addEventListener('click', () => { state.plannerShowHours = !state.plannerShowHours; renderPlanner(); });
   $('#planner-hours-open')?.addEventListener('click', openPlannerHours);
+  $('#planner-tools-toggle')?.addEventListener('click', () => { state.plannerToolsVisible = !state.plannerToolsVisible; renderPlanner(); });
   if (canCoordinate()) {
     state.plannerSelectionAbort?.abort(); state.plannerSelectionAbort = new AbortController();
     const selectionSignal = state.plannerSelectionAbort.signal;
@@ -2294,8 +2297,9 @@ function plannerClipboardLabel() {
 }
 
 function plannerBulkToolbar() {
-  const hidden = !state.plannerSelection.size && !state.plannerEntrySelection.size;
-  return `<section class="planner-bulk-toolbar ${hidden ? 'hidden' : ''}" id="planner-bulk-toolbar"><span><b id="planner-selection-count">${state.plannerSelection.size}</b> dni · <b id="planner-entry-selection-count">${state.plannerEntrySelection.size}</b> aktywności</span><button type="button" class="primary" id="planner-bulk-add">+ Dodaj obszar pracy</button><button type="button" class="mini" id="planner-bulk-remove">Usuń obszar pracy</button><button type="button" class="mini" id="planner-bulk-copy">Kopiuj zaznaczenie</button><button type="button" class="mini" id="planner-bulk-paste" ${state.plannerClipboard ? '' : 'disabled'}>Wklej ${plannerClipboardLabel()}</button><button type="button" class="mini" id="planner-bulk-approve">✓ Zatwierdź kolizje</button><button type="button" class="mini" id="planner-selection-clear">Wyczyść zaznaczenie</button></section>`;
+  const hidden = !state.plannerToolsVisible;
+  const collisionHidden = plannerSelectionOverlapReviews().length ? '' : 'hidden';
+  return `<section class="planner-bulk-toolbar ${hidden ? 'hidden' : ''}" id="planner-bulk-toolbar"><span><b id="planner-selection-count">${state.plannerSelection.size}</b> dni · <b id="planner-entry-selection-count">${state.plannerEntrySelection.size}</b> aktywności</span><button type="button" class="primary" id="planner-bulk-add">+ Dodaj obszar pracy</button><button type="button" class="mini" id="planner-bulk-transport" title="Skrót: T">+ Transport · T</button><button type="button" class="mini" id="planner-bulk-remove">Usuń obszar pracy</button><button type="button" class="mini" id="planner-bulk-copy">Kopiuj zaznaczenie</button><button type="button" class="mini" id="planner-bulk-paste" ${state.plannerClipboard ? '' : 'disabled'}>Wklej ${plannerClipboardLabel()}</button><button type="button" class="mini ${collisionHidden}" id="planner-bulk-approve">✓ Zatwierdź kolizje</button><button type="button" class="mini" id="planner-selection-clear">Wyczyść zaznaczenie</button></section>`;
 }
 
 function setPlannerCellSelected(cell, selected) {
@@ -2331,25 +2335,36 @@ function selectedPlannerEntries() {
   return (state.planner?.entries || []).filter(entry => selected.has(Number(entry.id)));
 }
 
+function plannerSelectionOverlapReviews() {
+  const keys = new Set(state.plannerSelection);
+  selectedPlannerEntries().forEach(entry => keys.add(plannerSelectionKey(entry.user_id, entry.plan_date)));
+  return (state.planner?.overlap_reviews || []).filter(item => item.status === 'pending' && keys.has(plannerSelectionKey(item.user_id, item.plan_date)));
+}
+
 function updatePlannerBulkCount() {
   const dayCount = state.plannerSelection.size; const entryCount = state.plannerEntrySelection.size;
-  $('#planner-bulk-toolbar')?.classList.toggle('hidden', !dayCount && !entryCount);
   if ($('#planner-selection-count')) $('#planner-selection-count').textContent = String(dayCount);
   if ($('#planner-entry-selection-count')) $('#planner-entry-selection-count').textContent = String(entryCount);
-  ['#planner-bulk-add', '#planner-bulk-approve'].forEach(selector => { const button = $(selector); if (button) button.disabled = !dayCount; });
+  ['#planner-bulk-add', '#planner-bulk-transport'].forEach(selector => { const button = $(selector); if (button) button.disabled = !dayCount; });
+  if ($('#planner-bulk-approve')) $('#planner-bulk-approve').classList.toggle('hidden', !plannerSelectionOverlapReviews().length);
   if ($('#planner-bulk-remove')) $('#planner-bulk-remove').disabled = !dayCount && !entryCount;
   if ($('#planner-bulk-copy')) $('#planner-bulk-copy').disabled = !dayCount && !entryCount;
   if ($('#planner-bulk-paste')) { $('#planner-bulk-paste').disabled = !dayCount || !state.plannerClipboard; $('#planner-bulk-paste').textContent = `Wklej ${plannerClipboardLabel()}`; }
 }
 
+function plannerDefaultTransportHours() {
+  const configured = Number(state.config.settings?.planner_offline_hours || 8);
+  return Number.isFinite(configured) && configured > 0 ? Math.min(24, configured) : 8;
+}
+
 function plannerEntryPayload(entry) {
   const activity = entry.activity_type || (entry.transport_mode === 'transport_only' ? 'transport' : 'work');
-  return { controller_group_id: Number(entry.controller_group_id) || null, activity_type: activity, work_mode: activity === 'work' ? (entry.work_mode || 'online') : '', shift: entry.shift || 'Dzień', transport_mode: activity === 'transport' ? 'transport_only' : 'none', note: entry.note || '' };
+  return { controller_group_id: Number(entry.controller_group_id) || null, activity_type: activity, work_mode: activity === 'work' ? (entry.work_mode || 'online') : 'offline', shift: entry.shift || 'Dzień', transport_mode: activity === 'transport' ? 'transport_only' : 'none', duration_hours: activity === 'transport' ? Math.max(0.25, Number(entry.duration_hours) || plannerDefaultTransportHours()) : 0, note: entry.note || '' };
 }
 
 function uniquePlannerEntries(entries) {
   const seen = new Set();
-  return (entries || []).map(plannerEntryPayload).filter(entry => { const key = `${entry.activity_type}:${entry.controller_group_id || 0}:${entry.work_mode}:${entry.shift}:${entry.note}`; if (seen.has(key)) return false; seen.add(key); return true; });
+  return (entries || []).map(plannerEntryPayload).filter(entry => { const key = `${entry.activity_type}:${entry.controller_group_id || 0}:${entry.work_mode}:${entry.shift}:${entry.duration_hours}:${entry.note}`; if (seen.has(key)) return false; seen.add(key); return true; });
 }
 
 function plannerDayRequest(target, entries, day = plannerDaySnapshot(target.userId, target.date)) {
@@ -2380,6 +2395,23 @@ async function addWorkToPlannerSelection() {
   const mixed = usable.some(target => plannerDaySnapshot(target.userId, target.date).entries.some(item => item.transport_mode !== 'transport_only' && item.work_mode !== entry.work_mode));
   if (mixed && !await uiConfirm('Jednoczesny plan ONLINE i OFFLINE', 'Co najmniej jeden zaznaczony dzień będzie zawierał oba tryby pracy.', 'Zapisz oba tryby', true)) return;
   await savePlannerBulkRequests(usable.map(target => { const day = plannerDaySnapshot(target.userId, target.date); return plannerDayRequest(target, [...day.entries, entry], day); }), 'Dodano obszar pracy');
+}
+
+async function addTransportToPlannerSelection() {
+  const targets = selectedPlannerTargets();
+  if (!targets.length) return toast('Zaznacz co najmniej jeden dzień dla transportu', true);
+  const result = await uiForm({ title: `Dodaj transport do ${targets.length} dni`, description: 'Transport jest oznaczany skrótem T i w kalkulacji czasu liczy się jako praca OFF.', submitLabel: 'Dodaj transport', fields: [
+    { name: 'controller_group_id', label: 'Obszar docelowy', type: 'select', value: '', options: [{ value: '', label: 'Bez obszaru · transport ogólny' }, ...hierarchyGroupOptions()] },
+    { name: 'duration_hours', label: 'Czas transportu [h]', type: 'number', value: plannerDefaultTransportHours(), min: 0.25, max: 24, step: 0.25, required: true, hint: 'Od 0,25 do 24 godzin.' },
+    { name: 'shift', label: 'Zmiana', type: 'select', value: options('shift')[0] || 'Dzień', options: options('shift') },
+    { name: 'note', label: 'Trasa / notatka', full: true }
+  ] });
+  if (!result) return;
+  const durationHours = Number(result.duration_hours);
+  if (!Number.isFinite(durationHours) || durationHours < 0.25 || durationHours > 24) return toast('Czas transportu musi wynosić od 0,25 do 24 godzin', true);
+  const entry = { controller_group_id: Number(result.controller_group_id) || null, activity_type: 'transport', work_mode: 'offline', shift: result.shift, transport_mode: 'transport_only', duration_hours: durationHours, note: result.note };
+  const usable = targets.filter(target => !plannerDaySnapshot(target.userId, target.date).absence_type);
+  await savePlannerBulkRequests(usable.map(target => { const day = plannerDaySnapshot(target.userId, target.date); return plannerDayRequest(target, [...day.entries, entry], day); }), 'Dodano transport');
 }
 
 async function removeWorkFromPlannerSelection() {
@@ -2445,12 +2477,12 @@ function handlePlannerClipboardShortcut(event) {
   const key = event.key.toLowerCase();
   if ((event.ctrlKey || event.metaKey) && key === 'c' && (state.plannerSelection.size || state.plannerEntrySelection.size)) { event.preventDefault(); copyPlannerSelection(); }
   if ((event.ctrlKey || event.metaKey) && key === 'v' && state.plannerSelection.size && state.plannerClipboard) { event.preventDefault(); pastePlannerSelection(); }
+  if (!event.ctrlKey && !event.metaKey && key === 't' && state.plannerSelection.size) { event.preventDefault(); addTransportToPlannerSelection(); }
   if (event.key === 'Delete' && (state.plannerSelection.size || state.plannerEntrySelection.size)) { event.preventDefault(); deletePlannerSelection(); }
 }
 
 async function approvePlannerSelectionOverlaps() {
-  const keys = new Set(selectedPlannerTargets().map(target => plannerSelectionKey(target.userId, target.date)));
-  const reviews = (state.planner.overlap_reviews || []).filter(item => item.status === 'pending' && keys.has(plannerSelectionKey(item.user_id, item.plan_date)));
+  const reviews = plannerSelectionOverlapReviews();
   if (!reviews.length) return toast('W zaznaczeniu nie ma kolizji oczekujących na decyzję');
   try {
     for (let index = 0; index < reviews.length; index += 15) await Promise.all(reviews.slice(index, index + 15).map(item => api('/api/planner/overlaps/action', { method: 'POST', body: JSON.stringify({ user_id: item.user_id, plan_date: item.plan_date, action: 'approve' }) })));
@@ -2460,6 +2492,7 @@ async function approvePlannerSelectionOverlaps() {
 
 function bindPlannerBulkToolbar() {
   $('#planner-bulk-add')?.addEventListener('click', addWorkToPlannerSelection);
+  $('#planner-bulk-transport')?.addEventListener('click', addTransportToPlannerSelection);
   $('#planner-bulk-remove')?.addEventListener('click', removeWorkFromPlannerSelection);
   $('#planner-bulk-copy')?.addEventListener('click', copyPlannerSelection);
   $('#planner-bulk-paste')?.addEventListener('click', pastePlannerSelection);
@@ -2484,12 +2517,12 @@ function plannerInlineRequirementRows(days) {
   const actuals = new Map();
   const plannerSource = state.view === 'calendar' ? state.calendarPlanner : state.planner;
   for (const entry of plannerSource?.entries || []) {
-    if (entry.activity_type === 'transport' || entry.transport_mode === 'transport_only') continue;
+    const transport = entry.activity_type === 'transport' || entry.transport_mode === 'transport_only';
     const target = groupById.get(Number(entry.controller_group_id)); if (!target) continue;
     for (const group of groups) {
       const path = group.path_names || []; const targetPath = target.path_names || [];
       if (path.length > targetPath.length || path.some((name, index) => name !== targetPath[index])) continue;
-      const key = `${group.id}:${entry.plan_date}:${entry.work_mode || 'online'}`;
+      const key = `${group.id}:${entry.plan_date}:${transport ? 'offline' : entry.work_mode || 'online'}`;
       if (!actuals.has(key)) actuals.set(key, new Set());
       actuals.get(key).add(Number(entry.user_id));
     }
@@ -2507,7 +2540,7 @@ function plannerCell(user, date, entries, work, absence, timeDetail, holiday, sh
   const weekend = [0, 6].includes(new Date(`${date}T12:00:00Z`).getUTCDay());
   const editable = canCoordinate() && (Number(user.planner_enabled) || date === today());
   let overlapPlaced = false;
-  const chips = entries.map(entry => { const transport = entry.activity_type === 'transport' || entry.transport_mode === 'transport_only'; const current = entry.is_current_project !== false; const selectedEntry = current && state.plannerEntrySelection.has(Number(entry.id)); const showOverlap = current && overlap && !overlapPlaced; if (showOverlap) overlapPlaced = true; const collision = showOverlap ? `<span class="planner-overlap-actions ${overlap.status}" title="Nakładanie się projektów: ${escapeHtml(overlap.other_project_codes || 'inny projekt')}">${overlap.status === 'approved' ? '<b aria-label="Kolizja zatwierdzona">✓</b>' : overlap.status === 'rejected' ? '<b aria-label="Kolizja odrzucona">×</b>' : canCoordinate() ? `<button type="button" data-overlap-action="approve" data-user-id="${user.id}" data-date="${date}" aria-label="Zatwierdź kolizję">✓</button><button type="button" data-overlap-action="reject" data-user-id="${user.id}" data-date="${date}" aria-label="Odrzuć plan">×</button>` : '<b>⚠</b>'}</span>` : ''; return `<span class="plan-chip ${transport ? 'transport-only' : entry.work_mode} ${current ? '' : 'other-project'} ${selectedEntry ? 'entry-selected' : ''} ${showOverlap ? `has-overlap ${overlap.status}` : ''}" title="${showOverlap ? `Nakładanie się projektów: ${escapeHtml(overlap.other_project_codes || 'inny projekt')}` : ''}" data-entry-id="${entry.id}" data-current-project="${current ? 1 : 0}" data-project-id="${entry.project_id || state.me.current_project?.id}" draggable="${editable && current ? 'true' : 'false'}">${transport ? '<b class="mode-label">T</b>' : `<b class="mode-label">${entry.work_mode === 'offline' ? 'OFF' : 'ON'}</b>`}<span>${current ? '' : `<em>${escapeHtml(entry.project_code)} · </em>`}${entry.area_path ? escapeHtml(entry.area_path) : entry.area_name ? escapeHtml(entry.area_name) : transport ? 'Transport' : 'Ogólne'}</span>${entry.note ? `<span class="plan-note" data-note="${escapeHtml(entry.note)}" title="${escapeHtml(entry.note)}" tabindex="0" aria-label="Notatka: ${escapeHtml(entry.note)}">i</span>` : ''}${collision}<small>${escapeHtml(entry.shift)}</small></span>`; }).join('');
+  const chips = entries.map(entry => { const transport = entry.activity_type === 'transport' || entry.transport_mode === 'transport_only'; const current = entry.is_current_project !== false; const selectedEntry = current && state.plannerEntrySelection.has(Number(entry.id)); const showOverlap = current && overlap && !overlapPlaced; if (showOverlap) overlapPlaced = true; const collision = showOverlap ? `<span class="planner-overlap-actions ${overlap.status}" title="Nakładanie się projektów: ${escapeHtml(overlap.other_project_codes || 'inny projekt')}">${overlap.status === 'approved' ? '<b aria-label="Kolizja zatwierdzona">✓</b>' : overlap.status === 'rejected' ? '<b aria-label="Kolizja odrzucona">×</b>' : canCoordinate() ? `<button type="button" data-overlap-action="approve" data-user-id="${user.id}" data-date="${date}" aria-label="Zatwierdź kolizję">✓</button><button type="button" data-overlap-action="reject" data-user-id="${user.id}" data-date="${date}" aria-label="Odrzuć plan">×</button>` : '<b>⚠</b>'}</span>` : ''; const duration = transport ? `${Number(entry.duration_hours || 0).toFixed(1)} h · ` : ''; return `<span class="plan-chip ${transport ? 'transport-only' : entry.work_mode} ${current ? '' : 'other-project'} ${selectedEntry ? 'entry-selected' : ''} ${showOverlap ? `has-overlap ${overlap.status}` : ''}" title="${showOverlap ? `Nakładanie się projektów: ${escapeHtml(overlap.other_project_codes || 'inny projekt')}` : transport ? `Transport liczony jako OFF · ${duration}${escapeHtml(entry.shift)}` : ''}" data-entry-id="${entry.id}" data-current-project="${current ? 1 : 0}" data-project-id="${entry.project_id || state.me.current_project?.id}" draggable="${editable && current ? 'true' : 'false'}">${transport ? '<b class="mode-label">T</b>' : `<b class="mode-label">${entry.work_mode === 'offline' ? 'OFF' : 'ON'}</b>`}<span>${current ? '' : `<em>${escapeHtml(entry.project_code)} · </em>`}${entry.area_path ? escapeHtml(entry.area_path) : entry.area_name ? escapeHtml(entry.area_name) : transport ? 'Transport' : 'Ogólne'}</span>${entry.note ? `<span class="plan-note" data-note="${escapeHtml(entry.note)}" title="${escapeHtml(entry.note)}" tabindex="0" aria-label="Notatka: ${escapeHtml(entry.note)}">i</span>` : ''}${collision}<small>${duration}${escapeHtml(entry.shift)}</small></span>`; }).join('');
   const workload = work && (work.tasks || work.points || work.statuses || work.notes) ? `<span class="workload" title="Zadania / otwarte punkty / status / notatki">${work.tasks}/${work.points}/${work.statuses}/${work.notes}</span>` : '';
   const absenceChip = absence ? `<span class="absence-chip ${absence.absence_type}" draggable="${editable ? 'true' : 'false'}"><b>${absence.absence_type === 'vacation' ? 'URLOP' : 'WOLNE'}</b><small>${escapeHtml(absence.note || '')}</small></span>` : '';
   const hours = showTime && timeDetail ? `<span class="planner-hours-chip" title="Dzisiaj: ${Number(timeDetail.actual_hours + timeDetail.credited_hours).toFixed(1)} h · narastająco bez mnożnika: ${Number(timeDetail.overtime_raw_cumulative || 0).toFixed(1)} h · z mnożnikiem: ${Number(timeDetail.overtime_weighted_cumulative || 0).toFixed(1)} h"><b>${Number(timeDetail.actual_hours + timeDetail.credited_hours).toFixed(1)}h</b><i>Σ ${Number(timeDetail.overtime_raw_cumulative || 0).toFixed(1)} / ${Number(timeDetail.overtime_weighted_cumulative || 0).toFixed(1)}</i></span>` : '';
@@ -2555,14 +2588,19 @@ async function reloadPlanner() {
 
 function plannerEntryRow(entry = {}) {
   const activity = entry.activity_type || (entry.transport_mode === 'transport_only' ? 'transport' : 'work');
-  return `<div class="planner-entry-row"><select data-plan-area>${selectOptions(hierarchyGroupOptions(), entry.controller_group_id, 'Bez obszaru')}</select><select data-plan-activity>${selectOptions([{ value: 'work', label: 'Praca' }, { value: 'transport', label: 'Transport' }], activity, null)}</select><select data-plan-shift>${selectOptions(options('shift'), entry.shift || 'Dzień', null)}</select><select data-plan-mode ${activity === 'transport' ? 'disabled' : ''}>${activity === 'transport' ? '<option value="">—</option>' : selectOptions([{ value: 'online', label: 'Online · fabryka' }, { value: 'offline', label: 'Offline · biuro' }], entry.work_mode || 'online', null)}</select><input data-plan-note value="${escapeHtml(entry.note || '')}" placeholder="Notatka (opcjonalnie)"><button type="button" class="mini remove-plan-entry" aria-label="Usuń aktywność">×</button></div>`;
+  const modeControl = activity === 'transport'
+    ? `<input data-plan-duration type="number" min="0.25" max="24" step="0.25" value="${escapeHtml(Number(entry.duration_hours || plannerDefaultTransportHours()))}" placeholder="Czas transportu [h]" aria-label="Czas transportu w godzinach" title="Transport jest liczony jako czas OFF">`
+    : `<select data-plan-mode aria-label="Tryb pracy">${selectOptions([{ value: 'online', label: 'Online · fabryka' }, { value: 'offline', label: 'Offline · biuro' }], entry.work_mode || 'online', null)}</select>`;
+  return `<div class="planner-entry-row"><select data-plan-area>${selectOptions(hierarchyGroupOptions(), entry.controller_group_id, 'Bez obszaru')}</select><select data-plan-activity>${selectOptions([{ value: 'work', label: 'Praca' }, { value: 'transport', label: 'Transport · T' }], activity, null)}</select><select data-plan-shift>${selectOptions(options('shift'), entry.shift || 'Dzień', null)}</select><span class="planner-entry-mode">${modeControl}</span><input data-plan-note value="${escapeHtml(entry.note || '')}" placeholder="Notatka (opcjonalnie)"><button type="button" class="mini remove-plan-entry" aria-label="Usuń aktywność">×</button></div>`;
 }
 
 function bindPlannerEntryRows() {
   $$('.remove-plan-entry').forEach(button => button.onclick = () => button.closest('.planner-entry-row').remove());
   $$('[data-plan-activity]').forEach(select => select.onchange = () => {
-    const mode = select.closest('.planner-entry-row').querySelector('[data-plan-mode]'); const transport = select.value === 'transport';
-    mode.disabled = transport; mode.innerHTML = transport ? '<option value="">—</option>' : selectOptions([{ value: 'online', label: 'Online · fabryka' }, { value: 'offline', label: 'Offline · biuro' }], 'online', null);
+    const mode = select.closest('.planner-entry-row').querySelector('.planner-entry-mode'); const transport = select.value === 'transport';
+    mode.innerHTML = transport
+      ? `<input data-plan-duration type="number" min="0.25" max="24" step="0.25" value="${escapeHtml(plannerDefaultTransportHours())}" placeholder="Czas transportu [h]" aria-label="Czas transportu w godzinach" title="Transport jest liczony jako czas OFF">`
+      : `<select data-plan-mode aria-label="Tryb pracy">${selectOptions([{ value: 'online', label: 'Online · fabryka' }, { value: 'offline', label: 'Offline · biuro' }], 'online', null)}</select>`;
   });
 }
 
@@ -2607,7 +2645,8 @@ function updatePlannerDayKind() {
 async function savePlannerCell(event) {
   event.preventDefault(); if (!state.plannerCell) return;
   const absenceType = $('#planner-day-kind').value === 'work' ? '' : $('#planner-day-kind').value;
-  const entries = absenceType ? [] : $$('#planner-entry-list .planner-entry-row').map(row => { const activity = row.querySelector('[data-plan-activity]').value; return { controller_group_id: Number(row.querySelector('[data-plan-area]').value) || null, activity_type: activity, work_mode: activity === 'work' ? row.querySelector('[data-plan-mode]').value : '', shift: row.querySelector('[data-plan-shift]').value, transport_mode: activity === 'transport' ? 'transport_only' : 'none', note: row.querySelector('[data-plan-note]').value }; });
+  const entries = absenceType ? [] : $$('#planner-entry-list .planner-entry-row').map(row => { const activity = row.querySelector('[data-plan-activity]').value; return { controller_group_id: Number(row.querySelector('[data-plan-area]').value) || null, activity_type: activity, work_mode: activity === 'work' ? row.querySelector('[data-plan-mode]').value : 'offline', shift: row.querySelector('[data-plan-shift]').value, transport_mode: activity === 'transport' ? 'transport_only' : 'none', duration_hours: activity === 'transport' ? Number(row.querySelector('[data-plan-duration]').value) : 0, note: row.querySelector('[data-plan-note]').value }; });
+  if (entries.some(entry => entry.activity_type === 'transport' && (!Number.isFinite(entry.duration_hours) || entry.duration_hours < 0.25 || entry.duration_hours > 24))) return toast('Czas transportu musi wynosić od 0,25 do 24 godzin', true);
   if (!await confirmMixedPlannerModes(state.plannerCell.userId, state.plannerCell.date, entries)) return;
   const previous = plannerDaySnapshot(state.plannerCell.userId, state.plannerCell.date);
   try { await api('/api/planner/day', { method: 'PUT', body: JSON.stringify({ user_id: state.plannerCell.userId, plan_date: state.plannerCell.date, entries, absence_type: absenceType, absence_note: $('#planner-absence-note').value, actual_hours_adjustment: previous.actual_hours_adjustment, overtime_raw_adjustment: previous.overtime_raw_adjustment, overtime_weighted_adjustment: previous.overtime_weighted_adjustment, work_start_time: $('#planner-work-start').value, work_end_time: $('#planner-work-end').value, overtime_raw_balance_override: $('#planner-raw-balance').value === '' ? null : Number($('#planner-raw-balance').value), overtime_weighted_balance_override: $('#planner-weighted-balance').value === '' ? null : Number($('#planner-weighted-balance').value), adjustment_note: $('#planner-adjustment-note').value }) }); $('#planner-dialog').close(); toast('Plan dnia i korekty czasu zostały zapisane'); await reloadPlanner(); } catch (error) { toast(error.message, true); }
@@ -3170,13 +3209,16 @@ function showPlannerContext(event, userId, date, entryId = null) {
   }
   updatePlannerBulkCount();
   const selectedLabel = state.plannerEntrySelection.size ? `${state.plannerEntrySelection.size} aktywności` : `${state.plannerSelection.size} dni`;
-  menu.innerHTML = `<section><b>Zaznaczenie · ${selectedLabel}</b><button class="danger-text" data-action="remove-selection">Usuń obszar pracy <small>Delete</small></button><button data-action="copy-selection">Kopiuj zaznaczenie <small>Ctrl+C</small></button>${state.plannerClipboard && state.plannerSelection.size ? `<button data-action="paste-selection">Wklej ${plannerClipboardLabel()} <small>Ctrl+V</small></button>` : ''}<button data-action="approve-selection">Zatwierdź kolizje</button><button data-action="clear-selection">Wyczyść zaznaczenie</button></section><section><b>Edycja</b><button data-action="edit">Edytuj plan dnia</button><button data-action="assign">Przypisz zadania, status lub punkty</button>${entry ? '<button data-action="repeat-entry">Powiel aktywność na wiele dni…</button>' : ''}<button data-action="repeat-day">Powiel cały dzień na wiele dni…</button>${state.plannerClipboard && state.plannerClipboard.kind !== 'days' ? '<button data-action="paste-range">Wklej na zakres dni…</button>' : ''}</section><section class="context-danger"><b>Dzień</b><button class="danger-text" data-action="clear">Wyczyść cały dzień</button></section>`;
+  const approveCollision = plannerSelectionOverlapReviews().length ? '<button data-action="approve-selection">Zatwierdź kolizje</button>' : '';
+  const addTransport = state.plannerSelection.size ? '<button data-action="add-transport">Dodaj transport <small>T</small></button>' : '';
+  menu.innerHTML = `<section><b>Zaznaczenie · ${selectedLabel}</b>${addTransport}<button class="danger-text" data-action="remove-selection">Usuń obszar pracy <small>Delete</small></button><button data-action="copy-selection">Kopiuj zaznaczenie <small>Ctrl+C</small></button>${state.plannerClipboard && state.plannerSelection.size ? `<button data-action="paste-selection">Wklej ${plannerClipboardLabel()} <small>Ctrl+V</small></button>` : ''}${approveCollision}<button data-action="clear-selection">Wyczyść zaznaczenie</button></section><section><b>Edycja</b><button data-action="edit">Edytuj plan dnia</button><button data-action="assign">Przypisz zadania, status lub punkty</button>${entry ? '<button data-action="repeat-entry">Powiel aktywność na wiele dni…</button>' : ''}<button data-action="repeat-day">Powiel cały dzień na wiele dni…</button>${state.plannerClipboard && state.plannerClipboard.kind !== 'days' ? '<button data-action="paste-range">Wklej na zakres dni…</button>' : ''}</section><section class="context-danger"><b>Dzień</b><button class="danger-text" data-action="clear">Wyczyść cały dzień</button></section>`;
   menu.style.left = `${Math.min(event.clientX, innerWidth - 300)}px`; menu.style.top = `${Math.max(8, Math.min(event.clientY, innerHeight - 430))}px`; menu.classList.remove('hidden');
   menu.querySelectorAll('button').forEach(button => button.addEventListener('click', async () => {
     menu.classList.add('hidden');
     const daySnapshot = plannerDaySnapshot(userId, date);
     try {
       if (button.dataset.action === 'copy-selection') return copyPlannerSelection();
+      if (button.dataset.action === 'add-transport') return addTransportToPlannerSelection();
       if (button.dataset.action === 'paste-selection') return pastePlannerSelection();
       if (button.dataset.action === 'remove-selection') return removeWorkFromPlannerSelection();
       if (button.dataset.action === 'approve-selection') return approvePlannerSelectionOverlaps();

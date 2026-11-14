@@ -675,11 +675,13 @@ test('V4 isolates projects, supports hierarchy, immutable IDs, elements, links a
       assert.equal(repository.tasks('all', admin).length, countBefore + 1);
       repository.restoreProjectBackup(backup);
       assert.equal(repository.tasks('all', admin).length, countBefore);
-      const legacyBackup = { ...backup, version: 14 };
+      const legacyBackup = structuredClone({ ...backup, version: 14 });
       delete legacyBackup.schema;
+      legacyBackup.tables.planner_entries = legacyBackup.tables.planner_entries.map(({ duration_hours, ...entry }) => entry);
       repository.saveTask(null, { controller: 'HB522', title: 'Temporary legacy restore record' }, admin);
       repository.restoreProjectBackup(legacyBackup);
       assert.equal(repository.tasks('all', admin).length, countBefore);
+      assert.equal(repository.projectBackup().tables.planner_entries.filter(item => item.transport_mode === 'transport_only').every(item => item.duration_hours > 0), true);
     });
 
     repository.withProject(2, () => {
@@ -1095,7 +1097,7 @@ test('V9 supports guarded duplication, comments, pushes, calendar ranges and wor
       repository.savePlannerDay({ user_id: worker.id, plan_date: '2026-10-09', absence_type: 'vacation', absence_note: 'Urlop' }, admin);
       repository.savePlannerDay({ user_id: worker.id, plan_date: '2026-10-10', absence_type: 'time_off', absence_note: 'Odbiór nadgodzin' }, admin);
       repository.savePlannerDay({
-        user_id: worker.id, plan_date: '2026-10-11', entries: [{ controller_group_id: root.id, work_mode: 'online', shift: 'Dzień', transport_mode: 'transport_only' }]
+        user_id: worker.id, plan_date: '2026-10-11', entries: [{ activity_type: 'transport', controller_group_id: root.id, shift: 'Dzień', transport_mode: 'transport_only', duration_hours: 3.5 }]
       }, admin);
       repository.setPlannerRequirementsBatch({ items: [{
         plan_date: '2026-10-08', controller_group_id: root.id, online_required: 2, offline_required: 1
@@ -1103,10 +1105,11 @@ test('V9 supports guarded duplication, comments, pushes, calendar ranges and wor
       const managerPlanner = repository.planner('2026-10-08', '2026-10-11', admin);
       const workerPlanner = repository.planner('2026-10-08', '2026-10-11', worker);
       const workerHours = managerPlanner.time_details.users.find(item => item.user_id === worker.id);
-      assert.equal(workerHours.actual_hours, 10.5);
+      assert.equal(workerHours.actual_hours, 14);
       assert.equal(workerHours.credited_hours, 8);
-      assert.equal(workerHours.overtime_balance, 13);
-      assert.equal(managerPlanner.time_details.details.find(item => item.user_id === worker.id && item.date === '2026-10-11').actual_hours, 0);
+      assert.equal(workerHours.overtime_balance, 20);
+      assert.equal(managerPlanner.time_details.details.find(item => item.user_id === worker.id && item.date === '2026-10-11').actual_hours, 3.5);
+      assert.equal(managerPlanner.summary.find(item => item.plan_date === '2026-10-11').offline_headcount, 1);
       assert.equal(managerPlanner.area_day_summary.find(item => item.id === root.id).days[0].online_required, 2);
       assert.equal(workerPlanner.requirements.length, 0);
       assert.equal(workerPlanner.time_details, null);

@@ -77,7 +77,15 @@ export function prepareDatabase(db, { seedDemo, demoLimit = 100 }) {
   runMigration(db, '049-meeting-priority-p1-p4', () => migrateMeetingPrioritiesToP1P4(db));
   runMigration(db, '050-communication-workflow', () => migrateCommunicationWorkflow(db));
   runMigration(db, '051-professional-themes', () => migrateProfessionalThemes(db));
+  runMigration(db, '052-planner-transport-duration', () => migratePlannerTransportDuration(db));
   return defaultProjectId;
+}
+
+function migratePlannerTransportDuration(db) {
+  ensureColumn(db, 'planner_entries', 'duration_hours', 'REAL NOT NULL DEFAULT 0');
+  const offlineHours = Number(db.prepare("SELECT value FROM system_settings WHERE key='planner_offline_hours'").get()?.value || 8);
+  db.prepare("UPDATE planner_entries SET duration_hours=? WHERE transport_mode='transport_only' AND duration_hours<=0")
+    .run(Number.isFinite(offlineHours) && offlineHours > 0 ? Math.min(24, offlineHours) : 8);
 }
 
 function migrateProfessionalThemes(db) {

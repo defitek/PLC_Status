@@ -107,6 +107,82 @@ test('uproszczona nawigacja łączy pracę, plan i komunikację', async ({ page 
   await expectViewportContained(page);
 });
 
+test('nagłówki, wyszukiwarka i karty Centrum wiadomości pozostają kompaktowe', async ({ page }) => {
+  const searchAlignment = await page.evaluate(() => {
+    const input = document.querySelector('#global-search').getBoundingClientRect();
+    const icon = document.querySelector('.global-search-icon').getBoundingClientRect();
+    const shortcut = document.querySelector('.global-search>kbd');
+    const kbd = shortcut.getBoundingClientRect();
+    return {
+      iconOffset: Math.abs((input.top + input.height / 2) - (icon.top + icon.height / 2)),
+      shortcutVisible: getComputedStyle(shortcut).display !== 'none',
+      shortcutOffset: Math.abs((input.top + input.height / 2) - (kbd.top + kbd.height / 2)),
+      headerHeight: document.querySelector('.pagehead').getBoundingClientRect().height
+    };
+  });
+  expect(searchAlignment.iconOffset).toBeLessThanOrEqual(1.5);
+  if (searchAlignment.shortcutVisible) expect(searchAlignment.shortcutOffset).toBeLessThanOrEqual(1.5);
+  expect(searchAlignment.headerHeight).toBeLessThanOrEqual(46);
+
+  await openView(page, 'announcements');
+  const summaryCards = page.locator('.message-center-summary>article');
+  await expect(summaryCards).toHaveCount(4);
+  const positions = await summaryCards.evaluateAll(cards => cards.map(card => {
+    const box = card.getBoundingClientRect(); return { top: box.top, height: box.height };
+  }));
+  if ((await page.viewportSize()).width >= 1100) {
+    expect(Math.max(...positions.map(item => item.top)) - Math.min(...positions.map(item => item.top))).toBeLessThanOrEqual(2);
+    expect(Math.max(...positions.map(item => item.height))).toBeLessThanOrEqual(62);
+  }
+  await expectViewportContained(page);
+});
+
+test('zakładki Priorytetów są spójne, a samotna akcja mieści się w belce zakładek', async ({ page }) => {
+  await openView(page, 'tasks');
+  await page.getByRole('button', { name: 'Kamienie milowe', exact: true }).click();
+  await expect(page.locator('.workspace-tabs [data-module-primary-action]')).toHaveText('+ Nowy kamień milowy');
+  await expect(page.locator('.module-action-bar')).toHaveCount(0);
+  const workspaceStyle = await page.locator('.workspace-tabs button.active').evaluate(element => {
+    const style = getComputedStyle(element); return { background: style.backgroundColor, color: style.color, height: element.getBoundingClientRect().height };
+  });
+  await openView(page, 'operations');
+  const operationsStyle = await page.locator('.operations-tabs button.active').evaluate(element => {
+    const style = getComputedStyle(element); return { background: style.backgroundColor, color: style.color, height: element.getBoundingClientRect().height };
+  });
+  expect(operationsStyle.background).toBe(workspaceStyle.background);
+  expect(operationsStyle.color).toBe(workspaceStyle.color);
+  expect(Math.abs(operationsStyle.height - workspaceStyle.height)).toBeLessThanOrEqual(2);
+});
+
+test('Planner ukrywa narzędzia, dodaje transport skrótem T i liczy jego czas', async ({ page }) => {
+  await page.evaluate(async () => {
+    const users = await fetch('/api/users').then(response => response.json());
+    const participant = users.find(user => user.system_role !== 'system_admin') || users[0];
+    if (!participant) throw new Error('Brak użytkownika do testu Plannera');
+    const response = await fetch(`/api/users/${participant.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project_active: 1, planner_enabled: 1 }) });
+    if (!response.ok) throw new Error((await response.json()).error || 'Nie udało się włączyć uczestnika Plannera');
+  });
+  await openView(page, 'planner');
+  await expect(page.locator('#planner-bulk-toolbar')).toBeHidden();
+  await page.locator('#planner-tools-toggle').click();
+  await expect(page.locator('#planner-bulk-toolbar')).toBeVisible();
+  await expect(page.locator('#planner-bulk-approve')).toBeHidden();
+
+  const cell = page.locator('.planner-cell[data-editable="1"]').first();
+  const userId = await cell.getAttribute('data-user-id');
+  const date = await cell.getAttribute('data-date');
+  await cell.click();
+  await page.keyboard.press('t');
+  await expect(page.locator('#action-title')).toHaveText(/Dodaj transport/);
+  await page.locator('#action-fields [name="duration_hours"]').fill('2.5');
+  await page.locator('#action-fields [name="note"]').fill('Transport testowy');
+  await page.locator('#action-submit').click();
+  await expect(page.locator('#action-dialog')).not.toBeVisible();
+  const savedCell = page.locator(`.planner-cell[data-user-id="${userId}"][data-date="${date}"]`);
+  await expect(savedCell.locator('.plan-chip.transport-only:has(.plan-note[data-note="Transport testowy"])')).toContainText('2.5 h');
+  await expect(page.locator('#planner-bulk-approve')).toBeHidden();
+});
+
 test('menedżer motywów udostępnia dziesięć profesjonalnych palet', async ({ page }) => {
   const palettes = {
     'industrial-pro': ['#081B30', '#0057C8', '#74C7F8', '#41546A', '#F8FAFC'],

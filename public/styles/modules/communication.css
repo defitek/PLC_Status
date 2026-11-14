@@ -13,25 +13,34 @@
   border-radius:12px;
   background:color-mix(in srgb,var(--surface) 86%,transparent);
 }
-.global-search::before {
+.global-search-icon {
   position:absolute;
   z-index:1;
-  top:7px;
+  top:50%;
   left:12px;
-  content:'⌕';
+  display:grid;
+  place-items:center;
+  width:18px;
+  height:18px;
   color:var(--muted);
-  font-size:20px;
+  transform:translateY(-50%);
+  pointer-events:none;
 }
+.global-search-icon svg { width:17px; height:17px; fill:none; stroke:currentColor; stroke-width:1.9; stroke-linecap:round; }
 .global-search>kbd {
   position:absolute;
-  top:9px;
+  top:50%;
   right:10px;
+  display:grid;
+  place-items:center;
+  min-height:22px;
   padding:2px 6px;
   border:1px solid var(--line);
   border-radius:6px;
   background:var(--panel-alt);
   color:var(--muted);
   font:11px/1.4 inherit;
+  transform:translateY(-50%);
 }
 .global-search-results {
   position:absolute;
@@ -138,7 +147,7 @@
 .message-center-row.snoozed,
 .message-center-announcement.snoozed { opacity:.72; }
 .snoozed-section { grid-column:1/-1; }
-.digest-preference { min-width:min(100%,330px)!important; }
+.digest-preference { min-width:0!important; }
 .digest-preference label { display:flex; align-items:center; gap:10px; }
 .digest-preference label>span { display:flex; flex-direction:column; }
 .digest-preference input { width:18px; height:18px; }
