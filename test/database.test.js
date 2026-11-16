@@ -398,6 +398,39 @@ test('migration ledger applies every migration only once', () => {
   }
 });
 
+test('task image content tokens migrate before their index on a persistent database', () => {
+  const temporary = temporaryDatabase();
+  let repository = openDatabase(temporary.path);
+  repository.close();
+  repository = null;
+
+  const legacy = new DatabaseSync(temporary.path);
+  const task = legacy.prepare('SELECT id,project_id,created_by FROM tasks ORDER BY id LIMIT 1').get();
+  legacy.exec('DROP INDEX IF EXISTS idx_task_images_content_token; ALTER TABLE task_images DROP COLUMN content_token;');
+  legacy.prepare(`INSERT INTO task_images(project_id,task_id,filename,mime_type,byte_size,width,height,image_data,created_by)
+    VALUES(?,?,?,?,?,?,?,?,?)`).run(task.project_id, task.id, 'legacy.png', 'image/png', 4, 1, 1, Buffer.from([0x89, 0x50, 0x4e, 0x47]), task.created_by);
+  legacy.prepare("DELETE FROM schema_migrations WHERE id='054-task-image-content-tokens'").run();
+  legacy.close();
+
+  try {
+    repository = openDatabase(temporary.path);
+    repository.close();
+    repository = null;
+    const migrated = new DatabaseSync(temporary.path);
+    try {
+      assert.ok(migrated.prepare("SELECT 1 FROM pragma_table_info('task_images') WHERE name='content_token'").get());
+      assert.match(migrated.prepare("SELECT content_token FROM task_images WHERE filename='legacy.png'").get().content_token, /^[a-f0-9]{24}$/);
+      assert.ok(migrated.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_task_images_content_token'").get());
+      assert.ok(migrated.prepare("SELECT 1 FROM schema_migrations WHERE id='054-task-image-content-tokens'").get());
+    } finally {
+      migrated.close();
+    }
+  } finally {
+    repository?.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
 test('professional themes replace legacy palettes and persist user preference', () => {
   const temporary = temporaryDatabase();
   let repository = openDatabase(temporary.path);

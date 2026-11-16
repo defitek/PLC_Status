@@ -1104,7 +1104,6 @@ CREATE INDEX IF NOT EXISTS idx_entity_links_source ON entity_links(project_id,so
 CREATE INDEX IF NOT EXISTS idx_entity_links_target ON entity_links(project_id,target_type,target_id);
 CREATE INDEX IF NOT EXISTS idx_task_assignees_user ON task_assignees(project_id,user_id,task_id);
 CREATE INDEX IF NOT EXISTS idx_task_images_task ON task_images(project_id,task_id,created_at,id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_task_images_content_token ON task_images(content_token);
 CREATE INDEX IF NOT EXISTS idx_status_assignees_user ON status_assignees(project_id,user_id,status_id);
 CREATE INDEX IF NOT EXISTS idx_project_user_areas_user ON project_user_areas(project_id,user_id);
 CREATE INDEX IF NOT EXISTS idx_project_memberships_user ON project_memberships(user_id,active,project_id);
