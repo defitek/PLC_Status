@@ -5619,7 +5619,7 @@ async function openRecord(type, record = null, prefill = null, duplicateSource =
   if (parentDialog) state.dialogStack.push(parentDialog);
   state.dialog = {
     type, record, prefill, duplicateSource, auditLoaded: false, editing: !lockable, commentAdded: false, notificationMode: 'default',
-    taskImages: type === 'tasks' ? [...(source?.images || [])] : [], pendingTaskImages: [], deletedTaskImageIds: []
+    taskImages: type === 'tasks' ? [...(source?.images || [])] : [], pendingTaskImages: []
   };
   state.goalDraftLinks = source?.links ? source.links.map(link => ({ entity_type: link.entity_type, entity_id: Number(link.entity_id) })) : [];
   state.linkDraft = source?.links ? source.links.map(link => ({ entity_type: link.entity_type, entity_id: Number(link.entity_id) })) : [];
@@ -6073,17 +6073,28 @@ function renderTaskImages() {
   const dialog = state.dialog;
   const gallery = $('#task-image-gallery');
   if (!gallery || dialog?.type !== 'tasks') return;
-  const deleted = new Set((dialog.deletedTaskImageIds || []).map(Number));
-  const existing = (dialog.taskImages || []).filter(image => !deleted.has(Number(image.id))).map(image => ({ ...image, pending: false, preview_url: image.content_url }));
+  const existing = (dialog.taskImages || []).map(image => ({ ...image, pending: false, preview_url: image.content_url }));
   const pending = (dialog.pendingTaskImages || []).map((image, index) => ({ ...image, pending: true, pending_index: index, preview_url: `data:${image.mime_type};base64,${image.data_base64}` }));
   const images = [...existing, ...pending];
   gallery.innerHTML = images.map(image => `<article class="task-image-card ${image.pending ? 'pending' : ''}"><a href="${escapeHtml(image.preview_url)}" target="_blank" rel="noopener" title="Otwórz zdjęcie w pełnym rozmiarze"><img src="${escapeHtml(image.preview_url)}" alt="${escapeHtml(image.filename)}" loading="lazy"></a><div><b>${escapeHtml(image.filename)}</b><small>${image.width} × ${image.height} · ${formatFileSize(image.byte_size)}${image.pending ? ' · do zapisania' : ''}</small></div><button type="button" class="mini danger-text" data-remove-task-image="${image.pending ? `pending:${image.pending_index}` : `saved:${image.id}`}" aria-label="Usuń zdjęcie ${escapeHtml(image.filename)}">Usuń</button></article>`).join('') || '<div class="form-hint task-images-empty">Brak zdjęć. Wybierz plik albo wklej screenshot skrótem Ctrl+V.</div>';
-  $$('[data-remove-task-image]').forEach(button => button.addEventListener('click', () => {
+  $$('[data-remove-task-image]').forEach(button => button.addEventListener('click', async () => {
     const [kind, rawId] = button.dataset.removeTaskImage.split(':');
-    if (kind === 'pending') dialog.pendingTaskImages.splice(Number(rawId), 1);
-    else if (!dialog.deletedTaskImageIds.includes(Number(rawId))) dialog.deletedTaskImageIds.push(Number(rawId));
-    $('#modal').dataset.dirty = '1';
-    renderTaskImages();
+    if (kind === 'pending') {
+      dialog.pendingTaskImages.splice(Number(rawId), 1);
+      $('#modal').dataset.dirty = '1';
+      renderTaskImages();
+      return;
+    }
+    button.disabled = true;
+    try {
+      await api(`/api/task-images/${Number(rawId)}`, { method: 'DELETE' });
+      dialog.taskImages = dialog.taskImages.filter(image => Number(image.id) !== Number(rawId));
+      if (dialog.record) { dialog.record.images = [...dialog.taskImages]; dialog.record.image_count = dialog.taskImages.length; }
+      const task = state.tasks.find(item => Number(item.id) === Number(dialog.record?.id));
+      if (task) task.image_count = dialog.taskImages.length;
+      renderTaskImages();
+      toast('Zdjęcie zostało trwale usunięte z serwera');
+    } catch (error) { button.disabled = false; toast(error.message, true); }
   }));
 }
 
@@ -6140,7 +6151,7 @@ async function addTaskImageFiles(files) {
   if (dialog?.type !== 'tasks' || !dialog.editing) return;
   const selected = [...files].filter(file => file?.type?.startsWith('image/'));
   if (!selected.length) return toast('Schowek lub wybór nie zawiera zdjęcia', true);
-  const activeCount = (dialog.taskImages || []).length - (dialog.deletedTaskImageIds || []).length + (dialog.pendingTaskImages || []).length;
+  const activeCount = (dialog.taskImages || []).length + (dialog.pendingTaskImages || []).length;
   if (activeCount + selected.length > 12) return toast('Do jednego zadania można dodać maksymalnie 12 zdjęć', true);
   for (let index = 0; index < selected.length; index += 1) {
     const file = selected[index];
@@ -6741,13 +6752,6 @@ function auditChangeHtml(field, change) {
 
 async function syncTaskImages(taskId, dialog) {
   const errors = [];
-  for (const imageId of [...(dialog.deletedTaskImageIds || [])]) {
-    try {
-      await api(`/api/task-images/${imageId}`, { method: 'DELETE' });
-      dialog.deletedTaskImageIds = dialog.deletedTaskImageIds.filter(id => Number(id) !== Number(imageId));
-      dialog.taskImages = dialog.taskImages.filter(image => Number(image.id) !== Number(imageId));
-    } catch (error) { errors.push(`Usuwanie zdjęcia: ${error.message}`); }
-  }
   for (const image of [...(dialog.pendingTaskImages || [])]) {
     try {
       const saved = await api(`/api/tasks/${taskId}/images`, { method: 'POST', body: JSON.stringify(image) });

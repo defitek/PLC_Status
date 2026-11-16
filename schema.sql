@@ -370,6 +370,7 @@ CREATE TABLE IF NOT EXISTS task_images (
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   filename TEXT NOT NULL,
+  content_token TEXT NOT NULL,
   mime_type TEXT NOT NULL CHECK(mime_type IN ('image/webp','image/jpeg','image/png')),
   byte_size INTEGER NOT NULL CHECK(byte_size > 0 AND byte_size <= 900000),
   width INTEGER NOT NULL CHECK(width > 0 AND width <= 10000),
@@ -1103,6 +1104,7 @@ CREATE INDEX IF NOT EXISTS idx_entity_links_source ON entity_links(project_id,so
 CREATE INDEX IF NOT EXISTS idx_entity_links_target ON entity_links(project_id,target_type,target_id);
 CREATE INDEX IF NOT EXISTS idx_task_assignees_user ON task_assignees(project_id,user_id,task_id);
 CREATE INDEX IF NOT EXISTS idx_task_images_task ON task_images(project_id,task_id,created_at,id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_images_content_token ON task_images(content_token);
 CREATE INDEX IF NOT EXISTS idx_status_assignees_user ON status_assignees(project_id,user_id,status_id);
 CREATE INDEX IF NOT EXISTS idx_project_user_areas_user ON project_user_areas(project_id,user_id);
 CREATE INDEX IF NOT EXISTS idx_project_memberships_user ON project_memberships(user_id,active,project_id);

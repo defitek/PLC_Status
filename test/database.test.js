@@ -1749,9 +1749,10 @@ test('task images are project-scoped, size-limited, audited and included in back
 
     assert.equal(image.filename, 'szafa sterownicza.webp');
     assert.equal(image.byte_size, webp.length);
-    assert.match(image.content_url, new RegExp(`/api/task-images/${image.id}/content$`));
+    assert.match(image.content_url, new RegExp(`/api/task-images/${image.id}/content\\?v=[a-f0-9]+$`));
+    const imageToken = new URL(image.content_url, 'http://localhost').searchParams.get('v');
     assert.equal(repository.taskImages(task.id).length, 1);
-    assert.deepEqual(Buffer.from(repository.taskImageContent(image.id).image_data), webp);
+    assert.deepEqual(Buffer.from(repository.taskImageContent(image.id, imageToken).image_data), webp);
     assert.equal(repository.tasks('all', admin).find(item => item.id === task.id).image_count, 1);
     assert.ok(repository.audit('task', task.id).some(entry => entry.changes.task_images?.to?.includes('Dodano zdjęcie')));
 
@@ -1762,7 +1763,15 @@ test('task images are project-scoped, size-limited, audited and included in back
 
     repository.deleteTaskImage(image.id, admin);
     assert.equal(repository.taskImages(task.id).length, 0);
+    assert.throws(() => repository.taskImageContent(image.id, imageToken), /Nie znaleziono zdjęcia/);
     assert.ok(repository.audit('task', task.id).some(entry => entry.changes.task_images?.from?.includes('Usunięto zdjęcie')));
+
+    const replacement = repository.saveTaskImage(task.id, {
+      filename: 'nowa szafa.png', mime_type: 'image/webp', width: 800, height: 600, data_base64: webp.toString('base64')
+    }, admin);
+    assert.notEqual(replacement.content_url, image.content_url);
+    assert.throws(() => repository.taskImageContent(replacement.id, imageToken), /Nie znaleziono zdjęcia/);
+    repository.deleteTaskImage(replacement.id, admin);
   } finally {
     repository.close();
     rmSync(temporary.directory, { recursive: true, force: true });

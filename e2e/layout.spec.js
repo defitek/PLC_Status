@@ -211,7 +211,29 @@ test('zadanie przyjmuje screenshot przez Ctrl+V, kompresuje go i pokazuje po zap
   await expect(card.locator('.task-image-count')).toHaveText(/1/);
   await card.click();
   await expect(page.locator('#task-image-gallery .task-image-card')).toHaveCount(1);
-  await expect(page.locator('#task-image-gallery img')).toHaveAttribute('src', /\/api\/task-images\/\d+\/content/);
+  const oldImageUrl = await page.locator('#task-image-gallery img').getAttribute('src');
+  expect(oldImageUrl).toMatch(/\/api\/task-images\/\d+\/content\?v=[a-f0-9]+/);
+  await page.locator('#edit-record').click();
+  await page.locator('[data-remove-task-image^="saved:"]').click();
+  await expect(page.locator('#task-image-gallery .task-image-card')).toHaveCount(0);
+  await expect(page.locator('#toast')).toContainText('trwale usunięte z serwera');
+  expect(await page.evaluate(url => fetch(url, { cache: 'no-store' }).then(response => response.status), oldImageUrl)).toBe(404);
+
+  await page.evaluate(async () => {
+    const blob = await fetch('/assets/commissioning-hub-login.png').then(response => response.blob());
+    const file = new File([blob], 'nowy-screenshot.png', { type: 'image/png' });
+    const transfer = new DataTransfer(); transfer.items.add(file);
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', { value: transfer });
+    document.dispatchEvent(event);
+  });
+  await expect(page.locator('.task-image-card.pending')).toHaveCount(1);
+  await page.locator('#record-save').click();
+  await expect(page.locator('#modal')).not.toBeVisible();
+  await card.click();
+  const newImageUrl = await page.locator('#task-image-gallery img').getAttribute('src');
+  expect(newImageUrl).not.toBe(oldImageUrl);
+  expect(await page.evaluate(url => fetch(url, { cache: 'no-store' }).then(response => response.status), oldImageUrl)).toBe(404);
   await expectViewportContained(page);
 });
 

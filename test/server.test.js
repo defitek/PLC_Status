@@ -300,4 +300,15 @@ test('task image API validates, serves and deletes compressed images', async t =
   const remove = await request(baseUrl, `/api/task-images/${image.id}`, { cookie: admin.cookie, method: 'DELETE', body: {} });
   assert.equal(remove.status, 200);
   assert.equal((await (await request(baseUrl, `/api/tasks/${task.id}/images`, { cookie: admin.cookie })).json()).length, 0);
+  assert.equal((await request(baseUrl, image.content_url, { cookie: admin.cookie })).status, 404);
+
+  const replacementBytes = Buffer.concat([webp, Buffer.from([1])]);
+  const replacementResponse = await request(baseUrl, `/api/tasks/${task.id}/images`, { cookie: admin.cookie, method: 'POST', body: { filename: 'replacement.png', mime_type: 'image/webp', width: 800, height: 600, data_base64: replacementBytes.toString('base64') } });
+  assert.equal(replacementResponse.status, 201);
+  const replacement = await replacementResponse.json();
+  assert.notEqual(replacement.content_url, image.content_url);
+  assert.equal((await request(baseUrl, image.content_url, { cookie: admin.cookie })).status, 404, 'stary wersjonowany adres nie może wskazywać nowego zdjęcia');
+  const replacementContent = await request(baseUrl, replacement.content_url, { cookie: admin.cookie });
+  assert.equal(replacementContent.status, 200);
+  assert.deepEqual(Buffer.from(await replacementContent.arrayBuffer()), replacementBytes);
 });

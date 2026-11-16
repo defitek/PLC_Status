@@ -123,7 +123,7 @@ function inlineImage(response, image) {
     'Content-Type': image.mime_type,
     'Content-Length': image.image_data.length,
     'Content-Disposition': `inline; filename="${filename}"`,
-    'Cache-Control': 'private,max-age=3600',
+    'Cache-Control': 'no-store',
     'Content-Security-Policy': "default-src 'none'; img-src 'self'"
   });
   response.end(image.image_data);
@@ -497,7 +497,7 @@ async function handleProjectApi(request, response, url, user) {
     if (method === 'POST') return json(response, 201, repository.saveTaskImage(Number(taskImages[1]), await readJson(request, 1_400_000), user));
   }
   const taskImageContent = path.match(/^\/api\/task-images\/(\d+)\/content$/);
-  if (taskImageContent && method === 'GET') return inlineImage(response, repository.taskImageContent(Number(taskImageContent[1])));
+  if (taskImageContent && method === 'GET') return inlineImage(response, repository.taskImageContent(Number(taskImageContent[1]), url.searchParams.get('v')));
   const taskImage = path.match(/^\/api\/task-images\/(\d+)$/);
   if (taskImage && method === 'DELETE') return json(response, 200, repository.deleteTaskImage(Number(taskImage[1]), user));
 

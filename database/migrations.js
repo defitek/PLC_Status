@@ -79,7 +79,14 @@ export function prepareDatabase(db, { seedDemo, demoLimit = 100 }) {
   runMigration(db, '051-professional-themes', () => migrateProfessionalThemes(db));
   runMigration(db, '052-planner-transport-duration', () => migratePlannerTransportDuration(db));
   runMigration(db, '053-task-images', () => migrateTaskImages(db));
+  runMigration(db, '054-task-image-content-tokens', () => migrateTaskImageContentTokens(db));
   return defaultProjectId;
+}
+
+function migrateTaskImageContentTokens(db) {
+  ensureColumn(db, 'task_images', 'content_token', "TEXT NOT NULL DEFAULT ''");
+  db.exec("UPDATE task_images SET content_token=lower(hex(randomblob(12))) WHERE content_token=''");
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_task_images_content_token ON task_images(content_token)');
 }
 
 function migrateTaskImages(db) {
@@ -89,6 +96,7 @@ function migrateTaskImages(db) {
       project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
       task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
       filename TEXT NOT NULL,
+      content_token TEXT NOT NULL,
       mime_type TEXT NOT NULL CHECK(mime_type IN ('image/webp','image/jpeg','image/png')),
       byte_size INTEGER NOT NULL CHECK(byte_size > 0 AND byte_size <= 900000),
       width INTEGER NOT NULL CHECK(width > 0 AND width <= 10000),

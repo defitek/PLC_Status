@@ -998,10 +998,10 @@ function createRepository(db, defaultProjectId) {
   function taskImageRows(taskId) {
     const task = one('SELECT id FROM tasks WHERE id=? AND project_id=?', asId(taskId), activeProjectId());
     if (!task) throw appError('Nie znaleziono zadania', 404);
-    return all(`SELECT ti.id,ti.task_id,ti.filename,ti.mime_type,ti.byte_size,ti.width,ti.height,ti.created_by,ti.created_at,
+    return all(`SELECT ti.id,ti.task_id,ti.filename,ti.content_token,ti.mime_type,ti.byte_size,ti.width,ti.height,ti.created_by,ti.created_at,
       u.display_name created_by_name FROM task_images ti LEFT JOIN users u ON u.id=ti.created_by
       WHERE ti.project_id=? AND ti.task_id=? ORDER BY ti.created_at,ti.id`, activeProjectId(), task.id)
-      .map(row => ({ ...row, content_url: `/api/task-images/${row.id}/content` }));
+      .map(({ content_token: contentToken, ...row }) => ({ ...row, content_url: `/api/task-images/${row.id}/content?v=${encodeURIComponent(contentToken)}` }));
   }
 
   function validImageSignature(data, mimeType) {
@@ -1541,6 +1541,7 @@ function createRepository(db, defaultProjectId) {
       }
       if (table === 'task_images') {
         row.image_data = Buffer.from(clean(row.image_data_base64), 'base64');
+        row.content_token = clean(row.content_token) || randomBytes(12).toString('hex');
         delete row.image_data_base64;
       }
       const allowedColumns = columnNames(db, table);
@@ -5134,10 +5135,10 @@ function createRepository(db, defaultProjectId) {
 
     tasks(code, currentUser) { return taskRows(code, currentUser); },
     taskImages(taskId) { return taskImageRows(taskId); },
-    taskImageContent(imageId) {
+    taskImageContent(imageId, contentToken) {
       const row = one(`SELECT ti.id,ti.task_id,ti.filename,ti.mime_type,ti.byte_size,ti.image_data
         FROM task_images ti JOIN tasks t ON t.id=ti.task_id AND t.project_id=ti.project_id
-        WHERE ti.id=? AND ti.project_id=?`, asId(imageId), activeProjectId());
+        WHERE ti.id=? AND ti.project_id=? AND ti.content_token=?`, asId(imageId), activeProjectId(), clean(contentToken));
       if (!row) throw appError('Nie znaleziono zdjęcia', 404);
       return row;
     },
@@ -5160,7 +5161,7 @@ function createRepository(db, defaultProjectId) {
       let filename = clean(input.filename).replace(/[\\/\x00-\x1f\x7f]/g, '_').slice(0, 120);
       if (!filename) filename = `zdjecie-${Date.now()}${extension}`;
       if (!filename.toLowerCase().endsWith(extension)) filename = `${filename.replace(/\.[^.]+$/, '')}${extension}`;
-      const imageId = insertRecord('task_images', { project_id: activeProjectId(), task_id: task.id, filename, mime_type: mimeType, byte_size: imageData.length, width, height, image_data: imageData, created_by: currentUser.id });
+      const imageId = insertRecord('task_images', { project_id: activeProjectId(), task_id: task.id, filename, content_token: randomBytes(12).toString('hex'), mime_type: mimeType, byte_size: imageData.length, width, height, image_data: imageData, created_by: currentUser.id });
       writeAuditChanges('task', task.id, currentUser, { task_images: { from: null, to: `Dodano zdjęcie: ${filename}` } });
       return taskImageRows(task.id).find(row => row.id === imageId);
     },
