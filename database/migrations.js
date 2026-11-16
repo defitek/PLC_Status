@@ -78,7 +78,27 @@ export function prepareDatabase(db, { seedDemo, demoLimit = 100 }) {
   runMigration(db, '050-communication-workflow', () => migrateCommunicationWorkflow(db));
   runMigration(db, '051-professional-themes', () => migrateProfessionalThemes(db));
   runMigration(db, '052-planner-transport-duration', () => migratePlannerTransportDuration(db));
+  runMigration(db, '053-task-images', () => migrateTaskImages(db));
   return defaultProjectId;
+}
+
+function migrateTaskImages(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS task_images (
+      id INTEGER PRIMARY KEY,
+      project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      filename TEXT NOT NULL,
+      mime_type TEXT NOT NULL CHECK(mime_type IN ('image/webp','image/jpeg','image/png')),
+      byte_size INTEGER NOT NULL CHECK(byte_size > 0 AND byte_size <= 900000),
+      width INTEGER NOT NULL CHECK(width > 0 AND width <= 10000),
+      height INTEGER NOT NULL CHECK(height > 0 AND height <= 10000),
+      image_data BLOB NOT NULL,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS idx_task_images_task ON task_images(project_id,task_id,created_at,id);
+  `);
 }
 
 function migratePlannerTransportDuration(db) {

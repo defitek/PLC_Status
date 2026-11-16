@@ -116,6 +116,18 @@ function download(response, buffer, contentType, filename) {
   response.writeHead(200, { ...securityHeaders, 'Content-Type': contentType, 'Content-Length': buffer.length, 'Content-Disposition': `attachment; filename="${filename.replace(/[^a-zA-Z0-9._-]/g, '_')}"`, 'Cache-Control': 'no-store' });
   response.end(buffer);
 }
+function inlineImage(response, image) {
+  const filename = String(image.filename || 'zdjecie').replace(/[^a-zA-Z0-9._-]/g, '_');
+  response.writeHead(200, {
+    ...securityHeaders,
+    'Content-Type': image.mime_type,
+    'Content-Length': image.image_data.length,
+    'Content-Disposition': `inline; filename="${filename}"`,
+    'Cache-Control': 'private,max-age=3600',
+    'Content-Security-Policy': "default-src 'none'; img-src 'self'"
+  });
+  response.end(image.image_data);
+}
 async function readJson(request, byteLimit = maxJsonBytes) {
   const declaredLength = Number(request.headers['content-length'] || 0);
   if (Number.isFinite(declaredLength) && declaredLength > byteLimit) throw Object.assign(new Error('Żądanie jest zbyt duże'), { statusCode: 413 });
@@ -479,6 +491,15 @@ async function handleProjectApi(request, response, url, user) {
   if (statusCellMatch && method === 'PATCH') return json(response, 200, repository.saveStatusCell(Number(statusCellMatch[1]), Number(statusCellMatch[2]), await readJson(request), user));
   const taskRecurrenceSkip = path.match(/^\/api\/tasks\/(\d+)\/skip-recurrence$/);
   if (taskRecurrenceSkip && method === 'POST') return json(response, 200, repository.skipRecurringTask(Number(taskRecurrenceSkip[1]), user));
+  const taskImages = path.match(/^\/api\/tasks\/(\d+)\/images$/);
+  if (taskImages) {
+    if (method === 'GET') return json(response, 200, repository.taskImages(Number(taskImages[1])));
+    if (method === 'POST') return json(response, 201, repository.saveTaskImage(Number(taskImages[1]), await readJson(request, 1_400_000), user));
+  }
+  const taskImageContent = path.match(/^\/api\/task-images\/(\d+)\/content$/);
+  if (taskImageContent && method === 'GET') return inlineImage(response, repository.taskImageContent(Number(taskImageContent[1])));
+  const taskImage = path.match(/^\/api\/task-images\/(\d+)$/);
+  if (taskImage && method === 'DELETE') return json(response, 200, repository.deleteTaskImage(Number(taskImage[1]), user));
 
   const resources = [
     { path: '/api/status', list: () => repository.status(scope, user), save: (id, body) => repository.saveStatus(id, body, user), remove: id => repository.deleteStatus(id, user), deleteRole: 'project_admin' },

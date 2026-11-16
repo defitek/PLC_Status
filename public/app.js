@@ -466,6 +466,7 @@ function bindShell() {
   document.addEventListener('keydown', event => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); $('#global-search').focus(); $('#global-search').select(); }
   });
+  document.addEventListener('paste', handleTaskImagePaste);
   $('#controller-picker-host').addEventListener('change', async event => { if (event.target.id !== 'controller') return; state.controller = event.target.value; await loadData(); });
   $('#add').addEventListener('click', () => state.view === 'calendar' ? openCalendarAnnotation() : state.view === 'notes' ? openStatusTransferEditor() : openRecord(state.view));
   $('#close').addEventListener('click', closeOrReturnRecordDialog);
@@ -4150,7 +4151,7 @@ function taskCard(item) {
   const time = taskTimeLabel(item);
   const allChecks = [...(item.checklist || []), ...(item.scope_checklist || [])];
   const recurrence = taskRecurrenceLabel(item);
-  return `<article class="task-card compact" draggable="true" data-task-id="${item.id}"><div class="task-card-head"><h3>${escapeHtml(item.title)}</h3><span class="progress-value ${item.progress >= 100 ? 'done' : item.progress > 0 ? 'active' : ''}"><b>${item.progress || 0}%</b><i><u style="width:${item.progress || 0}%"></u></i></span></div><p>${escapeHtml(controllerLabel(item))} · ${escapeHtml(item.function_group_name || item.other_object || (item.scope_is_group ? 'zadanie obszarowe' : 'bez grupy'))}${item.function_group_element_name ? ` → ${escapeHtml(item.function_group_element_name)}` : ''}</p><div class="cardmeta"><span>${escapeHtml(item.owner_name || 'Nieprzypisane')}</span><span>${item.due_date ? displayDate(item.due_date) : 'bez deadline’u'}</span></div>${recurrence ? `<span class="time-chip recurring">↻ ${escapeHtml(recurrence)}</span>` : ''}${item.blocked_by_dependencies ? `<span class="dependency-warning">Zablokowane przez ${item.blocked_by_dependencies} ${item.blocked_by_dependencies === 1 ? 'element' : 'elementy'}</span>` : ''}${time ? `<span class="time-chip ${time.overdue ? 'overdue' : ''}">${escapeHtml(time.label)}</span>` : ''}<div class="checkbar"><i style="width:${item.progress || 0}%"></i></div><div class="task-card-foot"><button type="button" class="task-check-count" data-checklist-task="${item.id}">${allChecks.filter(entry => entry.done).length}/${allChecks.length} punktów kontroli</button><span>${escapeHtml(item.category || 'Bez kategorii')} · utworzył ${escapeHtml(item.created_by_name || 'dane historyczne')}</span></div></article>`;
+  return `<article class="task-card compact" draggable="true" data-task-id="${item.id}"><div class="task-card-head"><h3>${escapeHtml(item.title)}${Number(item.image_count) ? `<span class="task-image-count" title="Zdjęcia: ${Number(item.image_count)}">▧ ${Number(item.image_count)}</span>` : ''}</h3><span class="progress-value ${item.progress >= 100 ? 'done' : item.progress > 0 ? 'active' : ''}"><b>${item.progress || 0}%</b><i><u style="width:${item.progress || 0}%"></u></i></span></div><p>${escapeHtml(controllerLabel(item))} · ${escapeHtml(item.function_group_name || item.other_object || (item.scope_is_group ? 'zadanie obszarowe' : 'bez grupy'))}${item.function_group_element_name ? ` → ${escapeHtml(item.function_group_element_name)}` : ''}</p><div class="cardmeta"><span>${escapeHtml(item.owner_name || 'Nieprzypisane')}</span><span>${item.due_date ? displayDate(item.due_date) : 'bez deadline’u'}</span></div>${recurrence ? `<span class="time-chip recurring">↻ ${escapeHtml(recurrence)}</span>` : ''}${item.blocked_by_dependencies ? `<span class="dependency-warning">Zablokowane przez ${item.blocked_by_dependencies} ${item.blocked_by_dependencies === 1 ? 'element' : 'elementy'}</span>` : ''}${time ? `<span class="time-chip ${time.overdue ? 'overdue' : ''}">${escapeHtml(time.label)}</span>` : ''}<div class="checkbar"><i style="width:${item.progress || 0}%"></i></div><div class="task-card-foot"><button type="button" class="task-check-count" data-checklist-task="${item.id}">${allChecks.filter(entry => entry.done).length}/${allChecks.length} punktów kontroli</button><span>${escapeHtml(item.category || 'Bez kategorii')} · utworzył ${escapeHtml(item.created_by_name || 'dane historyczne')}</span></div></article>`;
 }
 
 function taskRecurrenceLabel(item) {
@@ -4259,7 +4260,7 @@ function drawTaskListRows() {
     const collapsed = grouping && state.collapsedTaskGroups.has(String(group));
     const progress = items.length ? Math.round(items.reduce((sum, item) => sum + Number(item.progress || 0), 0) / items.length) : 0;
     if (grouping) html += `<tr class="group-row ${collapsed ? 'collapsed' : ''}" data-task-group="${escapeHtml(group)}"><td colspan="${visibleCount}"><button type="button" class="group-toggle"><span>${collapsed ? '▸' : '▾'}</span><b>${escapeHtml(group)}</b><span class="group-progress"><i><u style="width:${progress}%"></u></i><b>${progress}%</b></span><small>${items.length} pozycji</small></button></td></tr>`;
-    if (!collapsed) html += items.map(item => { const time = taskTimeLabel(item); const recurrence = taskRecurrenceLabel(item); return `<tr data-id="${item.id}"><td data-column="title" class="maincell">${escapeHtml(item.title)}<span class="sub">${escapeHtml(item.description)}</span>${recurrence ? `<span class="time-chip recurring">↻ ${escapeHtml(recurrence)}</span>` : ''}${time ? `<span class="time-chip ${time.overdue ? 'overdue' : ''}">${escapeHtml(time.label)}</span>` : ''}</td><td data-column="scope_label">${escapeHtml(controllerLabel(item))}</td><td data-column="function_group_name">${escapeHtml(item.function_group_name || item.other_object || '—')}</td><td data-column="function_group_element_name">${escapeHtml(item.function_group_element_name || '—')}</td><td data-column="category">${escapeHtml(item.category || '—')}</td><td data-column="subcategory">${escapeHtml(item.subcategory || '—')}</td><td data-column="requirement_names">${inlineTaskField('requirement_ids', item, escapeHtml(item.requirement_names || '—'), 'textual')}</td><td data-column="status">${inlineStatusBadge('task', item)}</td><td data-column="owner_name">${inlineTaskField('direct_assignee_user_ids', item, escapeHtml(item.owner_name || '—'), 'textual')}</td><td data-column="progress"><span class="table-progress"><i><u style="width:${item.progress || 0}%"></u></i><b>${item.progress || 0}%</b></span></td><td data-column="start_date">${inlineTaskField('start_date', item, displayDate(item.start_date), 'date')}</td><td data-column="due_date">${inlineTaskField('due_date', item, displayDate(item.due_date), 'date')}</td><td data-column="priority">${inlineTaskField('priority', item, badge(item.priority), 'priority')}</td></tr>`; }).join('');
+    if (!collapsed) html += items.map(item => { const time = taskTimeLabel(item); const recurrence = taskRecurrenceLabel(item); return `<tr data-id="${item.id}"><td data-column="title" class="maincell">${escapeHtml(item.title)}${Number(item.image_count) ? `<span class="task-image-count" title="Zdjęcia: ${Number(item.image_count)}">▧ ${Number(item.image_count)}</span>` : ''}<span class="sub">${escapeHtml(item.description)}</span>${recurrence ? `<span class="time-chip recurring">↻ ${escapeHtml(recurrence)}</span>` : ''}${time ? `<span class="time-chip ${time.overdue ? 'overdue' : ''}">${escapeHtml(time.label)}</span>` : ''}</td><td data-column="scope_label">${escapeHtml(controllerLabel(item))}</td><td data-column="function_group_name">${escapeHtml(item.function_group_name || item.other_object || '—')}</td><td data-column="function_group_element_name">${escapeHtml(item.function_group_element_name || '—')}</td><td data-column="category">${escapeHtml(item.category || '—')}</td><td data-column="subcategory">${escapeHtml(item.subcategory || '—')}</td><td data-column="requirement_names">${inlineTaskField('requirement_ids', item, escapeHtml(item.requirement_names || '—'), 'textual')}</td><td data-column="status">${inlineStatusBadge('task', item)}</td><td data-column="owner_name">${inlineTaskField('direct_assignee_user_ids', item, escapeHtml(item.owner_name || '—'), 'textual')}</td><td data-column="progress"><span class="table-progress"><i><u style="width:${item.progress || 0}%"></u></i><b>${item.progress || 0}%</b></span></td><td data-column="start_date">${inlineTaskField('start_date', item, displayDate(item.start_date), 'date')}</td><td data-column="due_date">${inlineTaskField('due_date', item, displayDate(item.due_date), 'date')}</td><td data-column="priority">${inlineTaskField('priority', item, badge(item.priority), 'priority')}</td></tr>`; }).join('');
   }
   $('#task-list-body').innerHTML = html || `<tr><td colspan="${visibleCount}" class="empty">Brak wyników</td></tr>`;
   applyGroupedColumnVisibility('#task-list-panel', grouping, columns);
@@ -5448,7 +5449,7 @@ const formDefinitions = {
     ['requirement_ids', 'Zapotrzebowanie', 'requirements'], ['current_note', 'Aktualna notatka', 'textarea'], ['evidence_link', 'Dodatkowe informacje / link'], ['links', 'Powiązane elementy', 'multi-links', ['task', 'point', 'note', 'goal']]
   ] },
   tasks: { endpoint: '/api/tasks', title: 'zadanie', fields: [
-    ['hierarchy_target', 'Zakres w hierarchii projektu', 'hierarchy-target'], ['title', 'Tytuł', 'wide-text'], ['description', 'Opis', 'textarea'], ['info_link', 'Dodatkowe informacje / link', 'wide-text'],
+    ['hierarchy_target', 'Zakres w hierarchii projektu', 'hierarchy-target'], ['title', 'Tytuł', 'wide-text'], ['description', 'Opis', 'textarea'], ['images', 'Zdjęcia', 'task-images'], ['info_link', 'Dodatkowe informacje / link', 'wide-text'],
     ['direct_assignee_user_ids', 'Odpowiedzialni', 'users'], ['dependency_refs', 'Zależności — elementy wymagane wcześniej', 'dependencies'], ['checklist', 'Lista kontrolna', 'checklist'], ['scope_checklist', 'Kontrola sterowników w zakresie', 'scope-checklist'],
     ['function_group_id', 'Grupa funkcyjna', 'function-group'], ['function_group_element_id', 'Element grupy funkcyjnej', 'function-element'], ['other_object', 'Inne (gdy nie dotyczy grupy)'],
     ['status', 'Status', 'select', statusDefinitions('task')], ['priority', 'Priorytet', 'select', PRIORITY_DEFINITIONS],
@@ -5590,7 +5591,12 @@ async function openRecord(type, record = null, prefill = null, duplicateSource =
   const definition = formDefinitions[type];
   if (!definition) return;
   const parentDialog = !replaceCurrent && $('#modal').open && state.dialog ? captureRecordDialog() : null;
-  const source = record || prefill || null;
+  let source = record || prefill || null;
+  if (type === 'tasks' && record?.id) {
+    try { record.images = await api(`/api/tasks/${record.id}/images`); }
+    catch (error) { record.images = []; toast(`Nie udało się pobrać zdjęć: ${error.message}`, true); }
+    source = record;
+  } else if (type === 'tasks' && duplicateSource) source = { ...(source || {}), images: [] };
   if (type === 'goals') {
     try {
       const [status, task, point] = await Promise.all([api('/api/status?controller=all'), api('/api/tasks?controller=all'), api('/api/open-points?controller=all')]);
@@ -5611,7 +5617,10 @@ async function openRecord(type, record = null, prefill = null, duplicateSource =
   }
   const lockable = Boolean(record && ['status', 'tasks', 'points', 'goals'].includes(type));
   if (parentDialog) state.dialogStack.push(parentDialog);
-  state.dialog = { type, record, prefill, duplicateSource, auditLoaded: false, editing: !lockable, commentAdded: false, notificationMode: 'default' };
+  state.dialog = {
+    type, record, prefill, duplicateSource, auditLoaded: false, editing: !lockable, commentAdded: false, notificationMode: 'default',
+    taskImages: type === 'tasks' ? [...(source?.images || [])] : [], pendingTaskImages: [], deletedTaskImageIds: []
+  };
   state.goalDraftLinks = source?.links ? source.links.map(link => ({ entity_type: link.entity_type, entity_id: Number(link.entity_id) })) : [];
   state.linkDraft = source?.links ? source.links.map(link => ({ entity_type: link.entity_type, entity_id: Number(link.entity_id) })) : [];
   renderRecordDialogHeader();
@@ -5945,6 +5954,7 @@ function fieldHtml([name, label, type = 'text', extra], record, formType = '') {
   }
   if (type === 'checklist') return checklistField(record);
   if (type === 'scope-checklist') return scopeChecklistField(record);
+  if (type === 'task-images') return taskImagesField();
   if (type === 'goal-links') return goalLinksField();
   if (type === 'announcement-scopes') {
     const selected = new Set((record?.scope_group_ids || []).map(Number));
@@ -6047,6 +6057,116 @@ function mentionsField(record) {
 
 function checklistField(record) {
   return `<section class="checks task-checklist-editor"><header><span><b>Lista kontrolna / podzadania</b><small>Treść może być wielowierszowa; każde podzadanie ma wagę i opcjonalnego wykonawcę.</small></span><button type="button" class="mini" id="add-check">+ Dodaj podzadanie</button></header><div id="checklist">${(record?.checklist || []).map(checklistRow).join('')}</div></section>`;
+}
+
+function taskImagesField() {
+  return `<section class="task-images-editor" id="task-images-editor"><header><span><b>Zdjęcia i zrzuty ekranu</b><small>Obrazy są automatycznie zmniejszane i zapisywane jako WebP. Maksymalnie 12 zdjęć.</small></span><label class="mini task-image-picker">+ Dodaj zdjęcia<input id="task-image-input" type="file" accept="image/jpeg,image/png,image/webp" multiple></label></header><div class="task-image-paste-hint"><kbd>Ctrl</kbd> + <kbd>V</kbd> Wklej zrzut ekranu w dowolnym miejscu okna zadania.</div><div id="task-image-progress" class="form-hint"></div><div id="task-image-gallery" class="task-image-gallery"></div></section>`;
+}
+
+function formatFileSize(bytes) {
+  const value = Number(bytes || 0);
+  if (value < 1024) return `${value} B`;
+  return value < 1024 * 1024 ? `${Math.round(value / 1024)} KB` : `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function renderTaskImages() {
+  const dialog = state.dialog;
+  const gallery = $('#task-image-gallery');
+  if (!gallery || dialog?.type !== 'tasks') return;
+  const deleted = new Set((dialog.deletedTaskImageIds || []).map(Number));
+  const existing = (dialog.taskImages || []).filter(image => !deleted.has(Number(image.id))).map(image => ({ ...image, pending: false, preview_url: image.content_url }));
+  const pending = (dialog.pendingTaskImages || []).map((image, index) => ({ ...image, pending: true, pending_index: index, preview_url: `data:${image.mime_type};base64,${image.data_base64}` }));
+  const images = [...existing, ...pending];
+  gallery.innerHTML = images.map(image => `<article class="task-image-card ${image.pending ? 'pending' : ''}"><a href="${escapeHtml(image.preview_url)}" target="_blank" rel="noopener" title="Otwórz zdjęcie w pełnym rozmiarze"><img src="${escapeHtml(image.preview_url)}" alt="${escapeHtml(image.filename)}" loading="lazy"></a><div><b>${escapeHtml(image.filename)}</b><small>${image.width} × ${image.height} · ${formatFileSize(image.byte_size)}${image.pending ? ' · do zapisania' : ''}</small></div><button type="button" class="mini danger-text" data-remove-task-image="${image.pending ? `pending:${image.pending_index}` : `saved:${image.id}`}" aria-label="Usuń zdjęcie ${escapeHtml(image.filename)}">Usuń</button></article>`).join('') || '<div class="form-hint task-images-empty">Brak zdjęć. Wybierz plik albo wklej screenshot skrótem Ctrl+V.</div>';
+  $$('[data-remove-task-image]').forEach(button => button.addEventListener('click', () => {
+    const [kind, rawId] = button.dataset.removeTaskImage.split(':');
+    if (kind === 'pending') dialog.pendingTaskImages.splice(Number(rawId), 1);
+    else if (!dialog.deletedTaskImageIds.includes(Number(rawId))) dialog.deletedTaskImageIds.push(Number(rawId));
+    $('#modal').dataset.dirty = '1';
+    renderTaskImages();
+  }));
+}
+
+function canvasBlob(canvas, mimeType, quality) {
+  return new Promise(resolve => canvas.toBlob(resolve, mimeType, quality));
+}
+
+async function decodedImage(file) {
+  if ('createImageBitmap' in globalThis) {
+    try {
+      const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+      return { width: bitmap.width, height: bitmap.height, draw: (context, width, height) => context.drawImage(bitmap, 0, 0, width, height), close: () => bitmap.close() };
+    } catch { /* fallback dla starszych formatów przeglądarki */ }
+  }
+  const url = URL.createObjectURL(file);
+  try {
+    const image = await new Promise((resolve, reject) => { const element = new Image(); element.onload = () => resolve(element); element.onerror = () => reject(new Error('Nie można odczytać obrazu')); element.src = url; });
+    return { width: image.naturalWidth, height: image.naturalHeight, draw: (context, width, height) => context.drawImage(image, 0, 0, width, height), close: () => {} };
+  } finally { URL.revokeObjectURL(url); }
+}
+
+async function compressTaskImage(file) {
+  if (!file?.type?.startsWith('image/')) throw new Error('Wybrany plik nie jest zdjęciem');
+  if (file.size > 25_000_000) throw new Error('Plik źródłowy może mieć maksymalnie 25 MB');
+  const source = await decodedImage(file);
+  try {
+    if (!source.width || !source.height) throw new Error('Zdjęcie ma nieprawidłowe wymiary');
+    let result = null;
+    for (const maxDimension of [1600, 1400, 1200, 1000, 800]) {
+      const scale = Math.min(1, maxDimension / Math.max(source.width, source.height));
+      const width = Math.max(1, Math.round(source.width * scale)); const height = Math.max(1, Math.round(source.height * scale));
+      const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
+      const context = canvas.getContext('2d', { alpha: true });
+      context.imageSmoothingEnabled = true; context.imageSmoothingQuality = 'high'; source.draw(context, width, height);
+      for (const quality of [0.82, 0.7, 0.58]) {
+        const blob = await canvasBlob(canvas, 'image/webp', quality);
+        if (!blob) continue;
+        result = { blob, width, height };
+        if (blob.size <= 700_000) break;
+      }
+      if (result?.blob.size <= 700_000) break;
+    }
+    if (!result?.blob || result.blob.size > 900_000) throw new Error('Nie udało się skompresować zdjęcia poniżej 900 KB');
+    const stem = String(file.name || `screenshot-${new Date().toISOString().replace(/[:.]/g, '-')}`).replace(/\.[^.]+$/, '').replace(/[\\/\x00-\x1f\x7f]/g, '_').slice(0, 110) || 'zdjecie';
+    return {
+      filename: `${stem}.webp`, mime_type: 'image/webp', byte_size: result.blob.size, original_size: file.size,
+      width: result.width, height: result.height, data_base64: bytesToBase64(new Uint8Array(await result.blob.arrayBuffer()))
+    };
+  } finally { source.close(); }
+}
+
+async function addTaskImageFiles(files) {
+  const dialog = state.dialog; const progress = $('#task-image-progress');
+  if (dialog?.type !== 'tasks' || !dialog.editing) return;
+  const selected = [...files].filter(file => file?.type?.startsWith('image/'));
+  if (!selected.length) return toast('Schowek lub wybór nie zawiera zdjęcia', true);
+  const activeCount = (dialog.taskImages || []).length - (dialog.deletedTaskImageIds || []).length + (dialog.pendingTaskImages || []).length;
+  if (activeCount + selected.length > 12) return toast('Do jednego zadania można dodać maksymalnie 12 zdjęć', true);
+  for (let index = 0; index < selected.length; index += 1) {
+    const file = selected[index];
+    if (progress) progress.textContent = `Kompresowanie ${index + 1}/${selected.length}: ${file.name || 'screenshot'}…`;
+    try {
+      const image = await compressTaskImage(file);
+      dialog.pendingTaskImages.push(image);
+      renderTaskImages();
+      if (progress) progress.textContent = `${file.name || 'Screenshot'}: ${formatFileSize(file.size)} → ${formatFileSize(image.byte_size)}.`;
+      $('#modal').dataset.dirty = '1';
+    } catch (error) { toast(`${file.name || 'Zdjęcie'}: ${error.message}`, true); }
+  }
+}
+
+function bindTaskImagesField() {
+  const input = $('#task-image-input');
+  input?.addEventListener('change', async () => { await addTaskImageFiles(input.files || []); input.value = ''; });
+  renderTaskImages();
+}
+
+function handleTaskImagePaste(event) {
+  if (!$('#modal')?.open || state.dialog?.type !== 'tasks' || !state.dialog.editing) return;
+  const files = [...(event.clipboardData?.items || [])].filter(item => item.kind === 'file' && item.type.startsWith('image/')).map(item => item.getAsFile()).filter(Boolean);
+  if (!files.length) return;
+  event.preventDefault();
+  void addTaskImageFiles(files);
 }
 
 function checklistRow(item = {}) {
@@ -6162,6 +6282,7 @@ function bindDynamicFields(type) {
   $('#go-entity')?.addEventListener('click', () => { const type = $('#entity-type').value; const id = Number($('#entity-id').value); openEntityOverlay(type, id); });
   $$('[data-toggle]').forEach(checkbox => checkbox.addEventListener('change', () => { $('#' + checkbox.dataset.toggle).disabled = !checkbox.checked; }));
   if (type === 'tasks') {
+    bindTaskImagesField();
     $('#add-check').addEventListener('click', () => { $('#checklist').insertAdjacentHTML('beforeend', checklistRow()); bindChecklistDelete(); });
     bindChecklistDelete();
     $('#scope-checklist')?.addEventListener('click', event => { const button = event.target.closest('.remove-scope-check'); if (button) button.closest('.scope-check-row').remove(); });
@@ -6504,7 +6625,7 @@ function fieldLabel(field) { return ({
   due_date: 'Deadline', reminder_date: 'Przypomnienie', start_date: 'Planowany start', note_date: 'Data wpisu', checked_on: 'Data sprawdzenia', checked_by: 'Sprawdził', recurrence_interval: 'Czas cyklu', recurrence_unit: 'Jednostka cyklu', recurrence_next_task_id: 'Następne zadanie cykliczne',
   current_note: 'Aktualna notatka', environment: 'Środowisko', criticality: 'Krytyczność', evidence_link: 'Dowód / link', info_link: 'Dodatkowe informacje / link',
   impact: 'Wpływ', waiting_for: 'Oczekiwanie na', next_action: 'Następny krok', shift: 'Zmiana', type: 'Typ wpisu', content: 'Treść', sections: 'Informacje przekazania', author: 'Autor', comment: 'Dodany komentarz',
-  linked_entity_id: 'Powiązany element', linked_entity_type: 'Typ powiązania', checklist: 'Lista kontrolna / podzadania', scope_checklist: 'Kontrola sterowników w zakresie', links: 'Powiązania', requirement_ids: 'Zapotrzebowanie', dependency_task_ids: 'Zależności zadania', dependency_refs: 'Zależności kolejki'
+  linked_entity_id: 'Powiązany element', linked_entity_type: 'Typ powiązania', checklist: 'Lista kontrolna / podzadania', scope_checklist: 'Kontrola sterowników w zakresie', task_images: 'Zdjęcia', links: 'Powiązania', requirement_ids: 'Zapotrzebowanie', dependency_task_ids: 'Zależności zadania', dependency_refs: 'Zależności kolejki'
 })[field] || field.replaceAll('_', ' '); }
 
 function auditUserName(id) { return state.users.find(user => user.id === Number(id))?.display_name || 'Nieprzypisane'; }
@@ -6618,6 +6739,26 @@ function auditChangeHtml(field, change) {
   return `<div class="audit-change"><span>${escapeHtml(fieldLabel(field))}</span><span>${escapeHtml(formatAuditValue(field, change.from))} → <b>${escapeHtml(formatAuditValue(field, change.to))}</b></span></div>`;
 }
 
+async function syncTaskImages(taskId, dialog) {
+  const errors = [];
+  for (const imageId of [...(dialog.deletedTaskImageIds || [])]) {
+    try {
+      await api(`/api/task-images/${imageId}`, { method: 'DELETE' });
+      dialog.deletedTaskImageIds = dialog.deletedTaskImageIds.filter(id => Number(id) !== Number(imageId));
+      dialog.taskImages = dialog.taskImages.filter(image => Number(image.id) !== Number(imageId));
+    } catch (error) { errors.push(`Usuwanie zdjęcia: ${error.message}`); }
+  }
+  for (const image of [...(dialog.pendingTaskImages || [])]) {
+    try {
+      const saved = await api(`/api/tasks/${taskId}/images`, { method: 'POST', body: JSON.stringify(image) });
+      dialog.pendingTaskImages = dialog.pendingTaskImages.filter(candidate => candidate !== image);
+      dialog.taskImages.push(saved);
+    } catch (error) { errors.push(`${image.filename}: ${error.message}`); }
+  }
+  renderTaskImages();
+  return errors;
+}
+
 async function saveRecord(event) {
   event.preventDefault();
   if (!state.dialog?.editing) return;
@@ -6656,6 +6797,15 @@ async function saveRecord(event) {
   if (type === 'notes') $$('[data-toggle]').forEach(toggle => { if (!toggle.checked) input[toggle.dataset.toggle] = null; });
   try {
     let saved = await api(definition.endpoint + (record ? `/${record.id}` : ''), { method: record ? 'PATCH' : 'POST', body: JSON.stringify(input) });
+    if (type === 'tasks' && saved?.id) {
+      const imageErrors = await syncTaskImages(saved.id, state.dialog);
+      saved.images = [...state.dialog.taskImages]; saved.image_count = saved.images.length;
+      state.dialog.record = saved;
+      if (imageErrors.length) {
+        toast(`Zadanie zapisano, ale część operacji na zdjęciach nie powiodła się: ${imageErrors.join(' ')}`, true);
+        return;
+      }
+    }
     if (type === 'status' && saved?.id) {
       const columns = statusEditorColumns(saved.status_group_id, saved.status_subgroup_id);
       for (const column of columns) {

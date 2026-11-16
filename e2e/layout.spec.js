@@ -183,6 +183,38 @@ test('Planner ukrywa narzędzia, dodaje transport skrótem T i liczy jego czas',
   await expect(page.locator('#planner-bulk-approve')).toBeHidden();
 });
 
+test('zadanie przyjmuje screenshot przez Ctrl+V, kompresuje go i pokazuje po zapisie', async ({ page }) => {
+  await openView(page, 'tasks');
+  await page.getByRole('button', { name: '+ Nowe zadanie', exact: true }).click();
+  await expect(page.locator('#modal')).toBeVisible();
+  const title = `Screenshot zadania ${Date.now()}`;
+  await page.locator('#fields [name="title"]').fill(title);
+  await page.locator('#fields [name="status"]').selectOption('To do');
+  await page.evaluate(async () => {
+    const blob = await fetch('/assets/favicon.png').then(response => response.blob());
+    const file = new File([blob], 'screenshot-schowek.png', { type: 'image/png' });
+    const transfer = new DataTransfer(); transfer.items.add(file);
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', { value: transfer });
+    document.dispatchEvent(event);
+  });
+  await expect(page.locator('.task-image-card.pending')).toHaveCount(1);
+  await expect(page.locator('.task-image-card.pending')).toContainText('do zapisania');
+  await expect(page.locator('.task-image-card.pending b')).toContainText('.webp');
+  const invalidFields = await page.locator('#form').evaluate(form => [...form.querySelectorAll(':invalid')].map(control => control.getAttribute('name') || control.id || control.tagName));
+  expect(invalidFields).toEqual([]);
+  await page.locator('#record-save').click();
+  await expect(page.locator('#modal')).not.toBeVisible();
+
+  const card = page.locator('.task-card', { hasText: title });
+  await expect(card).toBeVisible();
+  await expect(card.locator('.task-image-count')).toHaveText(/1/);
+  await card.click();
+  await expect(page.locator('#task-image-gallery .task-image-card')).toHaveCount(1);
+  await expect(page.locator('#task-image-gallery img')).toHaveAttribute('src', /\/api\/task-images\/\d+\/content/);
+  await expectViewportContained(page);
+});
+
 test('menedżer motywów udostępnia dziesięć profesjonalnych palet', async ({ page }) => {
   const palettes = {
     'industrial-pro': ['#081B30', '#0057C8', '#74C7F8', '#41546A', '#F8FAFC'],

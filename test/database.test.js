@@ -1733,3 +1733,38 @@ test('communication workflow supports watch, mute, snooze, mentions, digest, tim
     rmSync(temporary.directory, { recursive: true, force: true });
   }
 });
+
+test('task images are project-scoped, size-limited, audited and included in backups', () => {
+  const temporary = temporaryDatabase();
+  const repository = openDatabase(temporary.path);
+  try {
+    const account = repository.authenticate('admin');
+    const admin = repository.me(account.id);
+    const controller = repository.controllers()[0];
+    const task = repository.saveTask(null, { controller: controller.code, title: 'Dokumentacja zdjęciowa' }, admin);
+    const webp = Buffer.concat([Buffer.from('RIFF'), Buffer.from([4, 0, 0, 0]), Buffer.from('WEBP')]);
+    const image = repository.saveTaskImage(task.id, {
+      filename: 'szafa sterownicza.png', mime_type: 'image/webp', width: 1280, height: 720, data_base64: webp.toString('base64')
+    }, admin);
+
+    assert.equal(image.filename, 'szafa sterownicza.webp');
+    assert.equal(image.byte_size, webp.length);
+    assert.match(image.content_url, new RegExp(`/api/task-images/${image.id}/content$`));
+    assert.equal(repository.taskImages(task.id).length, 1);
+    assert.deepEqual(Buffer.from(repository.taskImageContent(image.id).image_data), webp);
+    assert.equal(repository.tasks('all', admin).find(item => item.id === task.id).image_count, 1);
+    assert.ok(repository.audit('task', task.id).some(entry => entry.changes.task_images?.to?.includes('Dodano zdjęcie')));
+
+    const backupImage = repository.projectBackup().tables.task_images.find(item => item.id === image.id);
+    assert.equal(backupImage.image_data_base64, webp.toString('base64'));
+    assert.equal(Object.hasOwn(backupImage, 'image_data'), false);
+    assert.throws(() => repository.saveTaskImage(task.id, { filename: 'tekst.webp', mime_type: 'image/webp', width: 10, height: 10, data_base64: Buffer.from('not-an-image').toString('base64') }, admin), /formatowi zdjęcia/);
+
+    repository.deleteTaskImage(image.id, admin);
+    assert.equal(repository.taskImages(task.id).length, 0);
+    assert.ok(repository.audit('task', task.id).some(entry => entry.changes.task_images?.from?.includes('Usunięto zdjęcie')));
+  } finally {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});

@@ -995,6 +995,21 @@ function createRepository(db, defaultProjectId) {
     };
   }
 
+  function taskImageRows(taskId) {
+    const task = one('SELECT id FROM tasks WHERE id=? AND project_id=?', asId(taskId), activeProjectId());
+    if (!task) throw appError('Nie znaleziono zadania', 404);
+    return all(`SELECT ti.id,ti.task_id,ti.filename,ti.mime_type,ti.byte_size,ti.width,ti.height,ti.created_by,ti.created_at,
+      u.display_name created_by_name FROM task_images ti LEFT JOIN users u ON u.id=ti.created_by
+      WHERE ti.project_id=? AND ti.task_id=? ORDER BY ti.created_at,ti.id`, activeProjectId(), task.id)
+      .map(row => ({ ...row, content_url: `/api/task-images/${row.id}/content` }));
+  }
+
+  function validImageSignature(data, mimeType) {
+    if (mimeType === 'image/jpeg') return data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff;
+    if (mimeType === 'image/png') return data.length >= 8 && data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    return data.length >= 12 && data.subarray(0, 4).toString('ascii') === 'RIFF' && data.subarray(8, 12).toString('ascii') === 'WEBP';
+  }
+
   function decoratePoint(row, currentUser) {
     const requirements = requirementRows('point', row.id);
     return { ...row, links: entityLinkRows('point', row.id), mentioned_user_ids: mentionIds('point', row.id), comments: commentRows('point', row.id), requirements, requirement_ids: requirements.map(item => item.id), requirement_names: requirements.map(item => item.name).join(', '), can_delete: ['system_admin', 'project_admin'].includes(currentUser.role), ...editLockState('point', row.id, currentUser), ...dependencyState('point', row) };
@@ -1231,6 +1246,7 @@ function createRepository(db, defaultProjectId) {
     return filterRowsByHierarchyScope(all(`SELECT t.*,c.code controller,c.sort_order controller_order,
       creator.display_name created_by_name,owner.display_name owner_name,
       fg.name function_group_name,fge.name function_group_element_name,
+      (SELECT COUNT(*) FROM task_images ti WHERE ti.project_id=t.project_id AND ti.task_id=t.id) image_count,
       COALESCE(cat.sort_order,9999) category_order,COALESCE(sub.sort_order,9999) subcategory_order
       FROM tasks t
       JOIN controllers c ON c.id=t.controller_id
@@ -1439,7 +1455,7 @@ function createRepository(db, defaultProjectId) {
     ['function_group_check_subcategories', 'check_id IN (SELECT id FROM function_group_checks WHERE function_group_id IN (SELECT id FROM function_groups WHERE project_id=?))'],
     ['status_groups', 'project_id=?'], ['status_subgroups', 'status_group_id IN (SELECT id FROM status_groups WHERE project_id=?)'],
     ['status_columns', 'status_group_id IN (SELECT id FROM status_groups WHERE project_id=?)'], ['status_workflow_states', 'project_id=?'],
-    ['status_items', 'project_id=?'], ['status_cell_values', 'status_item_id IN (SELECT id FROM status_items WHERE project_id=?)'], ['status_assignees', 'project_id=?'], ['tasks', 'project_id=?'], ['task_dependencies', 'project_id=?'],
+    ['status_items', 'project_id=?'], ['status_cell_values', 'status_item_id IN (SELECT id FROM status_items WHERE project_id=?)'], ['status_assignees', 'project_id=?'], ['tasks', 'project_id=?'], ['task_images', 'project_id=?'], ['task_dependencies', 'project_id=?'],
     ['task_checklist', 'task_id IN (SELECT id FROM tasks WHERE project_id=?)'],
     ['task_scope_checklist', 'task_id IN (SELECT id FROM tasks WHERE project_id=?)'],
     ['task_assignees', 'project_id=?'], ['project_user_areas', 'project_id=?'], ['planner_entries', 'project_id=?'], ['planner_requirements', 'project_id=?'], ['planner_holidays', 'project_id=?'], ['planner_absences', 'project_id=?'], ['planner_overlap_reviews', 'project_id=?'], ['planner_time_adjustments', 'project_id=?'],
@@ -1473,7 +1489,7 @@ function createRepository(db, defaultProjectId) {
   const projectRestoreOrder = [
     'controller_groups', 'controllers', 'categories', 'subcategories', 'task_categories', 'task_subcategories',
     'options', 'settings', 'completion_requirements', 'function_groups', 'function_group_elements', 'function_group_subcategories', 'function_group_checks',
-    'function_group_check_subcategories', 'status_groups', 'status_subgroups', 'status_columns', 'status_workflow_states', 'status_items', 'status_cell_values', 'status_assignees', 'tasks', 'task_dependencies', 'task_checklist', 'task_scope_checklist', 'task_assignees', 'open_points', 'entity_dependencies',
+    'function_group_check_subcategories', 'status_groups', 'status_subgroups', 'status_columns', 'status_workflow_states', 'status_items', 'status_cell_values', 'status_assignees', 'tasks', 'task_images', 'task_dependencies', 'task_checklist', 'task_scope_checklist', 'task_assignees', 'open_points', 'entity_dependencies',
     'daily_notes', 'daily_note_sections', 'daily_note_section_scopes', 'daily_note_section_links', 'daily_note_section_recipients', 'goals', 'goal_links', 'entity_mentions', 'entity_links', 'entity_requirements', 'entity_edit_locks', 'entity_comments', 'comment_mentions', 'entity_notification_preferences', 'user_communication_preferences', 'notifications', 'audit_log',
     'export_templates', 'project_sequences', 'project_user_areas', 'planner_entries', 'planner_requirements', 'planner_holidays', 'planner_absences', 'planner_overlap_reviews', 'planner_time_adjustments',
     'announcements', 'announcement_labels', 'announcement_scopes', 'announcement_users', 'announcement_links', 'announcement_label_links', 'announcement_reads', 'announcement_snoozes', 'calendar_annotations', 'calendar_annotation_scopes', 'calendar_item_dates',
@@ -1486,6 +1502,10 @@ function createRepository(db, defaultProjectId) {
     const projectId = activeProjectId();
     const project = one('SELECT * FROM projects WHERE id=?', projectId);
     const tables = Object.fromEntries(projectBackupTables.map(([table, condition]) => [table, all(`SELECT * FROM ${table} WHERE ${condition}`, projectId)]));
+    tables.task_images = (tables.task_images || []).map(row => {
+      const { image_data, ...metadata } = row;
+      return { ...metadata, image_data_base64: Buffer.from(image_data).toString('base64') };
+    });
     return {
       format: 'plc-commissioning-hub-project-backup', version: 1, schema: 'current',
       generated_at: new Date().toISOString(), project,
@@ -1518,6 +1538,10 @@ function createRepository(db, defaultProjectId) {
       if (table === 'planner_entries' && !Object.hasOwn(row, 'duration_hours')) {
         const configuredHours = Number(one("SELECT value FROM system_settings WHERE key='planner_offline_hours'")?.value || 8);
         row.duration_hours = row.transport_mode === 'transport_only' ? Math.min(24, Math.max(0.25, configuredHours || 8)) : 0;
+      }
+      if (table === 'task_images') {
+        row.image_data = Buffer.from(clean(row.image_data_base64), 'base64');
+        delete row.image_data_base64;
       }
       const allowedColumns = columnNames(db, table);
       const columns = Object.keys(row).filter(column => allowedColumns.has(column));
@@ -5109,6 +5133,46 @@ function createRepository(db, defaultProjectId) {
     deleteStatus(id, currentUser) { removeWithAudit('status', id, currentUser); },
 
     tasks(code, currentUser) { return taskRows(code, currentUser); },
+    taskImages(taskId) { return taskImageRows(taskId); },
+    taskImageContent(imageId) {
+      const row = one(`SELECT ti.id,ti.task_id,ti.filename,ti.mime_type,ti.byte_size,ti.image_data
+        FROM task_images ti JOIN tasks t ON t.id=ti.task_id AND t.project_id=ti.project_id
+        WHERE ti.id=? AND ti.project_id=?`, asId(imageId), activeProjectId());
+      if (!row) throw appError('Nie znaleziono zdjęcia', 404);
+      return row;
+    },
+    saveTaskImage(taskId, input, currentUser) {
+      const task = one('SELECT * FROM tasks WHERE id=? AND project_id=?', asId(taskId), activeProjectId());
+      if (!task) throw appError('Nie znaleziono zadania', 404);
+      assertEntityEditable('task', task.id, currentUser);
+      const mimeType = clean(input.mime_type).toLowerCase();
+      if (!['image/webp', 'image/jpeg', 'image/png'].includes(mimeType)) throw appError('Dozwolone są zdjęcia WebP, JPEG i PNG');
+      const encoded = clean(input.data_base64);
+      if (!encoded || encoded.length > 1_250_000 || !/^[a-zA-Z0-9+/]+={0,2}$/.test(encoded)) throw appError('Nieprawidłowe dane zdjęcia');
+      const imageData = Buffer.from(encoded, 'base64');
+      if (!imageData.length || imageData.length > 900_000) throw appError('Zdjęcie po kompresji może mieć maksymalnie 900 KB');
+      if (!validImageSignature(imageData, mimeType)) throw appError('Zawartość pliku nie odpowiada formatowi zdjęcia');
+      const width = Math.trunc(Number(input.width)); const height = Math.trunc(Number(input.height));
+      if (!Number.isFinite(width) || !Number.isFinite(height) || width < 1 || height < 1 || width > 10000 || height > 10000) throw appError('Nieprawidłowe wymiary zdjęcia');
+      const count = Number(one('SELECT COUNT(*) count FROM task_images WHERE project_id=? AND task_id=?', activeProjectId(), task.id)?.count || 0);
+      if (count >= 12) throw appError('Do jednego zadania można dodać maksymalnie 12 zdjęć');
+      const extension = mimeType === 'image/png' ? '.png' : mimeType === 'image/jpeg' ? '.jpg' : '.webp';
+      let filename = clean(input.filename).replace(/[\\/\x00-\x1f\x7f]/g, '_').slice(0, 120);
+      if (!filename) filename = `zdjecie-${Date.now()}${extension}`;
+      if (!filename.toLowerCase().endsWith(extension)) filename = `${filename.replace(/\.[^.]+$/, '')}${extension}`;
+      const imageId = insertRecord('task_images', { project_id: activeProjectId(), task_id: task.id, filename, mime_type: mimeType, byte_size: imageData.length, width, height, image_data: imageData, created_by: currentUser.id });
+      writeAuditChanges('task', task.id, currentUser, { task_images: { from: null, to: `Dodano zdjęcie: ${filename}` } });
+      return taskImageRows(task.id).find(row => row.id === imageId);
+    },
+    deleteTaskImage(imageId, currentUser) {
+      const image = one(`SELECT ti.* FROM task_images ti JOIN tasks t ON t.id=ti.task_id AND t.project_id=ti.project_id
+        WHERE ti.id=? AND ti.project_id=?`, asId(imageId), activeProjectId());
+      if (!image) throw appError('Nie znaleziono zdjęcia', 404);
+      assertEntityEditable('task', image.task_id, currentUser);
+      db.prepare('DELETE FROM task_images WHERE id=? AND project_id=?').run(image.id, activeProjectId());
+      writeAuditChanges('task', image.task_id, currentUser, { task_images: { from: `Usunięto zdjęcie: ${image.filename}`, to: null } });
+      return { deleted: true, id: image.id, task_id: image.task_id };
+    },
     saveTask(id, input, currentUser) {
       const before = id ? baseSnapshot('task', id) : null;
       if (id && !before) throw appError('Nie znaleziono zadania', 404);

@@ -267,3 +267,37 @@ test('login throttling blocks repeated password guessing', async t => {
   const blockedCorrectLogin = await login(baseUrl, 'security-admin', 'security-test-password', headers);
   assert.equal(blockedCorrectLogin.response.status, 429);
 });
+
+test('task image API validates, serves and deletes compressed images', async t => {
+  const { baseUrl } = await startApplication(t);
+  const admin = await login(baseUrl, 'security-admin', 'security-test-password');
+  assert.equal(admin.response.status, 200);
+  await selectProject(baseUrl, admin.cookie, admin.data.projects[0].id);
+  const groupResponse = await request(baseUrl, '/api/controller-groups', { cookie: admin.cookie, method: 'POST', body: { name: 'Obszar zdjęć' } });
+  assert.equal(groupResponse.status, 201);
+  const group = await groupResponse.json();
+  const controllerResponse = await request(baseUrl, '/api/controllers', { cookie: admin.cookie, method: 'POST', body: { group_id: group.id, leaf_code: 'PLC-ZDJ' } });
+  assert.equal(controllerResponse.status, 201);
+  const controller = await controllerResponse.json();
+  const taskResponse = await request(baseUrl, '/api/tasks', { cookie: admin.cookie, method: 'POST', body: { hierarchy_target: `controller:${controller.code}`, title: 'Zdjęcie API' } });
+  assert.equal(taskResponse.status, 201);
+  const task = await taskResponse.json();
+  const webp = Buffer.concat([Buffer.from('RIFF'), Buffer.from([4, 0, 0, 0]), Buffer.from('WEBP')]);
+  const upload = await request(baseUrl, `/api/tasks/${task.id}/images`, { cookie: admin.cookie, method: 'POST', body: { filename: 'screen.png', mime_type: 'image/webp', width: 640, height: 360, data_base64: webp.toString('base64') } });
+  assert.equal(upload.status, 201);
+  const image = await upload.json();
+  assert.equal(image.mime_type, 'image/webp');
+
+  const list = await (await request(baseUrl, `/api/tasks/${task.id}/images`, { cookie: admin.cookie })).json();
+  assert.equal(list.length, 1);
+  const content = await request(baseUrl, image.content_url, { cookie: admin.cookie });
+  assert.equal(content.status, 200);
+  assert.equal(content.headers.get('content-type'), 'image/webp');
+  assert.equal(content.headers.get('content-disposition'), 'inline; filename="screen.webp"');
+  assert.deepEqual(Buffer.from(await content.arrayBuffer()), webp);
+  assert.equal((await request(baseUrl, image.content_url)).status, 401);
+
+  const remove = await request(baseUrl, `/api/task-images/${image.id}`, { cookie: admin.cookie, method: 'DELETE', body: {} });
+  assert.equal(remove.status, 200);
+  assert.equal((await (await request(baseUrl, `/api/tasks/${task.id}/images`, { cookie: admin.cookie })).json()).length, 0);
+});
