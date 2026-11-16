@@ -80,7 +80,6 @@ main { min-width:0; padding:20px; }
 .metric-row div { padding:8px; background:var(--panel-alt); border-radius:7px; text-align:center; }
 .metric-row b,.metric-row small { display:block; }
 .metric-row small { margin-top:2px; color:var(--muted); font-size:10px; }
-.progress { height:6px; margin-top:10px; overflow:hidden; background:var(--track); border-radius:99px; }
 .progress i { display:block; height:100%; background:var(--blue); }
 .controller-overview { display:grid; gap:10px; }
 .controller-row { display:grid; grid-template-columns:150px repeat(3,minmax(0,1fr)); gap:10px; align-items:center; padding:13px; background:var(--surface); border:1px solid var(--line); border-radius:10px; }
