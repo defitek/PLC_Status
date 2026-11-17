@@ -166,7 +166,8 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   await expect(page.locator('#planner-bulk-toolbar')).toBeHidden();
   await page.locator('#planner-tools-toggle').click();
   await expect(page.locator('#planner-bulk-toolbar')).toBeVisible();
-  await expect(page.locator('#planner-bulk-transport')).toHaveText(/Transport/);
+  await expect(page.locator('#planner-bulk-transport')).toHaveText('+Transport');
+  await expect(page.locator('#planner-bulk-remove')).toHaveCount(0);
   await expect(page.locator('#planner-bulk-time-off')).toHaveText('+ Wolne');
   await expect(page.locator('#planner-bulk-vacation')).toHaveText('+ Urlop');
   await expect(page.locator('#planner-bulk-approve')).toBeHidden();
@@ -176,7 +177,7 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   const date = await cell.getAttribute('data-date');
   await cell.click();
   await page.keyboard.press('t');
-  await expect(page.locator('#action-title')).toHaveText(/Dodaj transport/);
+  await expect(page.locator('#action-title')).toHaveText(/Transport/);
   await expect(page.locator('#action-fields [name="controller_group_id"]')).toHaveCount(0);
   await expect(page.locator('#action-fields [name="shift"]')).toHaveCount(0);
   await page.locator('#action-fields [name="duration_hours"]').fill('7');
@@ -188,7 +189,8 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   await expect(savedCell.locator('.plan-chip.transport-only:has(.plan-note[data-note="Transport testowy"])')).toContainText('7 h 17 min');
   await expect(page.locator('#planner-bulk-approve')).toBeHidden();
 
-  await savedCell.dblclick();
+  await savedCell.click();
+  await page.keyboard.press('e');
   const transportRow = page.locator('#planner-entry-list .planner-entry-row.transport-entry');
   await expect(transportRow.locator('[data-plan-area]')).toBeHidden();
   await expect(transportRow.locator('[data-plan-shift]')).toBeHidden();
@@ -198,7 +200,7 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
 
   const freeCell = page.locator('.planner-cell[data-editable="1"]').nth(1);
   await freeCell.click();
-  await page.locator('#planner-bulk-time-off').click();
+  await page.keyboard.press('w');
   await expect(page.locator('#action-title')).toContainText('Wolne');
   await page.locator('#action-fields [name="note"]').fill('Odbiór nadgodzin');
   await page.locator('#action-submit').click();
@@ -206,12 +208,43 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
 
   const vacationCell = page.locator('.planner-cell[data-editable="1"]').nth(2);
   await vacationCell.click({ button: 'right' });
-  await expect(page.locator('#context-menu [data-action="add-time-off"]')).toHaveText('+ Wolne');
-  await page.locator('#context-menu [data-action="add-vacation"]').click();
+  await expect(page.locator('#context-menu [data-action="add-time-off"]')).toContainText('+ Wolne');
+  await expect(page.locator('#context-menu [data-action="add-transport"]')).toContainText('+Transport');
+  await expect(page.locator('#context-menu [data-action="remove-selection"]')).toHaveCount(0);
+  await page.locator('#title').click();
+  await page.keyboard.press('u');
   await expect(page.locator('#action-title')).toContainText('Urlop');
   await page.locator('#action-fields [name="note"]').fill('Urlop testowy');
   await page.locator('#action-submit').click();
   await expect(vacationCell.locator('.absence-chip.vacation')).toContainText('URLOP');
+
+  const workCell = page.locator('.planner-cell[data-editable="1"]').nth(3);
+  await workCell.click();
+  await page.keyboard.press('p');
+  await expect(page.locator('#action-title')).toContainText('Dodaj obszar pracy');
+  await page.locator('#action-fields [name="note"]').fill('Praca testowa');
+  await page.locator('#action-submit').click();
+  await expect(workCell.locator('.plan-chip[data-current-project="1"]:has(.plan-note[data-note="Praca testowa"])')).toBeVisible();
+
+  await savedCell.dispatchEvent('pointerdown', { button: 0 });
+  await freeCell.dispatchEvent('pointerdown', { button: 0, ctrlKey: true });
+  await freeCell.click({ button: 'right' });
+  await expect(page.locator('#context-menu [data-action="clear"]')).toContainText('Wyczyść cały dzień');
+  await page.locator('#context-menu [data-action="clear"]').click();
+  await expect(page.locator('#action-title')).toHaveText('Wyczyść cały dzień');
+  await expect(page.locator('#action-description')).toContainText('2 wybranych dni');
+  await page.locator('#action-submit').click();
+  await expect(savedCell.locator('.plan-chip')).toHaveCount(0);
+  await expect(freeCell.locator('.absence-chip')).toHaveCount(0);
+
+  await vacationCell.dispatchEvent('pointerdown', { button: 0 });
+  await workCell.dispatchEvent('pointerdown', { button: 0, ctrlKey: true });
+  await page.keyboard.press('Delete');
+  await expect(page.locator('#action-title')).toHaveText('Wyczyść cały dzień');
+  await expect(page.locator('#action-description')).toContainText('2 wybranych dni');
+  await page.locator('#action-submit').click();
+  await expect(vacationCell.locator('.absence-chip')).toHaveCount(0);
+  await expect(workCell.locator('.plan-chip[data-current-project="1"]')).toHaveCount(0);
 });
 
 test('zadanie przyjmuje screenshot przez Ctrl+V, kompresuje go i pokazuje po zapisie', async ({ page }) => {
