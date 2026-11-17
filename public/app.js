@@ -2428,7 +2428,7 @@ async function addTransportToPlannerSelection() {
   const defaultDuration = plannerTransportParts(plannerDefaultTransportMinutes() / 60);
   const result = await uiForm({ title: `Transport · ${targets.length} ${targets.length === 1 ? 'dzień' : 'dni'}`, description: 'Transport jest oznaczany skrótem T i w kalkulacji czasu liczy się jako praca OFF.', submitLabel: '+Transport', fields: [
     { name: 'duration_hours', label: 'Godziny', type: 'number', value: defaultDuration.hours, min: 0, step: 1, required: true },
-    { name: 'duration_minutes', label: 'Minuty', type: 'number', value: defaultDuration.minutes, min: 0, max: 59, step: 1, required: true, hint: 'Łączny czas musi wynosić co najmniej 1 minutę.' },
+    { name: 'duration_minutes', label: 'Minuty', type: 'number', value: defaultDuration.minutes, min: 0, max: 59, step: 1, required: true },
     { name: 'note', label: 'Komentarz', placeholder: 'Opcjonalnie', full: true }
   ] });
   if (!result) return;
