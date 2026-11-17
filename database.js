@@ -54,6 +54,11 @@ const recurringDueDate = (from, interval, unit) => {
   return date.toISOString().slice(0, 10);
 };
 const appError = (message, statusCode = 400) => Object.assign(new Error(message), { statusCode });
+const formatTransportDuration = value => {
+  const totalMinutes = Math.max(0, Math.round(Number(value || 0) * 60));
+  const hours = Math.floor(totalMinutes / 60); const minutes = totalMinutes % 60;
+  return [hours ? `${hours} h` : '', minutes ? `${minutes} min` : ''].filter(Boolean).join(' ') || '0 min';
+};
 export { verifyPassword };
 
 export function openDatabase(databasePath) {
@@ -1626,20 +1631,18 @@ function createRepository(db, defaultProjectId) {
     const normalized = [];
     const seenAssignments = new Set();
     const hierarchyGroups = { work: [], transport: [] };
-    const configuredTransportHours = Number(one("SELECT value FROM system_settings WHERE key='planner_offline_hours'")?.value || 8);
-    const defaultTransportHours = Number.isFinite(configuredTransportHours) && configuredTransportHours > 0 ? Math.min(24, configuredTransportHours) : 8;
     for (const source of (Array.isArray(requested) ? requested : []).slice(0, 30)) {
-      const groupId = asId(source.controller_group_id);
       const activityType = clean(source.activity_type) === 'transport' || source.transport_mode === 'transport_only' ? 'transport' : 'work';
+      const groupId = activityType === 'work' ? asId(source.controller_group_id) : null;
       const workMode = activityType === 'work' && ['online', 'offline'].includes(source.work_mode) ? source.work_mode : 'offline';
       const transportMode = activityType === 'transport' ? 'transport_only' : 'none';
       const requestedDuration = Number(source.duration_hours);
-      const durationHours = activityType === 'transport'
-        ? Math.max(0.25, Math.min(24, Number.isFinite(requestedDuration) && requestedDuration > 0 ? requestedDuration : defaultTransportHours))
-        : 0;
-      const shift = clean(source.shift) || 'Dzień';
+      const durationMinutes = activityType === 'transport' && Number.isFinite(requestedDuration) ? Math.round(requestedDuration * 60) : 0;
+      if (activityType === 'transport' && durationMinutes < 1) throw appError('Czas transportu musi wynosić co najmniej 1 minutę');
+      const durationHours = activityType === 'transport' ? durationMinutes / 60 : 0;
+      const shift = activityType === 'transport' ? 'Dzień' : clean(source.shift) || 'Dzień';
       if (groupId && !one('SELECT 1 FROM controller_groups WHERE id=? AND project_id=? AND active=1', groupId, activeProjectId())) throw appError('Wybrany obszar nie należy do projektu');
-      if (!one("SELECT 1 FROM options WHERE project_id=? AND kind='shift' AND value=? AND active=1", activeProjectId(), shift)) throw appError(`Nieznana zmiana: ${shift}`);
+      if (activityType === 'work' && !one("SELECT 1 FROM options WHERE project_id=? AND kind='shift' AND value=? AND active=1", activeProjectId(), shift)) throw appError(`Nieznana zmiana: ${shift}`);
       if (!groupId && activityType === 'work' && !clean(source.note)) continue;
       if (groupId) {
         const key = `${activityType}:${groupId}`;
@@ -1872,13 +1875,13 @@ function createRepository(db, defaultProjectId) {
           .reduce((sum, item) => sum + Math.max(0, Number(item.duration_hours || 0)), 0);
         if (!workEntries.length) {
           actual = transportHours;
-          label = `T · OFF${transportHours ? ` · ${transportHours.toFixed(1)} h` : ''}`;
+          label = `T · OFF${transportHours ? ` · ${formatTransportDuration(transportHours)}` : ''}`;
         } else {
           actual = workEntries.some(item => item.work_mode === 'online') ? onlineHours : offlineHours;
           label = workEntries.some(item => item.work_mode === 'online') ? 'ON' : 'OFF';
           if (transportHours) {
             actual += transportHours;
-            label += ` + T ${transportHours.toFixed(1)} h`;
+            label += ` + T ${formatTransportDuration(transportHours)}`;
           }
         }
       }

@@ -177,13 +177,24 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   await cell.click();
   await page.keyboard.press('t');
   await expect(page.locator('#action-title')).toHaveText(/Dodaj transport/);
-  await page.locator('#action-fields [name="duration_hours"]').fill('2.5');
+  await expect(page.locator('#action-fields [name="controller_group_id"]')).toHaveCount(0);
+  await expect(page.locator('#action-fields [name="shift"]')).toHaveCount(0);
+  await page.locator('#action-fields [name="duration_hours"]').fill('7');
+  await page.locator('#action-fields [name="duration_minutes"]').fill('17');
   await page.locator('#action-fields [name="note"]').fill('Transport testowy');
   await page.locator('#action-submit').click();
   await expect(page.locator('#action-dialog')).not.toBeVisible();
   const savedCell = page.locator(`.planner-cell[data-user-id="${userId}"][data-date="${date}"]`);
-  await expect(savedCell.locator('.plan-chip.transport-only:has(.plan-note[data-note="Transport testowy"])')).toContainText('2.5 h');
+  await expect(savedCell.locator('.plan-chip.transport-only:has(.plan-note[data-note="Transport testowy"])')).toContainText('7 h 17 min');
   await expect(page.locator('#planner-bulk-approve')).toBeHidden();
+
+  await savedCell.dblclick();
+  const transportRow = page.locator('#planner-entry-list .planner-entry-row.transport-entry');
+  await expect(transportRow.locator('[data-plan-area]')).toBeHidden();
+  await expect(transportRow.locator('[data-plan-shift]')).toBeHidden();
+  await expect(transportRow.locator('[data-plan-duration-hours]')).toHaveValue('7');
+  await expect(transportRow.locator('[data-plan-duration-minutes]')).toHaveValue('17');
+  await page.locator('#planner-dialog-close').click();
 
   const freeCell = page.locator('.planner-cell[data-editable="1"]').nth(1);
   await freeCell.click();

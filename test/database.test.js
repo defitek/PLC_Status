@@ -431,6 +431,69 @@ test('task image content tokens migrate before their index on a persistent datab
   }
 });
 
+test('planner transport migration removes the legacy duration cap and area metadata', () => {
+  const temporary = temporaryDatabase();
+  let repository = openDatabase(temporary.path);
+  repository.close();
+  repository = null;
+
+  const legacy = new DatabaseSync(temporary.path);
+  legacy.exec(`
+    DROP INDEX IF EXISTS idx_planner_project_date;
+    DROP INDEX IF EXISTS idx_planner_user_date_project;
+    ALTER TABLE planner_entries RENAME TO planner_entries_current;
+    CREATE TABLE planner_entries (
+      id INTEGER PRIMARY KEY,
+      project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      plan_date TEXT NOT NULL,
+      shift TEXT NOT NULL DEFAULT 'Dzień',
+      controller_group_id INTEGER REFERENCES controller_groups(id) ON DELETE CASCADE,
+      work_mode TEXT NOT NULL DEFAULT 'online' CHECK(work_mode IN ('online','offline')),
+      transport_mode TEXT NOT NULL DEFAULT 'none' CHECK(transport_mode IN ('none','transport_work','transport_only')),
+      duration_hours REAL NOT NULL DEFAULT 0 CHECK(duration_hours >= 0 AND duration_hours <= 24),
+      note TEXT NOT NULL DEFAULT '',
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    ) STRICT;
+    INSERT INTO planner_entries SELECT * FROM planner_entries_current;
+    DROP TABLE planner_entries_current;
+    CREATE INDEX idx_planner_project_date ON planner_entries(project_id,plan_date,user_id);
+    CREATE INDEX idx_planner_user_date_project ON planner_entries(user_id,plan_date,project_id);
+  `);
+  legacy.prepare("DELETE FROM schema_migrations WHERE id='055-planner-transport-minute-precision'").run();
+  legacy.close();
+
+  try {
+    repository = openDatabase(temporary.path);
+    const account = repository.authenticate('admin'); const admin = repository.me(account.id);
+    const participant = repository.saveUser(null, { username: 'transport-minutes', display_name: 'Transport Minutes', password: 'test-password', project_role: 'user', planner_enabled: 1, assignable: 1 });
+    const area = repository.controllerGroups().find(item => !item.parent_id) || repository.saveControllerGroup(null, { name: 'Transport area' });
+    repository.savePlannerDay({ user_id: participant.id, plan_date: '2031-04-01', entries: [{
+      activity_type: 'transport', controller_group_id: area.id, shift: 'Noc', duration_hours: 25 + 17 / 60, note: 'Migracja minutowa'
+    }] }, admin);
+    const transport = repository.planner('2031-04-01', '2031-04-01', admin).entries.find(item => item.user_id === participant.id);
+    assert.equal(Math.round(transport.duration_hours * 60), 1517);
+    assert.equal(transport.controller_group_id, null);
+    assert.equal(transport.shift, 'Dzień');
+    assert.throws(() => repository.savePlannerDay({ user_id: participant.id, plan_date: '2031-04-02', entries: [{ activity_type: 'transport', duration_hours: 0 }] }, admin), /co najmniej 1 minutę/);
+    repository.close();
+    repository = null;
+    const migrated = new DatabaseSync(temporary.path);
+    try {
+      const tableSql = migrated.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='planner_entries'").get().sql;
+      assert.doesNotMatch(tableSql, /duration_hours\s*<=\s*24/i);
+      assert.ok(migrated.prepare("SELECT 1 FROM schema_migrations WHERE id='055-planner-transport-minute-precision'").get());
+    } finally {
+      migrated.close();
+    }
+  } finally {
+    repository?.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
 test('professional themes replace legacy palettes and persist user preference', () => {
   const temporary = temporaryDatabase();
   let repository = openDatabase(temporary.path);
@@ -1130,7 +1193,7 @@ test('V9 supports guarded duplication, comments, pushes, calendar ranges and wor
       repository.savePlannerDay({ user_id: worker.id, plan_date: '2026-10-09', absence_type: 'vacation', absence_note: 'Urlop' }, admin);
       repository.savePlannerDay({ user_id: worker.id, plan_date: '2026-10-10', absence_type: 'time_off', absence_note: 'Odbiór nadgodzin' }, admin);
       repository.savePlannerDay({
-        user_id: worker.id, plan_date: '2026-10-11', entries: [{ activity_type: 'transport', controller_group_id: root.id, shift: 'Dzień', transport_mode: 'transport_only', duration_hours: 3.5 }]
+        user_id: worker.id, plan_date: '2026-10-11', entries: [{ activity_type: 'transport', controller_group_id: root.id, shift: 'Noc', transport_mode: 'transport_only', duration_hours: 3.5 }]
       }, admin);
       repository.setPlannerRequirementsBatch({ items: [{
         plan_date: '2026-10-08', controller_group_id: root.id, online_required: 2, offline_required: 1
@@ -1142,6 +1205,9 @@ test('V9 supports guarded duplication, comments, pushes, calendar ranges and wor
       assert.equal(workerHours.credited_hours, 8);
       assert.equal(workerHours.overtime_balance, 20);
       assert.equal(managerPlanner.time_details.details.find(item => item.user_id === worker.id && item.date === '2026-10-11').actual_hours, 3.5);
+      const normalizedTransport = managerPlanner.entries.find(item => item.user_id === worker.id && item.plan_date === '2026-10-11');
+      assert.equal(normalizedTransport.controller_group_id, null, 'transport must not retain a project area');
+      assert.equal(normalizedTransport.shift, 'Dzień', 'transport must not retain a selected work shift');
       assert.equal(managerPlanner.summary.find(item => item.plan_date === '2026-10-11').offline_headcount, 1);
       assert.equal(managerPlanner.area_day_summary.find(item => item.id === root.id).days[0].online_required, 2);
       assert.equal(workerPlanner.requirements.length, 0);
@@ -1518,7 +1584,7 @@ test('V14 shares users across projects, exposes cross-project plans and supports
       repository.savePlannerDay({
         user_id: worker.id, plan_date: planDate, entries: [
           { activity_type: 'work', controller_group_id: area.id, work_mode: 'online', shift: 'Dzień', note: 'Praca V14' },
-          { activity_type: 'transport', controller_group_id: area.id, shift: 'Dzień', note: 'Dojazd V14' }
+          { activity_type: 'transport', controller_group_id: area.id, shift: 'Dzień', duration_hours: 1, note: 'Dojazd V14' }
         ]
       }, projectAdmin);
       const day = repository.planner(planDate, planDate, projectAdmin);

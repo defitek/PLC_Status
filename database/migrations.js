@@ -80,7 +80,44 @@ export function prepareDatabase(db, { seedDemo, demoLimit = 100 }) {
   runMigration(db, '052-planner-transport-duration', () => migratePlannerTransportDuration(db));
   runMigration(db, '053-task-images', () => migrateTaskImages(db));
   runMigration(db, '054-task-image-content-tokens', () => migrateTaskImageContentTokens(db));
+  runMigration(db, '055-planner-transport-minute-precision', () => migratePlannerTransportMinutePrecision(db));
   return defaultProjectId;
+}
+
+function migratePlannerTransportMinutePrecision(db) {
+  const tableSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='planner_entries'").get()?.sql || '';
+  if (!/duration_hours\s*<=\s*24/i.test(tableSql)) return;
+  db.exec(`
+    BEGIN IMMEDIATE;
+    CREATE TABLE planner_entries_v55 (
+      id INTEGER PRIMARY KEY,
+      project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      plan_date TEXT NOT NULL,
+      shift TEXT NOT NULL DEFAULT 'Dzień',
+      controller_group_id INTEGER REFERENCES controller_groups(id) ON DELETE CASCADE,
+      work_mode TEXT NOT NULL DEFAULT 'online' CHECK(work_mode IN ('online','offline')),
+      transport_mode TEXT NOT NULL DEFAULT 'none' CHECK(transport_mode IN ('none','transport_work','transport_only')),
+      duration_hours REAL NOT NULL DEFAULT 0 CHECK(duration_hours >= 0),
+      note TEXT NOT NULL DEFAULT '',
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    ) STRICT;
+    INSERT INTO planner_entries_v55(id,project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,note,created_by,created_at,updated_at)
+      SELECT id,project_id,user_id,plan_date,
+        CASE WHEN transport_mode='transport_only' THEN 'Dzień' ELSE shift END,
+        CASE WHEN transport_mode='transport_only' THEN NULL ELSE controller_group_id END,
+        work_mode,transport_mode,
+        CASE WHEN transport_mode='transport_only' THEN CASE WHEN duration_hours>0 THEN MAX(1,ROUND(duration_hours*60))/60.0 ELSE 8 END ELSE 0 END,
+        note,created_by,created_at,updated_at
+      FROM planner_entries;
+    DROP TABLE planner_entries;
+    ALTER TABLE planner_entries_v55 RENAME TO planner_entries;
+    CREATE INDEX idx_planner_project_date ON planner_entries(project_id,plan_date,user_id);
+    CREATE INDEX idx_planner_user_date_project ON planner_entries(user_id,plan_date,project_id);
+    COMMIT;
+  `);
 }
 
 function migrateTaskImageContentTokens(db) {

@@ -534,7 +534,7 @@ CREATE TABLE IF NOT EXISTS planner_entries (
   controller_group_id INTEGER REFERENCES controller_groups(id) ON DELETE CASCADE,
   work_mode TEXT NOT NULL DEFAULT 'online' CHECK(work_mode IN ('online','offline')),
   transport_mode TEXT NOT NULL DEFAULT 'none' CHECK(transport_mode IN ('none','transport_work','transport_only')),
-  duration_hours REAL NOT NULL DEFAULT 0 CHECK(duration_hours >= 0 AND duration_hours <= 24),
+  duration_hours REAL NOT NULL DEFAULT 0 CHECK(duration_hours >= 0),
   note TEXT NOT NULL DEFAULT '',
   created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
