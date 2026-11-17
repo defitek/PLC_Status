@@ -154,7 +154,7 @@ test('zakładki Priorytetów są spójne, a samotna akcja mieści się w belce z
   expect(Math.abs(operationsStyle.height - workspaceStyle.height)).toBeLessThanOrEqual(2);
 });
 
-test('Planner ukrywa narzędzia, dodaje transport skrótem T i liczy jego czas', async ({ page }) => {
+test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kontekstowym', async ({ page }) => {
   await page.evaluate(async () => {
     const users = await fetch('/api/users').then(response => response.json());
     const participant = users.find(user => user.system_role !== 'system_admin') || users[0];
@@ -166,6 +166,9 @@ test('Planner ukrywa narzędzia, dodaje transport skrótem T i liczy jego czas',
   await expect(page.locator('#planner-bulk-toolbar')).toBeHidden();
   await page.locator('#planner-tools-toggle').click();
   await expect(page.locator('#planner-bulk-toolbar')).toBeVisible();
+  await expect(page.locator('#planner-bulk-transport')).toHaveText(/Transport/);
+  await expect(page.locator('#planner-bulk-time-off')).toHaveText('+ Wolne');
+  await expect(page.locator('#planner-bulk-vacation')).toHaveText('+ Urlop');
   await expect(page.locator('#planner-bulk-approve')).toBeHidden();
 
   const cell = page.locator('.planner-cell[data-editable="1"]').first();
@@ -181,6 +184,23 @@ test('Planner ukrywa narzędzia, dodaje transport skrótem T i liczy jego czas',
   const savedCell = page.locator(`.planner-cell[data-user-id="${userId}"][data-date="${date}"]`);
   await expect(savedCell.locator('.plan-chip.transport-only:has(.plan-note[data-note="Transport testowy"])')).toContainText('2.5 h');
   await expect(page.locator('#planner-bulk-approve')).toBeHidden();
+
+  const freeCell = page.locator('.planner-cell[data-editable="1"]').nth(1);
+  await freeCell.click();
+  await page.locator('#planner-bulk-time-off').click();
+  await expect(page.locator('#action-title')).toContainText('Wolne');
+  await page.locator('#action-fields [name="note"]').fill('Odbiór nadgodzin');
+  await page.locator('#action-submit').click();
+  await expect(freeCell.locator('.absence-chip.time_off')).toContainText('WOLNE');
+
+  const vacationCell = page.locator('.planner-cell[data-editable="1"]').nth(2);
+  await vacationCell.click({ button: 'right' });
+  await expect(page.locator('#context-menu [data-action="add-time-off"]')).toHaveText('+ Wolne');
+  await page.locator('#context-menu [data-action="add-vacation"]').click();
+  await expect(page.locator('#action-title')).toContainText('Urlop');
+  await page.locator('#action-fields [name="note"]').fill('Urlop testowy');
+  await page.locator('#action-submit').click();
+  await expect(vacationCell.locator('.absence-chip.vacation')).toContainText('URLOP');
 });
 
 test('zadanie przyjmuje screenshot przez Ctrl+V, kompresuje go i pokazuje po zapisie', async ({ page }) => {

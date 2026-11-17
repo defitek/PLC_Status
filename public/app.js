@@ -2300,7 +2300,7 @@ function plannerClipboardLabel() {
 function plannerBulkToolbar() {
   const hidden = !state.plannerToolsVisible;
   const collisionHidden = plannerSelectionOverlapReviews().length ? '' : 'hidden';
-  return `<section class="planner-bulk-toolbar ${hidden ? 'hidden' : ''}" id="planner-bulk-toolbar"><span><b id="planner-selection-count">${state.plannerSelection.size}</b> dni · <b id="planner-entry-selection-count">${state.plannerEntrySelection.size}</b> aktywności</span><button type="button" class="primary" id="planner-bulk-add">+ Dodaj obszar pracy</button><button type="button" class="mini" id="planner-bulk-transport" title="Skrót: T">+ Transport · T</button><button type="button" class="mini" id="planner-bulk-remove">Usuń obszar pracy</button><button type="button" class="mini" id="planner-bulk-copy">Kopiuj zaznaczenie</button><button type="button" class="mini" id="planner-bulk-paste" ${state.plannerClipboard ? '' : 'disabled'}>Wklej ${plannerClipboardLabel()}</button><button type="button" class="mini ${collisionHidden}" id="planner-bulk-approve">✓ Zatwierdź kolizje</button><button type="button" class="mini" id="planner-selection-clear">Wyczyść zaznaczenie</button></section>`;
+  return `<section class="planner-bulk-toolbar ${hidden ? 'hidden' : ''}" id="planner-bulk-toolbar"><span><b id="planner-selection-count">${state.plannerSelection.size}</b> dni · <b id="planner-entry-selection-count">${state.plannerEntrySelection.size}</b> aktywności</span><button type="button" class="primary" id="planner-bulk-add">+ Dodaj obszar pracy</button><button type="button" class="mini" id="planner-bulk-transport" title="Skrót: T">+ Transport · T</button><button type="button" class="mini" id="planner-bulk-time-off" title="Wolne z nadgodzin">+ Wolne</button><button type="button" class="mini" id="planner-bulk-vacation" title="Urlop płatny">+ Urlop</button><button type="button" class="mini" id="planner-bulk-remove">Usuń obszar pracy</button><button type="button" class="mini" id="planner-bulk-copy">Kopiuj zaznaczenie</button><button type="button" class="mini" id="planner-bulk-paste" ${state.plannerClipboard ? '' : 'disabled'}>Wklej ${plannerClipboardLabel()}</button><button type="button" class="mini ${collisionHidden}" id="planner-bulk-approve">✓ Zatwierdź kolizje</button><button type="button" class="mini" id="planner-selection-clear">Wyczyść zaznaczenie</button></section>`;
 }
 
 function setPlannerCellSelected(cell, selected) {
@@ -2346,7 +2346,7 @@ function updatePlannerBulkCount() {
   const dayCount = state.plannerSelection.size; const entryCount = state.plannerEntrySelection.size;
   if ($('#planner-selection-count')) $('#planner-selection-count').textContent = String(dayCount);
   if ($('#planner-entry-selection-count')) $('#planner-entry-selection-count').textContent = String(entryCount);
-  ['#planner-bulk-add', '#planner-bulk-transport'].forEach(selector => { const button = $(selector); if (button) button.disabled = !dayCount; });
+  ['#planner-bulk-add', '#planner-bulk-transport', '#planner-bulk-time-off', '#planner-bulk-vacation'].forEach(selector => { const button = $(selector); if (button) button.disabled = !dayCount; });
   if ($('#planner-bulk-approve')) $('#planner-bulk-approve').classList.toggle('hidden', !plannerSelectionOverlapReviews().length);
   if ($('#planner-bulk-remove')) $('#planner-bulk-remove').disabled = !dayCount && !entryCount;
   if ($('#planner-bulk-copy')) $('#planner-bulk-copy').disabled = !dayCount && !entryCount;
@@ -2413,6 +2413,23 @@ async function addTransportToPlannerSelection() {
   const entry = { controller_group_id: Number(result.controller_group_id) || null, activity_type: 'transport', work_mode: 'offline', shift: result.shift, transport_mode: 'transport_only', duration_hours: durationHours, note: result.note };
   const usable = targets.filter(target => !plannerDaySnapshot(target.userId, target.date).absence_type);
   await savePlannerBulkRequests(usable.map(target => { const day = plannerDaySnapshot(target.userId, target.date); return plannerDayRequest(target, [...day.entries, entry], day); }), 'Dodano transport');
+}
+
+async function addAbsenceToPlannerSelection(absenceType) {
+  const targets = selectedPlannerTargets();
+  if (!targets.length) return toast('Zaznacz co najmniej jeden dzień', true);
+  const vacation = absenceType === 'vacation';
+  const label = vacation ? 'Urlop' : 'Wolne';
+  const description = vacation ? 'Urlop płatny zastąpi plan pracy i transport w zaznaczonych dniach.' : 'Wolne z nadgodzin zastąpi plan pracy i transport w zaznaczonych dniach.';
+  const result = await uiForm({ title: `${label} · ${targets.length} ${targets.length === 1 ? 'dzień' : 'dni'}`, description, submitLabel: `Dodaj ${label.toLowerCase()}`, fields: [
+    { name: 'note', label: 'Notatka nieobecności', placeholder: 'Opcjonalnie', full: true }
+  ] });
+  if (!result) return;
+  const requests = targets.map(target => {
+    const day = plannerDaySnapshot(target.userId, target.date);
+    return plannerDayRequest(target, [], { ...day, absence_type: absenceType, absence_note: result.note });
+  });
+  await savePlannerBulkRequests(requests, vacation ? 'Dodano urlop' : 'Dodano wolne');
 }
 
 async function removeWorkFromPlannerSelection() {
@@ -2494,6 +2511,8 @@ async function approvePlannerSelectionOverlaps() {
 function bindPlannerBulkToolbar() {
   $('#planner-bulk-add')?.addEventListener('click', addWorkToPlannerSelection);
   $('#planner-bulk-transport')?.addEventListener('click', addTransportToPlannerSelection);
+  $('#planner-bulk-time-off')?.addEventListener('click', () => addAbsenceToPlannerSelection('time_off'));
+  $('#planner-bulk-vacation')?.addEventListener('click', () => addAbsenceToPlannerSelection('vacation'));
   $('#planner-bulk-remove')?.addEventListener('click', removeWorkFromPlannerSelection);
   $('#planner-bulk-copy')?.addEventListener('click', copyPlannerSelection);
   $('#planner-bulk-paste')?.addEventListener('click', pastePlannerSelection);
@@ -3212,7 +3231,8 @@ function showPlannerContext(event, userId, date, entryId = null) {
   const selectedLabel = state.plannerEntrySelection.size ? `${state.plannerEntrySelection.size} aktywności` : `${state.plannerSelection.size} dni`;
   const approveCollision = plannerSelectionOverlapReviews().length ? '<button data-action="approve-selection">Zatwierdź kolizje</button>' : '';
   const addTransport = state.plannerSelection.size ? '<button data-action="add-transport">Dodaj transport <small>T</small></button>' : '';
-  menu.innerHTML = `<section><b>Zaznaczenie · ${selectedLabel}</b>${addTransport}<button class="danger-text" data-action="remove-selection">Usuń obszar pracy <small>Delete</small></button><button data-action="copy-selection">Kopiuj zaznaczenie <small>Ctrl+C</small></button>${state.plannerClipboard && state.plannerSelection.size ? `<button data-action="paste-selection">Wklej ${plannerClipboardLabel()} <small>Ctrl+V</small></button>` : ''}${approveCollision}<button data-action="clear-selection">Wyczyść zaznaczenie</button></section><section><b>Edycja</b><button data-action="edit">Edytuj plan dnia</button><button data-action="assign">Przypisz zadania, status lub punkty</button>${entry ? '<button data-action="repeat-entry">Powiel aktywność na wiele dni…</button>' : ''}<button data-action="repeat-day">Powiel cały dzień na wiele dni…</button>${state.plannerClipboard && state.plannerClipboard.kind !== 'days' ? '<button data-action="paste-range">Wklej na zakres dni…</button>' : ''}</section><section class="context-danger"><b>Dzień</b><button class="danger-text" data-action="clear">Wyczyść cały dzień</button></section>`;
+  const addAbsences = state.plannerSelection.size ? '<button data-action="add-time-off">+ Wolne</button><button data-action="add-vacation">+ Urlop</button>' : '';
+  menu.innerHTML = `<section><b>Zaznaczenie · ${selectedLabel}</b>${addTransport}${addAbsences}<button class="danger-text" data-action="remove-selection">Usuń obszar pracy <small>Delete</small></button><button data-action="copy-selection">Kopiuj zaznaczenie <small>Ctrl+C</small></button>${state.plannerClipboard && state.plannerSelection.size ? `<button data-action="paste-selection">Wklej ${plannerClipboardLabel()} <small>Ctrl+V</small></button>` : ''}${approveCollision}<button data-action="clear-selection">Wyczyść zaznaczenie</button></section><section><b>Edycja</b><button data-action="edit">Edytuj plan dnia</button><button data-action="assign">Przypisz zadania, status lub punkty</button>${entry ? '<button data-action="repeat-entry">Powiel aktywność na wiele dni…</button>' : ''}<button data-action="repeat-day">Powiel cały dzień na wiele dni…</button>${state.plannerClipboard && state.plannerClipboard.kind !== 'days' ? '<button data-action="paste-range">Wklej na zakres dni…</button>' : ''}</section><section class="context-danger"><b>Dzień</b><button class="danger-text" data-action="clear">Wyczyść cały dzień</button></section>`;
   menu.style.left = `${Math.min(event.clientX, innerWidth - 300)}px`; menu.style.top = `${Math.max(8, Math.min(event.clientY, innerHeight - 430))}px`; menu.classList.remove('hidden');
   menu.querySelectorAll('button').forEach(button => button.addEventListener('click', async () => {
     menu.classList.add('hidden');
@@ -3220,6 +3240,8 @@ function showPlannerContext(event, userId, date, entryId = null) {
     try {
       if (button.dataset.action === 'copy-selection') return copyPlannerSelection();
       if (button.dataset.action === 'add-transport') return addTransportToPlannerSelection();
+      if (button.dataset.action === 'add-time-off') return addAbsenceToPlannerSelection('time_off');
+      if (button.dataset.action === 'add-vacation') return addAbsenceToPlannerSelection('vacation');
       if (button.dataset.action === 'paste-selection') return pastePlannerSelection();
       if (button.dataset.action === 'remove-selection') return removeWorkFromPlannerSelection();
       if (button.dataset.action === 'approve-selection') return approvePlannerSelectionOverlaps();
