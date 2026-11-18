@@ -1546,12 +1546,13 @@ input:is([type=checkbox],[type=radio]) { accent-color:var(--blue); cursor:pointe
 }
 
 /* Planner: wiele obszarów, manpower i identyfikacja transportu */
-.planner-entry-row { grid-template-columns:minmax(150px,1.1fr) minmax(92px,.65fr) minmax(100px,.7fr) minmax(135px,.95fr) auto minmax(150px,1fr) 32px; }
-.planner-entry-row>[data-plan-area] { grid-column:1; }.planner-entry-row>[data-plan-activity] { grid-column:2; }.planner-entry-row>[data-plan-shift] { grid-column:3; }.planner-entry-row>.planner-entry-mode { grid-column:4; }.planner-entry-row>.planner-manpower-toggle { grid-column:5; }.planner-entry-row>[data-plan-note] { grid-column:6; }.planner-entry-row>.remove-plan-entry { grid-column:7; }
+.planner-entry-row { grid-template-columns:minmax(190px,1.25fr) minmax(92px,.6fr) minmax(100px,.65fr) minmax(135px,.85fr) minmax(155px,.9fr) minmax(150px,1fr) 32px; }
+.planner-entry-row>.planner-area-picker { grid-column:1; min-width:0; align-self:start; }.planner-entry-row>[data-plan-activity] { grid-column:2; }.planner-entry-row>[data-plan-shift] { grid-column:3; }.planner-entry-row>.planner-entry-mode { grid-column:4; }.planner-entry-row>.planner-manpower-toggle { grid-column:5; }.planner-entry-row>[data-plan-note] { grid-column:6; }.planner-entry-row>.remove-plan-entry { grid-column:7; }
 .planner-entry-row.transport-entry { grid-template-columns:minmax(105px,.55fr) minmax(160px,.8fr) minmax(230px,1.2fr) minmax(180px,1fr) 32px; }
 .planner-entry-row.transport-entry>[data-plan-activity] { grid-column:1; }.planner-entry-row.transport-entry>[data-plan-vehicle] { grid-column:2; }.planner-entry-row.transport-entry>.planner-entry-mode { grid-column:3; }.planner-entry-row.transport-entry>[data-plan-note] { grid-column:4; }.planner-entry-row.transport-entry>.remove-plan-entry { grid-column:5; }
 .planner-manpower-toggle { display:flex; gap:5px; align-items:center; min-height:36px; padding:4px 8px; color:var(--muted); background:var(--panel-alt); border:1px solid var(--line); border-radius:7px; font-size:9px; white-space:nowrap; }
 .planner-manpower-toggle input { width:15px; min-width:15px; margin:0; padding:0; }.planner-manpower-toggle[hidden] { display:none; }
+.planner-area-multiselect { width:100%; }.planner-area-multiselect>.mentions { max-height:240px; }.planner-area-multiselect .planner-no-area-option { border-bottom:1px solid var(--line); }.planner-area-multiselect .planner-no-area-option span { display:grid; gap:2px; }.planner-area-multiselect .planner-no-area-option small { color:var(--muted); font-size:8px; font-weight:400; }
 .plan-chip.excluded-from-manpower { border:1px dashed currentColor; opacity:.78; }
 .planner-vehicle-list { display:grid; gap:5px; }.planner-vehicle-list .settings-row { min-height:42px; }
 

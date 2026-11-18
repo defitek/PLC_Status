@@ -1643,7 +1643,7 @@ function createRepository(db, defaultProjectId) {
       if (activityType === 'transport' && durationMinutes < 1) throw appError('Czas transportu musi wynosić co najmniej 1 minutę');
       const durationHours = activityType === 'transport' ? durationMinutes / 60 : 0;
       const shift = activityType === 'transport' ? 'Dzień' : clean(source.shift) || 'Dzień';
-      const countInManpower = activityType === 'work' && !groupId && Number(source.count_in_manpower) === 0 ? 0 : 1;
+      const countInManpower = activityType === 'work' && Number(source.count_in_manpower) === 0 ? 0 : 1;
       const vehicleId = activityType === 'transport' ? asId(source.vehicle_id) : null;
       if (groupId && !one('SELECT 1 FROM controller_groups WHERE id=? AND project_id=? AND active=1', groupId, activeProjectId())) throw appError('Wybrany obszar nie należy do projektu');
       if (activityType === 'work' && !one("SELECT 1 FROM options WHERE project_id=? AND kind='shift' AND value=? AND active=1", activeProjectId(), shift)) throw appError(`Nieznana zmiana: ${shift}`);
@@ -1787,7 +1787,7 @@ function createRepository(db, defaultProjectId) {
     const currentDate = new Date().toISOString().slice(0, 10);
     const area_summary = hierarchy.groups.filter(group => !group.parent_id).map(group => {
       const descendants = new Set(groupDescendantIds(group.id));
-      const related = entries.filter(entry => Number(entry.count_in_manpower) !== 0 && descendants.has(Number(entry.controller_group_id)));
+      const related = entries.filter(entry => Number(entry.count_in_manpower) !== 0 && (entry.controller_group_id ? descendants.has(Number(entry.controller_group_id)) : entry.transport_mode !== 'transport_only'));
       const todayRelated = related.filter(entry => entry.plan_date === new Date().toISOString().slice(0, 10));
       const unique = values => new Set(values).size;
       return {
@@ -1825,7 +1825,7 @@ function createRepository(db, defaultProjectId) {
         id: group.id, name: group.name, path_label: group.path_label,
         days: range.days ? Array.from({ length: range.days }, (_, index) => {
           const date = new Date(`${range.from}T12:00:00Z`); date.setUTCDate(date.getUTCDate() + index); const value = date.toISOString().slice(0, 10);
-          const related = entries.filter(entry => Number(entry.count_in_manpower) !== 0 && entry.plan_date === value && descendants.has(Number(entry.controller_group_id)));
+          const related = entries.filter(entry => Number(entry.count_in_manpower) !== 0 && entry.plan_date === value && (entry.controller_group_id ? descendants.has(Number(entry.controller_group_id)) : entry.transport_mode !== 'transport_only'));
           const required = requirements.filter(row => row.plan_date === value && Number(row.controller_group_id) === Number(group.id));
           return {
             date: value,

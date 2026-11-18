@@ -2300,7 +2300,7 @@ function plannerClipboardLabel() {
 function plannerBulkToolbar() {
   const hidden = !state.plannerToolsVisible;
   const collisionHidden = plannerSelectionOverlapReviews().length ? '' : 'hidden';
-  return `<section class="planner-bulk-toolbar ${hidden ? 'hidden' : ''}" id="planner-bulk-toolbar"><span><b id="planner-selection-count">${state.plannerSelection.size}</b> dni · <b id="planner-entry-selection-count">${state.plannerEntrySelection.size}</b> aktywności</span><button type="button" class="primary" id="planner-bulk-add" title="Skrót: P">+ Praca</button><button type="button" class="mini" id="planner-bulk-transport" title="Skrót: T">+ Transport</button><button type="button" class="mini" id="planner-bulk-time-off" title="Wolne z nadgodzin · skrót: W">+ Wolne</button><button type="button" class="mini" id="planner-bulk-vacation" title="Urlop płatny · skrót: U">+ Urlop</button><button type="button" class="mini" id="planner-bulk-copy">Kopiuj zaznaczenie</button><button type="button" class="mini" id="planner-bulk-paste" ${state.plannerClipboard ? '' : 'disabled'}>Wklej ${plannerClipboardLabel()}</button><button type="button" class="mini ${collisionHidden}" id="planner-bulk-approve">✓ Zatwierdź kolizje</button><button type="button" class="mini" id="planner-selection-clear">Wyczyść zaznaczenie</button></section>`;
+  return `<section class="planner-bulk-toolbar ${hidden ? 'hidden' : ''}" id="planner-bulk-toolbar"><span><b id="planner-selection-count">${state.plannerSelection.size}</b> dni · <b id="planner-entry-selection-count">${state.plannerEntrySelection.size}</b> aktywności</span><button type="button" class="primary" id="planner-bulk-add" title="Skrót: P">+ Praca</button><button type="button" class="mini" id="planner-bulk-transport" title="Skrót: T">+Transport</button><button type="button" class="mini" id="planner-bulk-time-off" title="Wolne z nadgodzin · skrót: W">+ Wolne</button><button type="button" class="mini" id="planner-bulk-vacation" title="Urlop płatny · skrót: U">+ Urlop</button><button type="button" class="mini" id="planner-bulk-copy">Kopiuj zaznaczenie</button><button type="button" class="mini" id="planner-bulk-paste" ${state.plannerClipboard ? '' : 'disabled'}>Wklej ${plannerClipboardLabel()}</button><button type="button" class="mini ${collisionHidden}" id="planner-bulk-approve">✓ Zatwierdź kolizje</button><button type="button" class="mini" id="planner-selection-clear">Wyczyść zaznaczenie</button></section>`;
 }
 
 function setPlannerCellSelected(cell, selected) {
@@ -2384,7 +2384,7 @@ function formatPlannerTransportDuration(value) {
 function plannerEntryPayload(entry) {
   const activity = entry.activity_type || (entry.transport_mode === 'transport_only' ? 'transport' : 'work');
   const durationMinutes = activity === 'transport' ? plannerTransportMinutes(entry.duration_hours) || plannerDefaultTransportMinutes() : 0;
-  return { controller_group_id: activity === 'work' ? Number(entry.controller_group_id) || null : null, activity_type: activity, work_mode: activity === 'work' ? (entry.work_mode || 'online') : 'offline', shift: activity === 'work' ? entry.shift || 'Dzień' : 'Dzień', transport_mode: activity === 'transport' ? 'transport_only' : 'none', duration_hours: activity === 'transport' ? durationMinutes / 60 : 0, count_in_manpower: activity === 'work' && !entry.controller_group_id && Number(entry.count_in_manpower) === 0 ? 0 : 1, vehicle_id: activity === 'transport' ? Number(entry.vehicle_id) || null : null, allow_without_area: activity === 'work' && !entry.controller_group_id && (entry.id || entry.allow_without_area) ? 1 : 0, note: entry.note || '' };
+  return { controller_group_id: activity === 'work' ? Number(entry.controller_group_id) || null : null, activity_type: activity, work_mode: activity === 'work' ? (entry.work_mode || 'online') : 'offline', shift: activity === 'work' ? entry.shift || 'Dzień' : 'Dzień', transport_mode: activity === 'transport' ? 'transport_only' : 'none', duration_hours: activity === 'transport' ? durationMinutes / 60 : 0, count_in_manpower: activity === 'work' && Number(entry.count_in_manpower) === 0 ? 0 : 1, vehicle_id: activity === 'transport' ? Number(entry.vehicle_id) || null : null, allow_without_area: activity === 'work' && !entry.controller_group_id ? 1 : 0, note: entry.note || '' };
 }
 
 function uniquePlannerEntries(entries) {
@@ -2412,12 +2412,12 @@ async function addWorkToPlannerSelection() {
     { name: 'controller_group_ids', label: 'Obszary pracy', type: 'user-multiselect', options: hierarchyGroupOptions(), emptyLabel: 'Bez konkretnego obszaru', full: true },
     { name: 'work_mode', label: 'Tryb', type: 'select', value: 'online', options: [{ value: 'online', label: 'Online · fabryka' }, { value: 'offline', label: 'Offline · biuro' }] },
     { name: 'shift', label: 'Zmiana', type: 'select', value: options('shift')[0] || 'Dzień', options: options('shift') },
-    { name: 'count_in_manpower', label: 'Uwzględniaj w kalkulacji manpoweru, jeśli nie wybrano obszaru', type: 'checkbox', value: 1, full: true },
+    { name: 'count_in_manpower', label: 'Uwzględniaj osobę w kalkulacji manpoweru', type: 'checkbox', value: 1, hint: 'Z obszarami: +1 tylko w wybranych obszarach. Bez obszaru: +1 we wszystkich obszarach.', full: true },
     { name: 'note', label: 'Notatka', full: true }
   ] });
   if (!result) return;
   const areaIds = [...new Set((result.controller_group_ids || []).map(Number).filter(Boolean))];
-  const entriesToAdd = (areaIds.length ? areaIds : [null]).map(controllerGroupId => ({ controller_group_id: controllerGroupId, activity_type: 'work', work_mode: result.work_mode, shift: result.shift, transport_mode: 'none', count_in_manpower: controllerGroupId ? 1 : (result.count_in_manpower ? 1 : 0), allow_without_area: controllerGroupId ? 0 : 1, note: result.note }));
+  const entriesToAdd = (areaIds.length ? areaIds : [null]).map(controllerGroupId => ({ controller_group_id: controllerGroupId, activity_type: 'work', work_mode: result.work_mode, shift: result.shift, transport_mode: 'none', count_in_manpower: result.count_in_manpower ? 1 : 0, allow_without_area: controllerGroupId ? 0 : 1, note: result.note }));
   const usable = targets.filter(target => !plannerDaySnapshot(target.userId, target.date).absence_type);
   const mixed = usable.some(target => plannerDaySnapshot(target.userId, target.date).entries.some(item => item.transport_mode !== 'transport_only' && item.work_mode !== result.work_mode));
   if (mixed && !await uiConfirm('Jednoczesny plan ONLINE i OFFLINE', 'Co najmniej jeden zaznaczony dzień będzie zawierał oba tryby pracy.', 'Zapisz oba tryby', true)) return;
@@ -2640,14 +2640,47 @@ async function reloadPlanner() {
   } catch (error) { toast(error.message, true); }
 }
 
+function plannerAreaPicker(selectedIds = []) {
+  const selected = new Set((selectedIds || []).map(Number).filter(Boolean));
+  const picked = hierarchyGroupOptions().filter(option => selected.has(Number(option.value)));
+  const summary = picked.length ? `${picked.length} · ${picked.map(option => option.label).join(', ')}` : 'Bez obszaru';
+  return `<details class="multi-user-select planner-area-multiselect" data-plan-areas data-empty-label="Bez obszaru"><summary>${escapeHtml(summary)}</summary><div class="mentions assignee-grid"><input class="multi-choice-search" type="search" placeholder="Szukaj obszaru…"><label class="mention planner-no-area-option"><input type="checkbox" data-plan-area-none value="" ${picked.length ? '' : 'checked'}><span><b>Bez obszaru</b><small>Pracownik pozostaje w planie projektu bez przypisania obszaru.</small></span></label>${hierarchyGroupOptions().map(option => `<label class="mention"><input type="checkbox" data-plan-area value="${escapeHtml(option.value)}" ${selected.has(Number(option.value)) ? 'checked' : ''}><span>${escapeHtml(option.label)}</span></label>`).join('')}</div></details>`;
+}
+
+function plannerEditorEntries(entries) {
+  const grouped = [];
+  const workGroups = new Map();
+  (entries || []).forEach(entry => {
+    const activity = entry.activity_type || (entry.transport_mode === 'transport_only' ? 'transport' : 'work');
+    if (activity === 'transport') { grouped.push({ ...entry, activity_type: 'transport' }); return; }
+    const scopeKind = entry.controller_group_id ? 'areas' : 'none';
+    const key = [scopeKind, entry.work_mode || 'online', entry.shift || 'Dzień', Number(entry.count_in_manpower) === 0 ? 0 : 1, entry.note || ''].join('\u001f');
+    if (!workGroups.has(key)) {
+      const draft = { ...entry, activity_type: 'work', controller_group_ids: [] };
+      workGroups.set(key, draft); grouped.push(draft);
+    }
+    if (entry.controller_group_id) workGroups.get(key).controller_group_ids.push(Number(entry.controller_group_id));
+  });
+  return grouped;
+}
+
+function updatePlannerAreaPicker(details) {
+  const areaInputs = [...details.querySelectorAll('[data-plan-area]')];
+  const noneInput = details.querySelector('[data-plan-area-none]');
+  const selected = areaInputs.filter(input => input.checked);
+  noneInput.checked = !selected.length;
+  const names = selected.map(input => input.closest('label').querySelector('span').textContent.trim());
+  details.querySelector('summary').textContent = names.length ? `${names.length} · ${names.join(', ')}` : details.dataset.emptyLabel;
+}
+
 function plannerEntryRow(entry = {}) {
   const activity = entry.activity_type || (entry.transport_mode === 'transport_only' ? 'transport' : 'work');
   const transport = activity === 'transport';
+  const selectedAreas = Array.isArray(entry.controller_group_ids) ? entry.controller_group_ids : entry.controller_group_id ? [entry.controller_group_id] : [];
   const modeControl = activity === 'transport'
     ? plannerTransportDurationFields(entry.duration_hours)
     : `<select data-plan-mode aria-label="Tryb pracy">${selectOptions([{ value: 'online', label: 'Online · fabryka' }, { value: 'offline', label: 'Offline · biuro' }], entry.work_mode || 'online', null)}</select>`;
-  const withoutArea = !transport && !entry.controller_group_id;
-  return `<div class="planner-entry-row ${transport ? 'transport-entry' : ''}" data-plan-entry-id="${entry.id || ''}"><select data-plan-area ${transport ? 'hidden disabled' : ''}>${selectOptions(hierarchyGroupOptions(), entry.controller_group_id, 'Bez obszaru')}</select><select data-plan-activity>${selectOptions([{ value: 'work', label: 'Praca' }, { value: 'transport', label: 'Transport · T' }], activity, null)}</select><select data-plan-vehicle ${transport ? '' : 'hidden disabled'} aria-label="Auto lub transport">${selectOptions(plannerVehicleOptions(), entry.vehicle_id || '', null)}</select><select data-plan-shift ${transport ? 'hidden disabled' : ''}>${selectOptions(options('shift'), entry.shift || 'Dzień', null)}</select><span class="planner-entry-mode">${modeControl}</span><label class="planner-manpower-toggle" ${withoutArea ? '' : 'hidden'} title="Udział tej osoby w kalkulacji manpoweru"><input type="checkbox" data-plan-manpower ${Number(entry.count_in_manpower) === 0 ? '' : 'checked'}><span>Manpower</span></label><input data-plan-note value="${escapeHtml(entry.note || '')}" placeholder="Komentarz (opcjonalnie)"><button type="button" class="mini remove-plan-entry" aria-label="Usuń aktywność">×</button></div>`;
+  return `<div class="planner-entry-row ${transport ? 'transport-entry' : ''}" data-plan-entry-id="${entry.id || ''}"><div class="planner-area-picker" ${transport ? 'hidden' : ''}>${plannerAreaPicker(selectedAreas)}</div><select data-plan-activity>${selectOptions([{ value: 'work', label: 'Praca' }, { value: 'transport', label: 'Transport · T' }], activity, null)}</select><select data-plan-vehicle ${transport ? '' : 'hidden disabled'} aria-label="Auto lub transport">${selectOptions(plannerVehicleOptions(), entry.vehicle_id || '', null)}</select><select data-plan-shift ${transport ? 'hidden disabled' : ''}>${selectOptions(options('shift'), entry.shift || 'Dzień', null)}</select><span class="planner-entry-mode">${modeControl}</span><label class="planner-manpower-toggle" ${transport ? 'hidden' : ''} title="Zaznaczone: +1 w wybranych obszarach; bez obszaru: +1 we wszystkich obszarach"><input type="checkbox" data-plan-manpower ${Number(entry.count_in_manpower) === 0 ? '' : 'checked'}><span>Uwzględnij w manpowerze</span></label><input data-plan-note value="${escapeHtml(entry.note || '')}" placeholder="Komentarz (opcjonalnie)"><button type="button" class="mini remove-plan-entry" aria-label="Usuń aktywność">×</button></div>`;
 }
 
 function plannerTransportDurationFields(durationHours = null) {
@@ -2660,12 +2693,24 @@ function bindPlannerEntryRows() {
   $$('[data-plan-activity]').forEach(select => select.onchange = () => {
     const row = select.closest('.planner-entry-row'); const transport = select.value === 'transport';
     row.classList.toggle('transport-entry', transport);
-    for (const field of [row.querySelector('[data-plan-area]'), row.querySelector('[data-plan-shift]')]) { field.hidden = transport; field.disabled = transport; }
+    row.querySelector('.planner-area-picker').hidden = transport;
+    const shift = row.querySelector('[data-plan-shift]'); shift.hidden = transport; shift.disabled = transport;
     const vehicle = row.querySelector('[data-plan-vehicle]'); vehicle.hidden = !transport; vehicle.disabled = !transport;
-    row.querySelector('.planner-manpower-toggle').hidden = transport || Boolean(row.querySelector('[data-plan-area]').value);
+    row.querySelector('.planner-manpower-toggle').hidden = transport;
     row.querySelector('.planner-entry-mode').innerHTML = transport ? plannerTransportDurationFields() : `<select data-plan-mode aria-label="Tryb pracy">${selectOptions([{ value: 'online', label: 'Online · fabryka' }, { value: 'offline', label: 'Offline · biuro' }], 'online', null)}</select>`;
   });
-  $$('[data-plan-area]').forEach(select => select.onchange = () => { select.closest('.planner-entry-row').querySelector('.planner-manpower-toggle').hidden = Boolean(select.value); });
+  $$('.planner-area-multiselect').forEach(details => {
+    const noneInput = details.querySelector('[data-plan-area-none]');
+    noneInput.onchange = () => {
+      if (noneInput.checked) details.querySelectorAll('[data-plan-area]').forEach(input => { input.checked = false; });
+      updatePlannerAreaPicker(details);
+    };
+    details.querySelectorAll('[data-plan-area]').forEach(input => { input.onchange = () => { if (input.checked) noneInput.checked = false; updatePlannerAreaPicker(details); }; });
+    details.querySelector('.multi-choice-search').oninput = event => {
+      const term = event.currentTarget.value.trim().toLocaleLowerCase('pl');
+      details.querySelectorAll('label:not(.planner-no-area-option)').forEach(label => { label.hidden = Boolean(term) && !label.textContent.toLocaleLowerCase('pl').includes(term); });
+    };
+  });
 }
 
 function openPlannerCell(userId, date) {
@@ -2680,8 +2725,8 @@ function openPlannerCell(userId, date) {
   $('#planner-dialog-title').textContent = `${user?.display_name || 'Pracownik'} · ${displayDate(date)}`;
   $('#planner-dialog-description').textContent = otherProjects.length
     ? `Uwaga: ta osoba ma już plan w ${otherProjects.join(', ')}. Zapis utworzy kolizję wymagającą decyzji managera.`
-    : 'Obszar można wskazać tylko raz. Obszar nadrzędny wyklucza jego podobszary.';
-  $('#planner-entry-list').innerHTML = entries.map(plannerEntryRow).join('') || plannerEntryRow();
+    : 'W jednym wpisie możesz wybrać kilka obszarów albo pozostawić opcję „Bez obszaru”. Obszar nadrzędny wyklucza jego podobszary.';
+  $('#planner-entry-list').innerHTML = plannerEditorEntries(entries).map(plannerEntryRow).join('') || plannerEntryRow();
   $('#planner-day-kind').value = absence?.absence_type || 'work';
   $('#planner-absence-note').value = absence?.note || '';
   $('#planner-work-start').value = timeDetail.work_start_time || '';
@@ -2709,10 +2754,12 @@ function updatePlannerDayKind() {
 async function savePlannerCell(event) {
   event.preventDefault(); if (!state.plannerCell) return;
   const absenceType = $('#planner-day-kind').value === 'work' ? '' : $('#planner-day-kind').value;
-  const entries = absenceType ? [] : $$('#planner-entry-list .planner-entry-row').map(row => {
+  const entries = absenceType ? [] : $$('#planner-entry-list .planner-entry-row').flatMap(row => {
     const activity = row.querySelector('[data-plan-activity]').value; const transport = activity === 'transport';
-    const controllerGroupId = transport ? null : Number(row.querySelector('[data-plan-area]').value) || null;
-    return { id: Number(row.dataset.planEntryId) || null, controller_group_id: controllerGroupId, activity_type: activity, work_mode: transport ? 'offline' : row.querySelector('[data-plan-mode]').value, shift: transport ? 'Dzień' : row.querySelector('[data-plan-shift]').value, transport_mode: transport ? 'transport_only' : 'none', duration_hours: transport ? plannerTransportHoursFromParts(row.querySelector('[data-plan-duration-hours]').value, row.querySelector('[data-plan-duration-minutes]').value) : 0, count_in_manpower: !transport && !controllerGroupId && !row.querySelector('[data-plan-manpower]').checked ? 0 : 1, vehicle_id: transport ? Number(row.querySelector('[data-plan-vehicle]').value) || null : null, allow_without_area: !transport && !controllerGroupId && Boolean(Number(row.dataset.planEntryId) || row.querySelector('[data-plan-note]').value.trim()) ? 1 : 0, note: row.querySelector('[data-plan-note]').value };
+    const common = { id: Number(row.dataset.planEntryId) || null, activity_type: activity, work_mode: transport ? 'offline' : row.querySelector('[data-plan-mode]').value, shift: transport ? 'Dzień' : row.querySelector('[data-plan-shift]').value, transport_mode: transport ? 'transport_only' : 'none', duration_hours: transport ? plannerTransportHoursFromParts(row.querySelector('[data-plan-duration-hours]').value, row.querySelector('[data-plan-duration-minutes]').value) : 0, count_in_manpower: !transport && row.querySelector('[data-plan-manpower]').checked ? 1 : 0, vehicle_id: transport ? Number(row.querySelector('[data-plan-vehicle]').value) || null : null, note: row.querySelector('[data-plan-note]').value };
+    if (transport) return [{ ...common, controller_group_id: null }];
+    const selectedAreaIds = [...row.querySelectorAll('[data-plan-area]:checked')].map(input => Number(input.value)).filter(Boolean);
+    return (selectedAreaIds.length ? selectedAreaIds : [null]).map(controllerGroupId => ({ ...common, id: null, controller_group_id: controllerGroupId, allow_without_area: controllerGroupId ? 0 : 1 }));
   });
   if (entries.some(entry => entry.activity_type === 'transport' && entry.duration_hours === null)) return toast('Podaj dodatni czas transportu w pełnych godzinach i minutach', true);
   if (!await confirmMixedPlannerModes(state.plannerCell.userId, state.plannerCell.date, entries)) return;

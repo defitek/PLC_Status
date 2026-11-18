@@ -203,7 +203,7 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   await savedCell.click();
   await page.keyboard.press('e');
   const transportRow = page.locator('#planner-entry-list .planner-entry-row.transport-entry').filter({ has: page.locator('[data-plan-vehicle] option:checked', { hasText: transportCode }) });
-  await expect(transportRow.locator('[data-plan-area]')).toBeHidden();
+  await expect(transportRow.locator('.planner-area-picker')).toBeHidden();
   await expect(transportRow.locator('[data-plan-shift]')).toBeHidden();
   await expect(transportRow.locator('[data-plan-duration-hours]')).toHaveValue('7');
   await expect(transportRow.locator('[data-plan-duration-minutes]')).toHaveValue('17');
@@ -242,6 +242,15 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   await page.locator('#action-submit').click();
   await expect(workCell.locator(`.plan-chip[data-current-project="1"]:has(.plan-note[data-note="${workNote}"])`)).toHaveCount(2);
 
+  await workCell.click();
+  await page.keyboard.press('e');
+  const groupedWorkRow = page.locator('#planner-entry-list .planner-entry-row:not(.transport-entry)').filter({ has: page.locator(`[data-plan-note][value="${workNote}"]`) });
+  await expect(groupedWorkRow).toHaveCount(1);
+  await expect(groupedWorkRow.locator('[data-plan-area]:checked')).toHaveCount(2);
+  await groupedWorkRow.locator('[data-plan-manpower]').uncheck();
+  await page.locator('#planner-form .dialog-actions .primary').click();
+  await expect(workCell.locator(`.plan-chip.excluded-from-manpower:has(.plan-note[data-note="${workNote}"])`)).toHaveCount(2);
+
   const genericCell = page.locator('.planner-cell[data-editable="1"]:not(.planned):not(.absent)').first();
   const genericUserId = await genericCell.getAttribute('data-user-id');
   const genericDate = await genericCell.getAttribute('data-date');
@@ -252,6 +261,17 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   await page.locator('#action-submit').click();
   const savedGenericCell = page.locator(`.planner-cell[data-user-id="${genericUserId}"][data-date="${genericDate}"]`);
   await expect(savedGenericCell.locator(`.plan-chip.excluded-from-manpower:has(.plan-note[data-note="${genericNote}"])`)).toContainText('poza manpowerem');
+
+  await savedGenericCell.click();
+  await page.keyboard.press('e');
+  await page.locator('#planner-entry-list .remove-plan-entry').click();
+  await page.locator('#planner-entry-add').click();
+  const directGenericRow = page.locator('#planner-entry-list .planner-entry-row:not(.transport-entry)').first();
+  await expect(directGenericRow.locator('[data-plan-area-none]')).toBeChecked();
+  await expect(directGenericRow.locator('[data-plan-area]:checked')).toHaveCount(0);
+  await expect(directGenericRow.locator('[data-plan-manpower]')).toBeChecked();
+  await page.locator('#planner-form .dialog-actions .primary').click();
+  await expect(savedGenericCell.locator('.plan-chip[data-current-project="1"]:not(.excluded-from-manpower)')).toContainText('Bez obszaru');
 
   await savedCell.dispatchEvent('pointerdown', { button: 0 });
   await freeCell.dispatchEvent('pointerdown', { button: 0, ctrlKey: true });

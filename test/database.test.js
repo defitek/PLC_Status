@@ -516,6 +516,21 @@ test('Planner supports optional manpower, configured vehicles and removes orphan
     assert.equal(plan.entries.find(item => item.user_id === worker.id).count_in_manpower, 0);
     assert.equal(plan.summary.find(item => item.plan_date === date), undefined);
 
+    repository.savePlannerDay({ user_id: worker.id, plan_date: date, entries: [{ activity_type: 'work', allow_without_area: 1, count_in_manpower: 1, work_mode: 'offline', shift: 'Dzień' }] }, admin);
+    plan = repository.planner(date, date, admin);
+    assert.equal(plan.summary.find(item => item.plan_date === date).headcount, 1);
+    assert.ok(plan.area_summary.length >= 2);
+    assert.ok(plan.area_summary.every(item => item.assignments === 1), 'praca bez obszaru powinna doliczać osobę do każdego obszaru');
+
+    repository.savePlannerDay({ user_id: worker.id, plan_date: date, entries: [
+      { activity_type: 'work', controller_group_id: first.id, count_in_manpower: 0, work_mode: 'online', shift: 'Dzień' },
+      { activity_type: 'work', controller_group_id: second.id, count_in_manpower: 0, work_mode: 'online', shift: 'Dzień' }
+    ] }, admin);
+    plan = repository.planner(date, date, admin);
+    assert.ok(plan.entries.filter(item => item.user_id === worker.id).every(item => item.count_in_manpower === 0));
+    assert.equal(plan.summary.find(item => item.plan_date === date), undefined);
+    assert.ok(plan.area_summary.every(item => item.assignments === 0), 'wyłączony tick manpoweru powinien pomijać przypisania obszarowe');
+
     repository.savePlannerDay({ user_id: worker.id, plan_date: date, entries: [
       { activity_type: 'work', controller_group_id: first.id, work_mode: 'online', shift: 'Dzień' },
       { activity_type: 'work', controller_group_id: second.id, work_mode: 'online', shift: 'Dzień' },
