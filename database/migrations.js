@@ -81,7 +81,26 @@ export function prepareDatabase(db, { seedDemo, demoLimit = 100 }) {
   runMigration(db, '053-task-images', () => migrateTaskImages(db));
   runMigration(db, '054-task-image-content-tokens', () => migrateTaskImageContentTokens(db));
   runMigration(db, '055-planner-transport-minute-precision', () => migratePlannerTransportMinutePrecision(db));
+  runMigration(db, '056-planner-manpower-scope', () => migratePlannerManpowerScope(db));
   return defaultProjectId;
+}
+
+function migratePlannerManpowerScope(db) {
+  db.exec(`CREATE TABLE IF NOT EXISTS planner_vehicles (
+    id INTEGER PRIMARY KEY,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    code TEXT NOT NULL,
+    registration_number TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(project_id,code),
+    UNIQUE(project_id,registration_number)
+  ) STRICT`);
+  ensureColumn(db, 'planner_entries', 'count_in_manpower', 'INTEGER NOT NULL DEFAULT 1 CHECK(count_in_manpower IN (0,1))');
+  ensureColumn(db, 'planner_entries', 'vehicle_id', 'INTEGER REFERENCES planner_vehicles(id) ON DELETE SET NULL');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_planner_vehicles_project ON planner_vehicles(project_id,sort_order,code)');
 }
 
 function migratePlannerTransportMinutePrecision(db) {

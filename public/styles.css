@@ -1544,3 +1544,27 @@ input:is([type=checkbox],[type=radio]) { accent-color:var(--blue); cursor:pointe
   .group-toggle .group-progress { grid-column:2; width:124px; justify-self:start; }
   .group-toggle>small { grid-column:3; grid-row:1; }
 }
+
+/* Planner: wiele obszarów, manpower i identyfikacja transportu */
+.planner-entry-row { grid-template-columns:minmax(150px,1.1fr) minmax(92px,.65fr) minmax(100px,.7fr) minmax(135px,.95fr) auto minmax(150px,1fr) 32px; }
+.planner-entry-row>[data-plan-area] { grid-column:1; }.planner-entry-row>[data-plan-activity] { grid-column:2; }.planner-entry-row>[data-plan-shift] { grid-column:3; }.planner-entry-row>.planner-entry-mode { grid-column:4; }.planner-entry-row>.planner-manpower-toggle { grid-column:5; }.planner-entry-row>[data-plan-note] { grid-column:6; }.planner-entry-row>.remove-plan-entry { grid-column:7; }
+.planner-entry-row.transport-entry { grid-template-columns:minmax(105px,.55fr) minmax(160px,.8fr) minmax(230px,1.2fr) minmax(180px,1fr) 32px; }
+.planner-entry-row.transport-entry>[data-plan-activity] { grid-column:1; }.planner-entry-row.transport-entry>[data-plan-vehicle] { grid-column:2; }.planner-entry-row.transport-entry>.planner-entry-mode { grid-column:3; }.planner-entry-row.transport-entry>[data-plan-note] { grid-column:4; }.planner-entry-row.transport-entry>.remove-plan-entry { grid-column:5; }
+.planner-manpower-toggle { display:flex; gap:5px; align-items:center; min-height:36px; padding:4px 8px; color:var(--muted); background:var(--panel-alt); border:1px solid var(--line); border-radius:7px; font-size:9px; white-space:nowrap; }
+.planner-manpower-toggle input { width:15px; min-width:15px; margin:0; padding:0; }.planner-manpower-toggle[hidden] { display:none; }
+.plan-chip.excluded-from-manpower { border:1px dashed currentColor; opacity:.78; }
+.planner-vehicle-list { display:grid; gap:5px; }.planner-vehicle-list .settings-row { min-height:42px; }
+
+/* Szybkie dodawanie punktów statusu */
+.bulk-status-input { display:grid; gap:9px; padding:10px; background:var(--panel-alt); border:1px solid var(--line); border-radius:10px; }
+.bulk-status-input>header { display:flex; gap:10px; align-items:center; justify-content:space-between; }.bulk-status-input>header>span { display:grid; gap:2px; }.bulk-status-input>header small { color:var(--muted); font-size:9px; }
+.bulk-status-input textarea { width:100%; margin-top:7px; resize:vertical; }.bulk-status-input .segmented-control { display:flex; gap:4px; padding:3px; background:var(--surface); border:1px solid var(--line); border-radius:8px; }
+.bulk-status-table-wrap { max-height:42vh; margin-bottom:8px; overflow:auto; border:1px solid var(--line); border-radius:8px; }
+.bulk-status-table { width:max-content; min-width:100%; table-layout:fixed; }.bulk-status-table th { position:sticky; top:0; z-index:2; min-width:170px; padding:7px; background:var(--panel-alt); }.bulk-status-table th:last-child { min-width:38px; width:38px; }.bulk-status-table td { padding:3px; }.bulk-status-table input { width:100%; min-width:150px; padding:6px 7px; }.bulk-status-table td:last-child { width:38px; text-align:center; }
+
+@media(max-width:700px) {
+  .planner-entry-row,.planner-entry-row.transport-entry { grid-template-columns:1fr 32px; }
+  .planner-entry-row>*:not(.remove-plan-entry),.planner-entry-row.transport-entry>*:not(.remove-plan-entry) { grid-column:1; }
+  .planner-entry-row>.remove-plan-entry,.planner-entry-row.transport-entry>.remove-plan-entry { grid-column:2; grid-row:1/8; }
+  .bulk-status-input>header { align-items:stretch; flex-direction:column; }.bulk-status-input .segmented-control button { flex:1; }
+}

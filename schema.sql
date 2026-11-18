@@ -525,6 +525,19 @@ CREATE TABLE IF NOT EXISTS project_user_areas (
   PRIMARY KEY(project_id,user_id,controller_group_id)
 ) STRICT, WITHOUT ROWID;
 
+CREATE TABLE IF NOT EXISTS planner_vehicles (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  code TEXT NOT NULL,
+  registration_number TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(project_id,code),
+  UNIQUE(project_id,registration_number)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS planner_entries (
   id INTEGER PRIMARY KEY,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -535,6 +548,8 @@ CREATE TABLE IF NOT EXISTS planner_entries (
   work_mode TEXT NOT NULL DEFAULT 'online' CHECK(work_mode IN ('online','offline')),
   transport_mode TEXT NOT NULL DEFAULT 'none' CHECK(transport_mode IN ('none','transport_work','transport_only')),
   duration_hours REAL NOT NULL DEFAULT 0 CHECK(duration_hours >= 0),
+  count_in_manpower INTEGER NOT NULL DEFAULT 1 CHECK(count_in_manpower IN (0,1)),
+  vehicle_id INTEGER REFERENCES planner_vehicles(id) ON DELETE SET NULL,
   note TEXT NOT NULL DEFAULT '',
   created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1107,6 +1122,7 @@ CREATE INDEX IF NOT EXISTS idx_task_images_task ON task_images(project_id,task_i
 CREATE INDEX IF NOT EXISTS idx_status_assignees_user ON status_assignees(project_id,user_id,status_id);
 CREATE INDEX IF NOT EXISTS idx_project_user_areas_user ON project_user_areas(project_id,user_id);
 CREATE INDEX IF NOT EXISTS idx_project_memberships_user ON project_memberships(user_id,active,project_id);
+CREATE INDEX IF NOT EXISTS idx_planner_vehicles_project ON planner_vehicles(project_id,sort_order,code);
 CREATE INDEX IF NOT EXISTS idx_planner_project_date ON planner_entries(project_id,plan_date,user_id);
 CREATE INDEX IF NOT EXISTS idx_planner_user_date_project ON planner_entries(user_id,plan_date,project_id);
 CREATE INDEX IF NOT EXISTS idx_planner_requirements_date ON planner_requirements(project_id,plan_date,controller_group_id);

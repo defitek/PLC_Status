@@ -198,7 +198,7 @@ function cachedDataRequest(key, path, maxAge = Infinity) {
 function invalidateCacheForMutation(path) {
   const pathname = String(path || '').split('?')[0];
   invalidateDataCache('notifications', 'navigationCounts', 'meetingSummaries');
-  if (/^\/api\/(?:settings|options|categories|subcategories|task-categories|task-subcategories|function-groups|status-groups|status-subgroups|status-columns|status-workflow-states|status-layout|completion-requirements|announcement-labels|export-templates)(?:\/|$)/.test(pathname) || /^\/api\/planner\/holidays(?:\/|$)/.test(pathname)) invalidateDataCache('config');
+  if (/^\/api\/(?:settings|options|categories|subcategories|task-categories|task-subcategories|function-groups|status-groups|status-subgroups|status-columns|status-workflow-states|status-layout|completion-requirements|announcement-labels|export-templates)(?:\/|$)/.test(pathname) || /^\/api\/planner\/(?:holidays|vehicles)(?:\/|$)/.test(pathname)) invalidateDataCache('config');
   if (/^\/api\/(?:controllers|controller-groups)(?:\/|$)/.test(pathname)) invalidateDataCache('controllers', 'controllerGroups', 'config');
   if (/^\/api\/(?:users|projects|project-memberships)(?:\/|$)/.test(pathname)) invalidateDataCache('users');
   if (/^\/api\/saved-views(?:\/|$)/.test(pathname)) invalidateDataCache('savedViews');
@@ -2300,7 +2300,7 @@ function plannerClipboardLabel() {
 function plannerBulkToolbar() {
   const hidden = !state.plannerToolsVisible;
   const collisionHidden = plannerSelectionOverlapReviews().length ? '' : 'hidden';
-  return `<section class="planner-bulk-toolbar ${hidden ? 'hidden' : ''}" id="planner-bulk-toolbar"><span><b id="planner-selection-count">${state.plannerSelection.size}</b> dni · <b id="planner-entry-selection-count">${state.plannerEntrySelection.size}</b> aktywności</span><button type="button" class="primary" id="planner-bulk-add" title="Skrót: P">+ Dodaj obszar pracy</button><button type="button" class="mini" id="planner-bulk-transport" title="Skrót: T">+Transport</button><button type="button" class="mini" id="planner-bulk-time-off" title="Wolne z nadgodzin · skrót: W">+ Wolne</button><button type="button" class="mini" id="planner-bulk-vacation" title="Urlop płatny · skrót: U">+ Urlop</button><button type="button" class="mini" id="planner-bulk-copy">Kopiuj zaznaczenie</button><button type="button" class="mini" id="planner-bulk-paste" ${state.plannerClipboard ? '' : 'disabled'}>Wklej ${plannerClipboardLabel()}</button><button type="button" class="mini ${collisionHidden}" id="planner-bulk-approve">✓ Zatwierdź kolizje</button><button type="button" class="mini" id="planner-selection-clear">Wyczyść zaznaczenie</button></section>`;
+  return `<section class="planner-bulk-toolbar ${hidden ? 'hidden' : ''}" id="planner-bulk-toolbar"><span><b id="planner-selection-count">${state.plannerSelection.size}</b> dni · <b id="planner-entry-selection-count">${state.plannerEntrySelection.size}</b> aktywności</span><button type="button" class="primary" id="planner-bulk-add" title="Skrót: P">+ Praca</button><button type="button" class="mini" id="planner-bulk-transport" title="Skrót: T">+ Transport</button><button type="button" class="mini" id="planner-bulk-time-off" title="Wolne z nadgodzin · skrót: W">+ Wolne</button><button type="button" class="mini" id="planner-bulk-vacation" title="Urlop płatny · skrót: U">+ Urlop</button><button type="button" class="mini" id="planner-bulk-copy">Kopiuj zaznaczenie</button><button type="button" class="mini" id="planner-bulk-paste" ${state.plannerClipboard ? '' : 'disabled'}>Wklej ${plannerClipboardLabel()}</button><button type="button" class="mini ${collisionHidden}" id="planner-bulk-approve">✓ Zatwierdź kolizje</button><button type="button" class="mini" id="planner-selection-clear">Wyczyść zaznaczenie</button></section>`;
 }
 
 function setPlannerCellSelected(cell, selected) {
@@ -2384,12 +2384,12 @@ function formatPlannerTransportDuration(value) {
 function plannerEntryPayload(entry) {
   const activity = entry.activity_type || (entry.transport_mode === 'transport_only' ? 'transport' : 'work');
   const durationMinutes = activity === 'transport' ? plannerTransportMinutes(entry.duration_hours) || plannerDefaultTransportMinutes() : 0;
-  return { controller_group_id: activity === 'work' ? Number(entry.controller_group_id) || null : null, activity_type: activity, work_mode: activity === 'work' ? (entry.work_mode || 'online') : 'offline', shift: activity === 'work' ? entry.shift || 'Dzień' : 'Dzień', transport_mode: activity === 'transport' ? 'transport_only' : 'none', duration_hours: activity === 'transport' ? durationMinutes / 60 : 0, note: entry.note || '' };
+  return { controller_group_id: activity === 'work' ? Number(entry.controller_group_id) || null : null, activity_type: activity, work_mode: activity === 'work' ? (entry.work_mode || 'online') : 'offline', shift: activity === 'work' ? entry.shift || 'Dzień' : 'Dzień', transport_mode: activity === 'transport' ? 'transport_only' : 'none', duration_hours: activity === 'transport' ? durationMinutes / 60 : 0, count_in_manpower: activity === 'work' && !entry.controller_group_id && Number(entry.count_in_manpower) === 0 ? 0 : 1, vehicle_id: activity === 'transport' ? Number(entry.vehicle_id) || null : null, allow_without_area: activity === 'work' && !entry.controller_group_id && (entry.id || entry.allow_without_area) ? 1 : 0, note: entry.note || '' };
 }
 
 function uniquePlannerEntries(entries) {
   const seen = new Set();
-  return (entries || []).map(plannerEntryPayload).filter(entry => { const key = `${entry.activity_type}:${entry.controller_group_id || 0}:${entry.work_mode}:${entry.shift}:${entry.duration_hours}:${entry.note}`; if (seen.has(key)) return false; seen.add(key); return true; });
+  return (entries || []).map(plannerEntryPayload).filter(entry => { const key = `${entry.activity_type}:${entry.controller_group_id || 0}:${entry.work_mode}:${entry.shift}:${entry.duration_hours}:${entry.count_in_manpower}:${entry.vehicle_id || 0}:${entry.note}`; if (seen.has(key)) return false; seen.add(key); return true; });
 }
 
 function plannerDayRequest(target, entries, day = plannerDaySnapshot(target.userId, target.date)) {
@@ -2408,25 +2408,33 @@ async function savePlannerBulkRequests(requests, message) {
 
 async function addWorkToPlannerSelection() {
   const targets = selectedPlannerTargets(); if (!targets.length) return;
-  const result = await uiForm({ title: `Dodaj obszar pracy do ${targets.length} dni`, description: 'Jedna aktywność zostanie dopisana do wszystkich zaznaczonych dni roboczych.', submitLabel: 'Dodaj do zaznaczenia', fields: [
-    { name: 'controller_group_id', label: 'Obszar pracy', type: 'select', options: hierarchyGroupOptions(), required: true },
+  const result = await uiForm({ title: `Dodaj pracę do ${targets.length} dni`, description: 'Wybierz kilka obszarów jednocześnie albo pozostaw listę pustą, aby dodać osobę bez konkretnego obszaru.', submitLabel: 'Dodaj do zaznaczenia', fields: [
+    { name: 'controller_group_ids', label: 'Obszary pracy', type: 'user-multiselect', options: hierarchyGroupOptions(), emptyLabel: 'Bez konkretnego obszaru', full: true },
     { name: 'work_mode', label: 'Tryb', type: 'select', value: 'online', options: [{ value: 'online', label: 'Online · fabryka' }, { value: 'offline', label: 'Offline · biuro' }] },
     { name: 'shift', label: 'Zmiana', type: 'select', value: options('shift')[0] || 'Dzień', options: options('shift') },
+    { name: 'count_in_manpower', label: 'Uwzględniaj w kalkulacji manpoweru, jeśli nie wybrano obszaru', type: 'checkbox', value: 1, full: true },
     { name: 'note', label: 'Notatka', full: true }
   ] });
   if (!result) return;
-  const entry = { controller_group_id: Number(result.controller_group_id), activity_type: 'work', work_mode: result.work_mode, shift: result.shift, transport_mode: 'none', note: result.note };
+  const areaIds = [...new Set((result.controller_group_ids || []).map(Number).filter(Boolean))];
+  const entriesToAdd = (areaIds.length ? areaIds : [null]).map(controllerGroupId => ({ controller_group_id: controllerGroupId, activity_type: 'work', work_mode: result.work_mode, shift: result.shift, transport_mode: 'none', count_in_manpower: controllerGroupId ? 1 : (result.count_in_manpower ? 1 : 0), allow_without_area: controllerGroupId ? 0 : 1, note: result.note }));
   const usable = targets.filter(target => !plannerDaySnapshot(target.userId, target.date).absence_type);
-  const mixed = usable.some(target => plannerDaySnapshot(target.userId, target.date).entries.some(item => item.transport_mode !== 'transport_only' && item.work_mode !== entry.work_mode));
+  const mixed = usable.some(target => plannerDaySnapshot(target.userId, target.date).entries.some(item => item.transport_mode !== 'transport_only' && item.work_mode !== result.work_mode));
   if (mixed && !await uiConfirm('Jednoczesny plan ONLINE i OFFLINE', 'Co najmniej jeden zaznaczony dzień będzie zawierał oba tryby pracy.', 'Zapisz oba tryby', true)) return;
-  await savePlannerBulkRequests(usable.map(target => { const day = plannerDaySnapshot(target.userId, target.date); return plannerDayRequest(target, [...day.entries, entry], day); }), 'Dodano obszar pracy');
+  await savePlannerBulkRequests(usable.map(target => { const day = plannerDaySnapshot(target.userId, target.date); return plannerDayRequest(target, [...day.entries, ...entriesToAdd], day); }), areaIds.length > 1 ? `Dodano ${areaIds.length} obszary pracy` : areaIds.length ? 'Dodano obszar pracy' : 'Dodano pracę bez obszaru');
+}
+
+function plannerVehicleOptions() {
+  const vehicles = state.planner?.vehicles || state.config.planner_vehicles || [];
+  return [{ value: '', label: 'T · niezdefiniowany transport' }, ...vehicles.map(vehicle => ({ value: vehicle.id, label: `${vehicle.code} · ${vehicle.registration_number}` }))];
 }
 
 async function addTransportToPlannerSelection() {
   const targets = selectedPlannerTargets();
   if (!targets.length) return toast('Zaznacz co najmniej jeden dzień dla transportu', true);
   const defaultDuration = plannerTransportParts(plannerDefaultTransportMinutes() / 60);
-  const result = await uiForm({ title: `Transport · ${targets.length} ${targets.length === 1 ? 'dzień' : 'dni'}`, description: 'Transport jest oznaczany skrótem T i w kalkulacji czasu liczy się jako praca OFF.', submitLabel: '+Transport', fields: [
+  const result = await uiForm({ title: `Transport · ${targets.length} ${targets.length === 1 ? 'dzień' : 'dni'}`, description: 'Transport jest oznaczany kodem T albo kodem wybranego auta (np. T1) i w kalkulacji czasu liczy się jako praca OFF.', submitLabel: '+Transport', fields: [
+    { name: 'vehicle_id', label: 'Auto / transport', type: 'select', value: '', options: plannerVehicleOptions(), full: true },
     { name: 'duration_hours', label: 'Godziny', type: 'number', value: defaultDuration.hours, min: 0, step: 1, required: true },
     { name: 'duration_minutes', label: 'Minuty', type: 'number', value: defaultDuration.minutes, min: 0, max: 59, step: 1, required: true },
     { name: 'note', label: 'Komentarz', placeholder: 'Opcjonalnie', full: true }
@@ -2434,7 +2442,7 @@ async function addTransportToPlannerSelection() {
   if (!result) return;
   const durationHours = plannerTransportHoursFromParts(result.duration_hours, result.duration_minutes);
   if (durationHours === null) return toast('Podaj dodatni czas transportu w pełnych godzinach i minutach', true);
-  const entry = { controller_group_id: null, activity_type: 'transport', work_mode: 'offline', shift: 'Dzień', transport_mode: 'transport_only', duration_hours: durationHours, note: result.note };
+  const entry = { controller_group_id: null, activity_type: 'transport', work_mode: 'offline', shift: 'Dzień', transport_mode: 'transport_only', duration_hours: durationHours, vehicle_id: Number(result.vehicle_id) || null, note: result.note };
   const usable = targets.filter(target => !plannerDaySnapshot(target.userId, target.date).absence_type);
   await savePlannerBulkRequests(usable.map(target => { const day = plannerDaySnapshot(target.userId, target.date); return plannerDayRequest(target, [...day.entries, entry], day); }), 'Dodano transport');
 }
@@ -2586,7 +2594,7 @@ function plannerCell(user, date, entries, work, absence, timeDetail, holiday, sh
   const weekend = [0, 6].includes(new Date(`${date}T12:00:00Z`).getUTCDay());
   const editable = canCoordinate() && (Number(user.planner_enabled) || date === today());
   let overlapPlaced = false;
-  const chips = entries.map(entry => { const transport = entry.activity_type === 'transport' || entry.transport_mode === 'transport_only'; const current = entry.is_current_project !== false; const selectedEntry = current && state.plannerEntrySelection.has(Number(entry.id)); const showOverlap = current && overlap && !overlapPlaced; if (showOverlap) overlapPlaced = true; const collision = showOverlap ? `<span class="planner-overlap-actions ${overlap.status}" title="Nakładanie się projektów: ${escapeHtml(overlap.other_project_codes || 'inny projekt')}">${overlap.status === 'approved' ? '<b aria-label="Kolizja zatwierdzona">✓</b>' : overlap.status === 'rejected' ? '<b aria-label="Kolizja odrzucona">×</b>' : canCoordinate() ? `<button type="button" data-overlap-action="approve" data-user-id="${user.id}" data-date="${date}" aria-label="Zatwierdź kolizję">✓</button><button type="button" data-overlap-action="reject" data-user-id="${user.id}" data-date="${date}" aria-label="Odrzuć plan">×</button>` : '<b>⚠</b>'}</span>` : ''; const duration = transport ? formatPlannerTransportDuration(entry.duration_hours) : ''; const itemLabel = transport ? 'Transport' : entry.area_path ? escapeHtml(entry.area_path) : entry.area_name ? escapeHtml(entry.area_name) : 'Ogólne'; return `<span class="plan-chip ${transport ? 'transport-only' : entry.work_mode} ${current ? '' : 'other-project'} ${selectedEntry ? 'entry-selected' : ''} ${showOverlap ? `has-overlap ${overlap.status}` : ''}" title="${showOverlap ? `Nakładanie się projektów: ${escapeHtml(overlap.other_project_codes || 'inny projekt')}` : transport ? `Transport liczony jako OFF · ${duration}` : ''}" data-entry-id="${entry.id}" data-current-project="${current ? 1 : 0}" data-project-id="${entry.project_id || state.me.current_project?.id}" draggable="${editable && current ? 'true' : 'false'}">${transport ? '<b class="mode-label">T</b>' : `<b class="mode-label">${entry.work_mode === 'offline' ? 'OFF' : 'ON'}</b>`}<span>${current ? '' : `<em>${escapeHtml(entry.project_code)} · </em>`}${itemLabel}</span>${entry.note ? `<span class="plan-note" data-note="${escapeHtml(entry.note)}" title="${escapeHtml(entry.note)}" tabindex="0" aria-label="Notatka: ${escapeHtml(entry.note)}">i</span>` : ''}${collision}<small>${transport ? duration : escapeHtml(entry.shift)}</small></span>`; }).join('');
+  const chips = entries.map(entry => { const transport = entry.activity_type === 'transport' || entry.transport_mode === 'transport_only'; const current = entry.is_current_project !== false; const selectedEntry = current && state.plannerEntrySelection.has(Number(entry.id)); const showOverlap = current && overlap && !overlapPlaced; if (showOverlap) overlapPlaced = true; const collision = showOverlap ? `<span class="planner-overlap-actions ${overlap.status}" title="Nakładanie się projektów: ${escapeHtml(overlap.other_project_codes || 'inny projekt')}">${overlap.status === 'approved' ? '<b aria-label="Kolizja zatwierdzona">✓</b>' : overlap.status === 'rejected' ? '<b aria-label="Kolizja odrzucona">×</b>' : canCoordinate() ? `<button type="button" data-overlap-action="approve" data-user-id="${user.id}" data-date="${date}" aria-label="Zatwierdź kolizję">✓</button><button type="button" data-overlap-action="reject" data-user-id="${user.id}" data-date="${date}" aria-label="Odrzuć plan">×</button>` : '<b>⚠</b>'}</span>` : ''; const duration = transport ? formatPlannerTransportDuration(entry.duration_hours) : ''; const transportCode = entry.transport_code || 'T'; const itemLabel = transport ? (entry.vehicle_registration ? escapeHtml(entry.vehicle_registration) : 'Transport') : entry.area_path ? escapeHtml(entry.area_path) : entry.area_name ? escapeHtml(entry.area_name) : Number(entry.count_in_manpower) === 0 ? 'Bez obszaru · poza manpowerem' : 'Bez obszaru'; const title = showOverlap ? `Nakładanie się projektów: ${escapeHtml(overlap.other_project_codes || 'inny projekt')}` : transport ? `${escapeHtml(transportCode)}${entry.vehicle_registration ? ` · ${escapeHtml(entry.vehicle_registration)}` : ''} · transport liczony jako OFF · ${duration}` : Number(entry.count_in_manpower) === 0 ? 'Ta osoba nie jest uwzględniana w kalkulacji manpoweru' : ''; return `<span class="plan-chip ${transport ? 'transport-only' : entry.work_mode} ${Number(entry.count_in_manpower) === 0 ? 'excluded-from-manpower' : ''} ${current ? '' : 'other-project'} ${selectedEntry ? 'entry-selected' : ''} ${showOverlap ? `has-overlap ${overlap.status}` : ''}" title="${title}" data-entry-id="${entry.id}" data-current-project="${current ? 1 : 0}" data-project-id="${entry.project_id || state.me.current_project?.id}" draggable="${editable && current ? 'true' : 'false'}">${transport ? `<b class="mode-label">${escapeHtml(transportCode)}</b>` : `<b class="mode-label">${entry.work_mode === 'offline' ? 'OFF' : 'ON'}</b>`}<span>${current ? '' : `<em>${escapeHtml(entry.project_code)} · </em>`}${itemLabel}</span>${entry.note ? `<span class="plan-note" data-note="${escapeHtml(entry.note)}" title="${escapeHtml(entry.note)}" tabindex="0" aria-label="Notatka: ${escapeHtml(entry.note)}">i</span>` : ''}${collision}<small>${transport ? duration : escapeHtml(entry.shift)}</small></span>`; }).join('');
   const workload = work && (work.tasks || work.points || work.statuses || work.notes) ? `<span class="workload" title="Zadania / otwarte punkty / status / notatki">${work.tasks}/${work.points}/${work.statuses}/${work.notes}</span>` : '';
   const absenceChip = absence ? `<span class="absence-chip ${absence.absence_type}" draggable="${editable ? 'true' : 'false'}"><b>${absence.absence_type === 'vacation' ? 'URLOP' : 'WOLNE'}</b><small>${escapeHtml(absence.note || '')}</small></span>` : '';
   const hours = showTime && timeDetail ? `<span class="planner-hours-chip" title="Dzisiaj: ${Number(timeDetail.actual_hours + timeDetail.credited_hours).toFixed(1)} h · narastająco bez mnożnika: ${Number(timeDetail.overtime_raw_cumulative || 0).toFixed(1)} h · z mnożnikiem: ${Number(timeDetail.overtime_weighted_cumulative || 0).toFixed(1)} h"><b>${Number(timeDetail.actual_hours + timeDetail.credited_hours).toFixed(1)}h</b><i>Σ ${Number(timeDetail.overtime_raw_cumulative || 0).toFixed(1)} / ${Number(timeDetail.overtime_weighted_cumulative || 0).toFixed(1)}</i></span>` : '';
@@ -2638,7 +2646,8 @@ function plannerEntryRow(entry = {}) {
   const modeControl = activity === 'transport'
     ? plannerTransportDurationFields(entry.duration_hours)
     : `<select data-plan-mode aria-label="Tryb pracy">${selectOptions([{ value: 'online', label: 'Online · fabryka' }, { value: 'offline', label: 'Offline · biuro' }], entry.work_mode || 'online', null)}</select>`;
-  return `<div class="planner-entry-row ${transport ? 'transport-entry' : ''}"><select data-plan-area ${transport ? 'hidden disabled' : ''}>${selectOptions(hierarchyGroupOptions(), entry.controller_group_id, 'Bez obszaru')}</select><select data-plan-activity>${selectOptions([{ value: 'work', label: 'Praca' }, { value: 'transport', label: 'Transport · T' }], activity, null)}</select><select data-plan-shift ${transport ? 'hidden disabled' : ''}>${selectOptions(options('shift'), entry.shift || 'Dzień', null)}</select><span class="planner-entry-mode">${modeControl}</span><input data-plan-note value="${escapeHtml(entry.note || '')}" placeholder="Komentarz (opcjonalnie)"><button type="button" class="mini remove-plan-entry" aria-label="Usuń aktywność">×</button></div>`;
+  const withoutArea = !transport && !entry.controller_group_id;
+  return `<div class="planner-entry-row ${transport ? 'transport-entry' : ''}" data-plan-entry-id="${entry.id || ''}"><select data-plan-area ${transport ? 'hidden disabled' : ''}>${selectOptions(hierarchyGroupOptions(), entry.controller_group_id, 'Bez obszaru')}</select><select data-plan-activity>${selectOptions([{ value: 'work', label: 'Praca' }, { value: 'transport', label: 'Transport · T' }], activity, null)}</select><select data-plan-vehicle ${transport ? '' : 'hidden disabled'} aria-label="Auto lub transport">${selectOptions(plannerVehicleOptions(), entry.vehicle_id || '', null)}</select><select data-plan-shift ${transport ? 'hidden disabled' : ''}>${selectOptions(options('shift'), entry.shift || 'Dzień', null)}</select><span class="planner-entry-mode">${modeControl}</span><label class="planner-manpower-toggle" ${withoutArea ? '' : 'hidden'} title="Udział tej osoby w kalkulacji manpoweru"><input type="checkbox" data-plan-manpower ${Number(entry.count_in_manpower) === 0 ? '' : 'checked'}><span>Manpower</span></label><input data-plan-note value="${escapeHtml(entry.note || '')}" placeholder="Komentarz (opcjonalnie)"><button type="button" class="mini remove-plan-entry" aria-label="Usuń aktywność">×</button></div>`;
 }
 
 function plannerTransportDurationFields(durationHours = null) {
@@ -2652,8 +2661,11 @@ function bindPlannerEntryRows() {
     const row = select.closest('.planner-entry-row'); const transport = select.value === 'transport';
     row.classList.toggle('transport-entry', transport);
     for (const field of [row.querySelector('[data-plan-area]'), row.querySelector('[data-plan-shift]')]) { field.hidden = transport; field.disabled = transport; }
+    const vehicle = row.querySelector('[data-plan-vehicle]'); vehicle.hidden = !transport; vehicle.disabled = !transport;
+    row.querySelector('.planner-manpower-toggle').hidden = transport || Boolean(row.querySelector('[data-plan-area]').value);
     row.querySelector('.planner-entry-mode').innerHTML = transport ? plannerTransportDurationFields() : `<select data-plan-mode aria-label="Tryb pracy">${selectOptions([{ value: 'online', label: 'Online · fabryka' }, { value: 'offline', label: 'Offline · biuro' }], 'online', null)}</select>`;
   });
+  $$('[data-plan-area]').forEach(select => select.onchange = () => { select.closest('.planner-entry-row').querySelector('.planner-manpower-toggle').hidden = Boolean(select.value); });
 }
 
 function openPlannerCell(userId, date) {
@@ -2699,7 +2711,8 @@ async function savePlannerCell(event) {
   const absenceType = $('#planner-day-kind').value === 'work' ? '' : $('#planner-day-kind').value;
   const entries = absenceType ? [] : $$('#planner-entry-list .planner-entry-row').map(row => {
     const activity = row.querySelector('[data-plan-activity]').value; const transport = activity === 'transport';
-    return { controller_group_id: transport ? null : Number(row.querySelector('[data-plan-area]').value) || null, activity_type: activity, work_mode: transport ? 'offline' : row.querySelector('[data-plan-mode]').value, shift: transport ? 'Dzień' : row.querySelector('[data-plan-shift]').value, transport_mode: transport ? 'transport_only' : 'none', duration_hours: transport ? plannerTransportHoursFromParts(row.querySelector('[data-plan-duration-hours]').value, row.querySelector('[data-plan-duration-minutes]').value) : 0, note: row.querySelector('[data-plan-note]').value };
+    const controllerGroupId = transport ? null : Number(row.querySelector('[data-plan-area]').value) || null;
+    return { id: Number(row.dataset.planEntryId) || null, controller_group_id: controllerGroupId, activity_type: activity, work_mode: transport ? 'offline' : row.querySelector('[data-plan-mode]').value, shift: transport ? 'Dzień' : row.querySelector('[data-plan-shift]').value, transport_mode: transport ? 'transport_only' : 'none', duration_hours: transport ? plannerTransportHoursFromParts(row.querySelector('[data-plan-duration-hours]').value, row.querySelector('[data-plan-duration-minutes]').value) : 0, count_in_manpower: !transport && !controllerGroupId && !row.querySelector('[data-plan-manpower]').checked ? 0 : 1, vehicle_id: transport ? Number(row.querySelector('[data-plan-vehicle]').value) || null : null, allow_without_area: !transport && !controllerGroupId && Boolean(Number(row.dataset.planEntryId) || row.querySelector('[data-plan-note]').value.trim()) ? 1 : 0, note: row.querySelector('[data-plan-note]').value };
   });
   if (entries.some(entry => entry.activity_type === 'transport' && entry.duration_hours === null)) return toast('Podaj dodatni czas transportu w pełnych godzinach i minutach', true);
   if (!await confirmMixedPlannerModes(state.plannerCell.userId, state.plannerCell.date, entries)) return;
@@ -2719,7 +2732,7 @@ async function openPlannerParticipants() {
   const participants = state.users.filter(item => item.project_active && item.active);
   const result = await openBulkChoice({
     title: 'Uczestnicy Plannera',
-    description: 'Wyszukaj osoby, zaznacz widoczną grupę albo zmień pojedyncze pozycje. Aktywność konta i udział w Plannerze są niezależne.',
+    description: 'Wyszukaj osoby i zmień ich udział. Wyłączenie uczestnika usuwa jego plan, korekty czasu i przypisane obszary z bieżącego projektu.',
     submitLabel: 'Zapisz uczestników',
     selectedIds: participants.filter(item => item.planner_enabled).map(item => item.id),
     items: participants.map(item => ({ id: item.id, label: item.display_name, detail: roleName(item.system_role === 'system_admin' ? 'system_admin' : item.project_role), badge: item.planner_enabled ? 'Aktywny w Plannerze' : 'Poza Plannerem' }))
@@ -2727,9 +2740,15 @@ async function openPlannerParticipants() {
   if (result === null) return;
   const changed = participants.filter(item => result.has(item.id) !== Boolean(item.planner_enabled));
   if (!changed.length) return toast('Lista uczestników nie wymaga zmian');
+  const disabled = changed.filter(item => !result.has(item.id));
+  if (disabled.length && !await uiConfirm('Wyłącz uczestników Plannera', `Plan i przypisane obszary zostaną usunięte dla ${disabled.length} ${disabled.length === 1 ? 'osoby' : 'osób'} w bieżącym projekcie.`, 'Wyłącz i usuń przypisania', true)) return;
   try {
-    for (let index = 0; index < changed.length; index += 20) await Promise.all(changed.slice(index, index + 20).map(item => api(`/api/users/${item.id}/planner`, { method: 'PUT', body: JSON.stringify({ planner_enabled: result.has(item.id) ? 1 : 0 }) })));
-    toast('Lista uczestników Plannera została zapisana');
+    let removedAssignments = 0;
+    for (let index = 0; index < changed.length; index += 20) {
+      const saved = await Promise.all(changed.slice(index, index + 20).map(item => api(`/api/users/${item.id}/planner`, { method: 'PUT', body: JSON.stringify({ planner_enabled: result.has(item.id) ? 1 : 0 }) })));
+      removedAssignments += saved.reduce((sum, item) => sum + Number(item.removed_assignments || 0), 0);
+    }
+    toast(`Lista uczestników Plannera została zapisana${removedAssignments ? ` · usunięto ${removedAssignments} przypisań` : ''}`);
     await loadData();
   } catch (error) { toast(error.message, true); }
 }
@@ -4163,6 +4182,41 @@ function showStatusContext(event, item) {
   }));
 }
 
+function bulkStatusBasicColumns() {
+  return statusEditorColumns(Number($('#bulk-status-matrix-group')?.value), Number($('#bulk-status-matrix-subgroup')?.value) || null).filter(column => statusColumnRole(column) === 'basic');
+}
+
+function appendBulkStatusTableRow(values = {}) {
+  const body = $('#bulk-status-table-body'); if (!body) return;
+  const columns = bulkStatusBasicColumns();
+  const fields = columns.length ? columns : [{ id: 'function_detail', name: 'Nazwa punktu' }];
+  const row = document.createElement('tr');
+  row.innerHTML = `${fields.map(column => `<td><input type="text" data-bulk-status-column="${escapeHtml(column.id)}" value="${escapeHtml(values[column.id] || '')}" aria-label="${escapeHtml(column.name)}"></td>`).join('')}<td><button type="button" class="mini danger-text remove-bulk-status-row" aria-label="Usuń wiersz">×</button></td>`;
+  row.querySelector('.remove-bulk-status-row').addEventListener('click', () => { row.remove(); if (!body.children.length) appendBulkStatusTableRow(); });
+  body.append(row);
+}
+
+function renderBulkStatusInput(resetRows = true) {
+  const columns = bulkStatusBasicColumns();
+  const names = columns.map(column => column.name);
+  const hint = $('#bulk-status-text-hint');
+  const textarea = $('#bulk-status-names');
+  if (hint) hint.textContent = columns.length ? `Jedna linia = jeden punkt. Średnik rozdziela kolejno: ${names.join(' ; ')}. Maksymalnie 500 punktów.` : 'Jedna linia = jeden punkt. Maksymalnie 500 punktów.';
+  if (textarea) textarea.placeholder = columns.length ? `${names.map((name, index) => index ? `${name} ${index + 1}` : `Wartość ${name}`).join(';')}` : 'Sprawdź sygnał QM1\nSprawdź sygnał QM2';
+  const head = $('#bulk-status-table-head');
+  const body = $('#bulk-status-table-body');
+  if (head) head.innerHTML = `<tr>${(columns.length ? columns : [{ name: 'Nazwa punktu' }]).map(column => `<th title="${escapeHtml(column.description || '')}">${escapeHtml(column.name)}</th>`).join('')}<th></th></tr>`;
+  if (body && resetRows) { body.innerHTML = ''; for (let index = 0; index < 6; index += 1) appendBulkStatusTableRow(); }
+}
+
+function setBulkStatusMode(mode) {
+  const normalized = mode === 'table' ? 'table' : 'text';
+  $('#bulk-status-dialog').dataset.inputMode = normalized;
+  $$('#bulk-status-mode-switch button').forEach(button => button.classList.toggle('active-toggle', button.dataset.mode === normalized));
+  $('#bulk-status-text-mode').hidden = normalized !== 'text';
+  $('#bulk-status-table-mode').hidden = normalized !== 'table';
+}
+
 function openBulkStatus() {
   const hierarchyTarget = defaultValue('hierarchy_target');
   const statusGroup = statusGroups()[0];
@@ -4171,9 +4225,14 @@ function openBulkStatus() {
     <label class="field"><span>Podgrupa</span><select name="status_subgroup_id" id="bulk-status-matrix-subgroup">${selectOptions((statusGroup?.subgroups || []).map(item => ({ value: item.id, label: item.name })), '', 'Bezpośrednio w grupie')}</select></label>
     <label class="field"><span>Krytyczność</span><select name="criticality">${selectOptions(PRIORITY_DEFINITIONS, 'Medium', '')}</select></label>
     <label class="field"><span>Status początkowy</span><select name="status">${selectOptions(statusWorkflowOptions(), 'Never checked', '')}</select></label>
-    <label class="field full required-field big"><span>Punkty do dodania *</span><textarea name="names" rows="14" required placeholder="Każdy wiersz to osobny punkt, np.&#10;Sprawdź sygnał QM1&#10;Sprawdź sygnał QM2&#10;Potwierdź blokadę osłony"></textarea><small class="sub">Maksymalnie 500 punktów w jednej operacji. Nazwy mogą się powtarzać.</small></label>${requirementsField({}, 'requirement_ids', 'Zapotrzebowanie')}`;
+    <section class="field full required-field bulk-status-input"><header><span><b>Punkty do dodania *</b><small>Wybierz wygodny sposób wprowadzania danych.</small></span><div class="segmented-control" id="bulk-status-mode-switch"><button type="button" class="mini active-toggle" data-mode="text">Tekst</button><button type="button" class="mini" data-mode="table">Tabela</button></div></header><div id="bulk-status-text-mode"><textarea id="bulk-status-names" name="names" rows="12"></textarea><small class="sub" id="bulk-status-text-hint"></small></div><div id="bulk-status-table-mode" hidden><div class="tablewrap bulk-status-table-wrap"><table class="bulk-status-table"><thead id="bulk-status-table-head"></thead><tbody id="bulk-status-table-body"></tbody></table></div><button type="button" class="secondary" id="bulk-status-add-row">+ Dodaj wiersz</button><small class="sub">Puste wiersze zostaną pominięte. Maksymalnie 500 punktów.</small></div></section>${requirementsField({}, 'requirement_ids', 'Zapotrzebowanie')}`;
   bindHierarchyTargetTrees($('#bulk-status-fields'));
-  $('#bulk-status-matrix-group').addEventListener('change', event => { $('#bulk-status-matrix-subgroup').innerHTML = selectOptions(statusSubgroups(event.target.value).map(item => ({ value: item.id, label: item.name })), '', 'Bezpośrednio w grupie'); });
+  $('#bulk-status-matrix-group').addEventListener('change', event => { $('#bulk-status-matrix-subgroup').innerHTML = selectOptions(statusSubgroups(event.target.value).map(item => ({ value: item.id, label: item.name })), '', 'Bezpośrednio w grupie'); renderBulkStatusInput(); });
+  $('#bulk-status-matrix-subgroup').addEventListener('change', () => renderBulkStatusInput());
+  $$('#bulk-status-mode-switch button').forEach(button => button.addEventListener('click', () => setBulkStatusMode(button.dataset.mode)));
+  $('#bulk-status-add-row').addEventListener('click', () => { appendBulkStatusTableRow(); $('#bulk-status-table-body tr:last-child input')?.focus(); });
+  renderBulkStatusInput();
+  setBulkStatusMode('text');
   $('#bulk-status-dialog').dataset.dirty = '';
   $('#bulk-status-dialog').showModal();
 }
@@ -4186,8 +4245,30 @@ async function saveBulkStatus(event) {
   input.responsible_user_ids = [];
   input.status_group_id = Number(input.status_group_id) || null;
   input.status_subgroup_id = Number(input.status_subgroup_id) || null;
-  const count = String(input.names || '').split(/\r?\n/).map(value => value.trim()).filter(Boolean).length;
-  if (!count) return toast('Wklej co najmniej jeden punkt', true);
+  const columns = bulkStatusBasicColumns();
+  const mode = $('#bulk-status-dialog').dataset.inputMode || 'text';
+  let items = [];
+  if (mode === 'text') {
+    const lines = String(input.names || '').split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+    if (lines.length > 500) return toast('Jednorazowo można utworzyć maksymalnie 500 punktów', true);
+    for (const [index, line] of lines.entries()) {
+      const values = line.split(';').map(value => value.trim());
+      if (columns.length && values.length > columns.length) return toast(`Wiersz ${index + 1} ma więcej wartości niż skonfigurowanych kolumn podstawowych (${columns.length})`, true);
+      const matrixValues = Object.fromEntries(columns.map((column, columnIndex) => [column.id, values[columnIndex] || '']));
+      const functionDetail = columns.length ? values.filter(Boolean).join(' · ') : line;
+      if (functionDetail) items.push({ function_detail: functionDetail, matrix_values: matrixValues });
+    }
+  } else {
+    items = $$('#bulk-status-table-body tr').map(row => {
+      const values = Object.fromEntries([...row.querySelectorAll('[data-bulk-status-column]')].map(control => [control.dataset.bulkStatusColumn, control.value.trim()]));
+      const functionDetail = columns.length ? columns.map(column => values[column.id]).filter(Boolean).join(' · ') : values.function_detail || '';
+      return { function_detail: functionDetail, matrix_values: columns.length ? Object.fromEntries(columns.map(column => [column.id, values[column.id] || ''])) : {} };
+    }).filter(item => item.function_detail);
+  }
+  if (!items.length) return toast('Dodaj co najmniej jeden punkt', true);
+  if (items.length > 500) return toast('Jednorazowo można utworzyć maksymalnie 500 punktów', true);
+  delete input.names;
+  input.items = items;
   const button = event.currentTarget.querySelector('.primary'); button.disabled = true;
   try {
     const result = await api('/api/status/bulk-create', { method: 'POST', body: JSON.stringify(input) });
@@ -4799,7 +4880,7 @@ function renderSettings() {
     ['task_categories', 'Kategorie zadań', 'Niezależny słownik dla modułu Zadania', state.config.task_categories.length, '✓'],
     ['users', 'Użytkownicy projektu', 'Role, dostęp, Planner i przypisane obszary', state.users.length, '♙'],
     ['announcements', 'Informator', 'Etykiety oraz poziomy ważności wiadomości', (state.config.announcement_labels || []).length, '◆'],
-    ...(admin ? [['planner', 'Planner i czas pracy', 'Święta, normy godzin i mnożniki nadgodzin', (state.planner?.holidays || []).length, '▥']] : []),
+    ...(admin ? [['planner', 'Planner i czas pracy', 'Auta, święta, normy godzin i mnożniki nadgodzin', (state.planner?.holidays || []).length, '▥']] : []),
     ['dictionaries', 'Słowniki projektu', 'Cele odpraw, zmiany i typy notatek', state.config.options.filter(item => item.kind !== 'waiting_for').length, '≡'],
     ['completion_requirements', 'Zapotrzebowanie', 'Lista zapotrzebowania wybierana w Statusie, Zadaniach i Otwartych punktach', (state.config.requirements || []).length, '◇'],
     ['reminders', 'Przypomnienia', 'Domyślne terminy i okno ostrzegawcze', 2, '◷'],
@@ -4835,7 +4916,8 @@ function configPanelDefinition(key) {
     ['planner_online_hours', 'Standard godzin ON', '10.5'], ['planner_offline_hours', 'Standard godzin OFF', '8'], ['planner_base_hours', 'Norma dnia roboczego', '8'],
     ['planner_weekday_multiplier', 'Mnożnik nadgodzin w dzień roboczy', '1.5'], ['planner_saturday_multiplier', 'Mnożnik sobotni', '1.5'], ['planner_sunday_holiday_multiplier', 'Mnożnik niedziela / święto', '2'], ['planner_time_off_debit', 'Odjęcie za wolne z nadgodzin', '8']
   ];
-  const plannerConfig = `<section class="config-panel-body planner-config-grid"><section class="config-subsection"><h3>Globalne normy czasu pracy</h3><p class="sub">Jedna konfiguracja obowiązuje we wszystkich projektach.</p><div class="planner-setting-grid">${plannerSettingFields.map(([key, label, fallback]) => `<label class="field"><span>${label}</span><input class="planner-setting" data-key="${key}" type="number" min="0" step="0.25" value="${escapeHtml(state.config.settings[key] || fallback)}"></label>`).join('')}</div></section><section class="config-subsection"><h3>Święta systemowe</h3><p class="sub">Ta lista jest wspólna dla wszystkich projektów.</p><div class="holiday-list-config">${(state.config.planner_holidays || []).map(item => `<div class="settings-row"><span><b>${displayDate(item.holiday_date)}</b> · ${escapeHtml(item.name)}</span><button class="mini edit-planner-holiday" data-id="${item.id}">Edytuj</button><button class="mini delete-planner-holiday" data-id="${item.id}">Usuń</button></div>`).join('') || '<div class="empty compact-empty">Brak zdefiniowanych świąt.</div>'}</div><label class="field"><span>Szybkie dodawanie — DD.MM.RRRR Nazwa święta</span><textarea id="planner-holidays-bulk" rows="7" placeholder="25.12.2026 Boże Narodzenie\n26.12.2026 Drugi dzień świąt"></textarea></label><button class="secondary" id="planner-holidays-bulk-save">Dodaj listę świąt</button></section></section>`;
+  const plannerVehiclesConfig = `<section class="config-subsection"><header><span><h3>Auta transportowe</h3><small class="sub">Kod T oznacza transport bez wskazanego auta. Zdefiniowane auta są pokazywane jako T1, T2 itd.</small></span><button type="button" class="secondary" id="new-planner-vehicle">+ Dodaj auto</button></header><div class="planner-vehicle-list">${(state.config.planner_vehicles || []).map(vehicle => `<div class="settings-row"><span><b>${escapeHtml(vehicle.code)}</b><small class="sub">${escapeHtml(vehicle.registration_number)}</small></span><button type="button" class="mini edit-planner-vehicle" data-id="${vehicle.id}">Edytuj</button><button type="button" class="mini danger-outline delete-planner-vehicle" data-id="${vehicle.id}">Usuń</button></div>`).join('') || '<div class="empty compact-empty">Brak zdefiniowanych aut. Transport będzie oznaczany jako T.</div>'}</div></section>`;
+  const plannerConfig = `<section class="config-panel-body planner-config-grid">${plannerVehiclesConfig}<section class="config-subsection"><h3>Globalne normy czasu pracy</h3><p class="sub">Jedna konfiguracja obowiązuje we wszystkich projektach.</p><div class="planner-setting-grid">${plannerSettingFields.map(([key, label, fallback]) => `<label class="field"><span>${label}</span><input class="planner-setting" data-key="${key}" type="number" min="0" step="0.25" value="${escapeHtml(state.config.settings[key] || fallback)}"></label>`).join('')}</div></section><section class="config-subsection"><h3>Święta systemowe</h3><p class="sub">Ta lista jest wspólna dla wszystkich projektów.</p><div class="holiday-list-config">${(state.config.planner_holidays || []).map(item => `<div class="settings-row"><span><b>${displayDate(item.holiday_date)}</b> · ${escapeHtml(item.name)}</span><button class="mini edit-planner-holiday" data-id="${item.id}">Edytuj</button><button class="mini delete-planner-holiday" data-id="${item.id}">Usuń</button></div>`).join('') || '<div class="empty compact-empty">Brak zdefiniowanych świąt.</div>'}</div><label class="field"><span>Szybkie dodawanie — DD.MM.RRRR Nazwa święta</span><textarea id="planner-holidays-bulk" rows="7" placeholder="25.12.2026 Boże Narodzenie\n26.12.2026 Drugi dzień świąt"></textarea></label><button class="secondary" id="planner-holidays-bulk-save">Dodaj listę świąt</button></section></section>`;
   const definitions = {
     projects: ['Projekty systemu', `<section class="config-panel-body"><p class="sub">Konta są globalne, a role i dostęp są niezależne dla każdego projektu.</p>${state.projects.map(item => `<div class="settings-row"><span><b>${escapeHtml(item.code)}</b><small class="sub">${escapeHtml(item.description || '')}</small></span><button class="mini edit-project" data-id="${item.id}">Edytuj</button><button class="mini danger-outline delete-project" data-id="${item.id}" ${state.projects.length <= 1 ? 'disabled title="Nie można usunąć ostatniego projektu"' : ''}>Usuń</button></div>`).join('')}<button class="secondary" id="new-project">+ Dodaj projekt</button></section>`],
     security: ['Dziennik bezpieczeństwa', `<section class="config-panel-body"><p class="sub">Ostatnie zdarzenia uwierzytelniania i zmian dostępu. Rejestr jest przechowywany przez 180 dni.</p>${(state.securityEvents || []).map(item => `<div class="settings-row security-event ${escapeHtml(item.outcome)}"><span><b>${escapeHtml(item.event_type)}</b><small class="sub">${escapeHtml(item.username || 'nieznane konto')} · ${escapeHtml(item.ip_address || 'brak adresu')} · ${displayDateTime(item.created_at)}</small></span><em>${escapeHtml(item.outcome)}</em></div>`).join('') || '<div class="empty compact-empty">Brak zarejestrowanych zdarzeń.</div>'}</section>`],
@@ -4977,7 +5059,11 @@ function bindSettings() {
   $$('.edit-user').forEach(button => button.addEventListener('click', () => openRecord('users', state.users.find(item => item.id === Number(button.dataset.id)))));
   $$('.reset-user-password').forEach(button => button.addEventListener('click', () => resetUserPassword(Number(button.dataset.id), button.dataset.name)));
   $$('.edit-user-areas').forEach(button => button.addEventListener('click', () => editUserAreas(Number(button.dataset.id))));
-  $$('.toggle-user-planner').forEach(button => button.addEventListener('click', async () => { try { await api(`/api/users/${button.dataset.id}/planner`, { method: 'PUT', body: JSON.stringify({ planner_enabled: button.dataset.enabled === '1' ? 0 : 1 }) }); toast('Ustawienie Plannera zostało zapisane'); await loadData(); } catch (error) { toast(error.message, true); } }));
+  $$('.toggle-user-planner').forEach(button => button.addEventListener('click', async () => {
+    const disabling = button.dataset.enabled === '1';
+    if (disabling && !await uiConfirm('Wyłącz osobę z Plannera', 'Plan tej osoby, korekty czasu i przypisane obszary zostaną usunięte z bieżącego projektu.', 'Wyłącz i usuń przypisania', true)) return;
+    try { const saved = await api(`/api/users/${button.dataset.id}/planner`, { method: 'PUT', body: JSON.stringify({ planner_enabled: disabling ? 0 : 1 }) }); toast(`Ustawienie Plannera zostało zapisane${saved.removed_assignments ? ` · usunięto ${saved.removed_assignments} przypisań` : ''}`); await loadData(); } catch (error) { toast(error.message, true); }
+  }));
   $$('.toggle-user-assignable').forEach(button => button.addEventListener('click', async () => { try { await api(`/api/users/${button.dataset.id}`, { method: 'PATCH', body: JSON.stringify({ assignable: button.dataset.enabled === '1' ? 0 : 1 }) }); toast('Widoczność użytkownika na listach wyboru została zapisana'); await loadData(); } catch (error) { toast(error.message, true); } }));
   $('#new-controller')?.addEventListener('click', () => openRecord('controllers'));
   $('#new-user')?.addEventListener('click', () => openRecord('users'));
@@ -4990,6 +5076,12 @@ function bindSettings() {
   $('#planner-holidays-bulk-save')?.addEventListener('click', savePlannerHolidaysBulk);
   $$('.edit-planner-holiday').forEach(button => button.addEventListener('click', () => editPlannerHoliday(Number(button.dataset.id))));
   $$('.delete-planner-holiday').forEach(button => button.addEventListener('click', async () => { if (!await uiConfirm('Usuń święto', 'Zmieni to kalkulację nadgodzin dla tego dnia.', 'Usuń', true)) return; try { await api(`/api/planner/holidays/${button.dataset.id}`, { method: 'DELETE' }); await loadData(true); toast('Święto usunięto'); } catch (error) { toast(error.message, true); } }));
+  $('#new-planner-vehicle')?.addEventListener('click', () => editPlannerVehicle());
+  $$('.edit-planner-vehicle').forEach(button => button.addEventListener('click', () => editPlannerVehicle(Number(button.dataset.id))));
+  $$('.delete-planner-vehicle').forEach(button => button.addEventListener('click', async () => {
+    if (!await uiConfirm('Usuń auto z Plannera', 'Istniejące transporty przypisane do tego auta zostaną oznaczone ogólnym kodem T.', 'Usuń auto', true)) return;
+    try { await api(`/api/planner/vehicles/${button.dataset.id}`, { method: 'DELETE' }); await loadData(true); toast('Auto zostało usunięte'); } catch (error) { toast(error.message, true); }
+  }));
   $('#new-announcement-label')?.addEventListener('click', () => editAnnouncementLabel());
   $$('.edit-announcement-label').forEach(button => button.addEventListener('click', () => editAnnouncementLabel(Number(button.dataset.id))));
   $$('.delete-announcement-label').forEach(button => button.addEventListener('click', async () => { if (!await uiConfirm('Usuń etykietę', 'Etykieta zostanie odłączona od wiadomości.', 'Usuń', true)) return; try { await api(`/api/announcement-labels/${button.dataset.id}`, { method: 'DELETE' }); await loadData(true); } catch (error) { toast(error.message, true); } }));
@@ -5056,6 +5148,18 @@ async function editPlannerHoliday(id) {
   ], submitLabel: 'Zapisz święto' });
   if (!result) return;
   try { await api(`/api/planner/holidays/${id}`, { method: 'PATCH', body: JSON.stringify(result) }); await loadData(true); toast('Święto zostało zmienione'); }
+  catch (error) { toast(error.message, true); }
+}
+
+async function editPlannerVehicle(id = null) {
+  const existing = (state.config.planner_vehicles || []).find(item => Number(item.id) === Number(id));
+  const suggested = `T${Math.max(0, ...(state.config.planner_vehicles || []).map(item => Number(String(item.code).slice(1)) || 0)) + 1}`;
+  const result = await uiForm({ title: existing ? `Edytuj auto ${existing.code}` : 'Dodaj auto transportowe', description: 'Kod T bez numeru jest zarezerwowany dla transportu bez wskazanego auta.', submitLabel: existing ? 'Zapisz auto' : 'Dodaj auto', fields: [
+    { name: 'code', label: 'Kod auta', value: existing?.code || suggested, required: true },
+    { name: 'registration_number', label: 'Numer rejestracyjny', value: existing?.registration_number || '', required: true }
+  ] });
+  if (!result) return;
+  try { await api(`/api/planner/vehicles${existing ? `/${existing.id}` : ''}`, { method: existing ? 'PATCH' : 'POST', body: JSON.stringify(result) }); await loadData(true); toast('Auto transportowe zostało zapisane'); }
   catch (error) { toast(error.message, true); }
 }
 

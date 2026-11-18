@@ -413,6 +413,13 @@ async function handleProjectApi(request, response, url, user) {
     if (method === 'PATCH') return json(response, 200, repository.savePlannerHoliday(holidayId, await readJson(request), user));
     if (method === 'DELETE') { repository.deletePlannerHoliday(holidayId); response.writeHead(204); return response.end(); }
   }
+  if (method === 'POST' && path === '/api/planner/vehicles') { requireRole(user, 'moderator'); return json(response, 201, repository.savePlannerVehicle(null, await readJson(request))); }
+  const vehicleId = numericId(path, '/api/planner/vehicles');
+  if (vehicleId !== null) {
+    requireRole(user, 'moderator');
+    if (method === 'PATCH') return json(response, 200, repository.savePlannerVehicle(vehicleId, await readJson(request)));
+    if (method === 'DELETE') { repository.deletePlannerVehicle(vehicleId); response.writeHead(204); return response.end(); }
+  }
   if (method === 'POST' && path === '/api/planner/assign-work') { requireRole(user, 'moderator'); return json(response, 200, repository.assignPlannerWork(await readJson(request), user)); }
   if (method === 'GET' && path === '/api/announcements') return json(response, 200, repository.announcements(user));
   if (method === 'POST' && path === '/api/announcements') { requireRole(user, 'moderator'); return json(response, 201, repository.saveAnnouncement(null, await readJson(request), user)); }

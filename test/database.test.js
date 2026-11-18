@@ -457,12 +457,14 @@ test('planner transport migration removes the legacy duration cap and area metad
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     ) STRICT;
-    INSERT INTO planner_entries SELECT * FROM planner_entries_current;
+    INSERT INTO planner_entries(id,project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,note,created_by,created_at,updated_at)
+      SELECT id,project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,note,created_by,created_at,updated_at FROM planner_entries_current;
     DROP TABLE planner_entries_current;
     CREATE INDEX idx_planner_project_date ON planner_entries(project_id,plan_date,user_id);
     CREATE INDEX idx_planner_user_date_project ON planner_entries(user_id,plan_date,project_id);
   `);
   legacy.prepare("DELETE FROM schema_migrations WHERE id='055-planner-transport-minute-precision'").run();
+  legacy.prepare("DELETE FROM schema_migrations WHERE id='056-planner-manpower-scope'").run();
   legacy.close();
 
   try {
@@ -490,6 +492,73 @@ test('planner transport migration removes the legacy duration cap and area metad
     }
   } finally {
     repository?.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
+test('Planner supports optional manpower, configured vehicles and removes orphaned assignments', () => {
+  const temporary = temporaryDatabase();
+  const repository = openDatabase(temporary.path);
+  try {
+    const account = repository.authenticate('admin'); const admin = repository.me(account.id);
+    const worker = repository.saveUser(null, { username: 'planner-scope-worker', display_name: 'Planner Scope Worker', password: 'test-password', project_role: 'user', planner_enabled: 1, assignable: 1 });
+    const roots = repository.controllerGroups().filter(item => !item.parent_id);
+    const first = roots[0] || repository.saveControllerGroup(null, { name: 'Planner scope A' });
+    const second = roots.find(item => item.id !== first.id) || repository.saveControllerGroup(null, { name: 'Planner scope B' });
+    const date = '2032-06-14';
+
+    assert.throws(() => repository.savePlannerVehicle(null, { code: 'T', registration_number: 'TEST 000' }), /zarezerwowany/);
+    const vehicle = repository.savePlannerVehicle(null, { code: 't1', registration_number: 'wz 12345' });
+    assert.equal(vehicle.code, 'T1'); assert.equal(vehicle.registration_number, 'WZ 12345');
+
+    repository.savePlannerDay({ user_id: worker.id, plan_date: date, entries: [{ activity_type: 'work', allow_without_area: 1, count_in_manpower: 0, work_mode: 'offline', shift: 'Dzień' }] }, admin);
+    let plan = repository.planner(date, date, admin);
+    assert.equal(plan.entries.find(item => item.user_id === worker.id).count_in_manpower, 0);
+    assert.equal(plan.summary.find(item => item.plan_date === date), undefined);
+
+    repository.savePlannerDay({ user_id: worker.id, plan_date: date, entries: [
+      { activity_type: 'work', controller_group_id: first.id, work_mode: 'online', shift: 'Dzień' },
+      { activity_type: 'work', controller_group_id: second.id, work_mode: 'online', shift: 'Dzień' },
+      { activity_type: 'transport', duration_hours: 7 + 17 / 60, vehicle_id: vehicle.id }
+    ] }, admin);
+    plan = repository.planner(date, date, admin);
+    assert.equal(plan.entries.filter(item => item.user_id === worker.id && item.activity_type === 'work').length, 2);
+    assert.equal(plan.entries.find(item => item.activity_type === 'transport' && item.user_id === worker.id).transport_code, 'T1');
+    assert.equal(plan.summary.find(item => item.plan_date === date).headcount, 1);
+
+    repository.saveUserAreas(worker.id, { area_ids: [first.id] });
+    const disabled = repository.setPlannerEnabled(worker.id, { planner_enabled: 0 });
+    assert.equal(disabled.removed_assignments, 3);
+    assert.equal(repository.projectBackup().tables.planner_entries.some(item => item.user_id === worker.id), false);
+    assert.deepEqual(repository.users().find(item => item.id === worker.id).area_ids, []);
+  } finally {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
+test('bulk status creation accepts rows matching configured base columns', () => {
+  const temporary = temporaryDatabase();
+  const repository = openDatabase(temporary.path);
+  try {
+    const account = repository.authenticate('admin'); const admin = repository.me(account.id);
+    const controller = repository.controllers()[0];
+    const group = repository.saveStatusGroup(null, { name: 'Szybka tabela testowa' });
+    const typeColumn = repository.saveStatusColumn(group.id, null, null, { name: 'Typ', column_role: 'basic', field_type: 'text' });
+    const nameColumn = repository.saveStatusColumn(group.id, null, null, { name: 'Nazwa', column_role: 'basic', field_type: 'text' });
+    const result = repository.bulkCreateStatus({
+      hierarchy_target: `controller:${controller.code}`, status_group_id: group.id, status: 'Never checked',
+      items: [
+        { function_detail: 'Napęd · M1', matrix_values: { [typeColumn.id]: 'Napęd', [nameColumn.id]: 'M1' } },
+        { function_detail: 'Czujnik · B2', matrix_values: { [typeColumn.id]: 'Czujnik', [nameColumn.id]: 'B2' } }
+      ]
+    }, admin);
+    assert.equal(result.created, 2);
+    assert.deepEqual(result.items.map(item => item.function_detail), ['Napęd · M1', 'Czujnik · B2']);
+    assert.equal(result.items[0].matrix_values[typeColumn.id], 'Napęd');
+    assert.equal(result.items[0].matrix_values[nameColumn.id], 'M1');
+  } finally {
+    repository.close();
     rmSync(temporary.directory, { recursive: true, force: true });
   }
 });
@@ -1631,14 +1700,14 @@ test('V14 shares users across projects, exposes cross-project plans and supports
     });
 
     const currentPlanner = repository.planner(planDate, planDate, admin);
-    assert.ok(currentPlanner.cross_project_entries.some(item => item.project_id === project.id && item.user_id === worker.id));
+    assert.equal(currentPlanner.cross_project_entries.some(item => item.project_id === project.id && item.user_id === worker.id), false);
     assert.equal(repository.planner('2026-11-20', '2026-11-20', admin).absences.find(item => item.user_id === worker.id)?.note, 'Globalny urlop');
     assert.ok(repository.config().planner_holidays.some(item => item.holiday_date === '2026-11-21'));
     assert.equal(repository.config().settings.planner_online_hours, '9.5');
     const workerInCurrentProject = repository.me(worker.id, admin.current_project.id);
     const summary = repository.mySummary(workerInCurrentProject);
-    assert.ok(summary.projects_in_scope.some(item => item.id === project.id));
-    assert.ok(summary.assigned_tasks.some(item => item.project_id === project.id && item.id === completedTask.id));
+    assert.equal(summary.projects_in_scope.some(item => item.id === project.id), false);
+    assert.equal(summary.assigned_tasks.some(item => item.project_id === project.id && item.id === completedTask.id), false);
     assert.equal(repository.projectBackup().version, 1);
   } finally {
     repository.close();

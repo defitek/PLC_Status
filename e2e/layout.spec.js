@@ -155,14 +155,21 @@ test('zakładki Priorytetów są spójne, a samotna akcja mieści się w belce z
 });
 
 test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kontekstowym', async ({ page }) => {
-  await page.evaluate(async () => {
+  const transportCode = await page.evaluate(async () => {
     const users = await fetch('/api/users').then(response => response.json());
     const participant = users.find(user => user.system_role !== 'system_admin') || users[0];
     if (!participant) throw new Error('Brak użytkownika do testu Plannera');
     const response = await fetch(`/api/users/${participant.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project_active: 1, planner_enabled: 1 }) });
     if (!response.ok) throw new Error((await response.json()).error || 'Nie udało się włączyć uczestnika Plannera');
+    const code = `T${Date.now()}${Math.floor(Math.random() * 1000)}`;
+    const vehicleResponse = await fetch('/api/planner/vehicles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, registration_number: `UI ${Date.now()}` }) });
+    if (!vehicleResponse.ok) throw new Error((await vehicleResponse.json()).error || 'Nie udało się dodać auta Plannera');
+    return code;
   });
   await openView(page, 'planner');
+  const transportNote = `Transport testowy ${transportCode}`;
+  const workNote = `Praca testowa ${transportCode}`;
+  const genericNote = `Wsparcie poza kalkulacją ${transportCode}`;
   await expect(page.locator('#planner-bulk-toolbar')).toBeHidden();
   await page.locator('#planner-tools-toggle').click();
   await expect(page.locator('#planner-bulk-toolbar')).toBeVisible();
@@ -180,22 +187,27 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   await expect(page.locator('#action-title')).toHaveText(/Transport/);
   await expect(page.locator('#action-fields [name="controller_group_id"]')).toHaveCount(0);
   await expect(page.locator('#action-fields [name="shift"]')).toHaveCount(0);
+  const transportVehicleValue = await page.locator('#action-fields [name="vehicle_id"] option').evaluateAll((options, code) => options.find(option => option.textContent.trim().startsWith(`${code} ·`))?.value, transportCode);
+  await page.locator('#action-fields [name="vehicle_id"]').selectOption(transportVehicleValue);
   await page.locator('#action-fields [name="duration_hours"]').fill('7');
   await page.locator('#action-fields [name="duration_minutes"]').fill('17');
-  await page.locator('#action-fields [name="note"]').fill('Transport testowy');
+  await page.locator('#action-fields [name="note"]').fill(transportNote);
   await page.locator('#action-submit').click();
   await expect(page.locator('#action-dialog')).not.toBeVisible();
   const savedCell = page.locator(`.planner-cell[data-user-id="${userId}"][data-date="${date}"]`);
-  await expect(savedCell.locator('.plan-chip.transport-only:has(.plan-note[data-note="Transport testowy"])')).toContainText('7 h 17 min');
+  const transportChip = savedCell.locator(`.plan-chip.transport-only:has(.plan-note[data-note="${transportNote}"])`);
+  await expect(transportChip).toContainText(transportCode);
+  await expect(transportChip).toContainText('7 h 17 min');
   await expect(page.locator('#planner-bulk-approve')).toBeHidden();
 
   await savedCell.click();
   await page.keyboard.press('e');
-  const transportRow = page.locator('#planner-entry-list .planner-entry-row.transport-entry');
+  const transportRow = page.locator('#planner-entry-list .planner-entry-row.transport-entry').filter({ has: page.locator('[data-plan-vehicle] option:checked', { hasText: transportCode }) });
   await expect(transportRow.locator('[data-plan-area]')).toBeHidden();
   await expect(transportRow.locator('[data-plan-shift]')).toBeHidden();
   await expect(transportRow.locator('[data-plan-duration-hours]')).toHaveValue('7');
   await expect(transportRow.locator('[data-plan-duration-minutes]')).toHaveValue('17');
+  await expect(transportRow.locator('[data-plan-vehicle]')).toHaveValue(/\d+/);
   await page.locator('#planner-dialog-close').click();
 
   const freeCell = page.locator('.planner-cell[data-editable="1"]').nth(1);
@@ -221,10 +233,25 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   const workCell = page.locator('.planner-cell[data-editable="1"]').nth(3);
   await workCell.click();
   await page.keyboard.press('p');
-  await expect(page.locator('#action-title')).toContainText('Dodaj obszar pracy');
-  await page.locator('#action-fields [name="note"]').fill('Praca testowa');
+  await expect(page.locator('#action-title')).toContainText('Dodaj pracę');
+  const rootAreaValues = await page.locator('#action-fields [name="controller_group_ids"]').evaluateAll(inputs => inputs.map(input => ({ value: input.value, label: input.closest('label')?.textContent?.trim() || '' })).filter(item => !item.label.includes(' / ')).slice(0, 2).map(item => item.value));
+  expect(rootAreaValues).toHaveLength(2);
+  await page.locator('#action-fields [data-ui-multiselect="controller_group_ids"] summary').click();
+  for (const value of rootAreaValues) await page.locator(`#action-fields [name="controller_group_ids"][value="${value}"]`).check();
+  await page.locator('#action-fields [name="note"]').fill(workNote);
   await page.locator('#action-submit').click();
-  await expect(workCell.locator('.plan-chip[data-current-project="1"]:has(.plan-note[data-note="Praca testowa"])')).toBeVisible();
+  await expect(workCell.locator(`.plan-chip[data-current-project="1"]:has(.plan-note[data-note="${workNote}"])`)).toHaveCount(2);
+
+  const genericCell = page.locator('.planner-cell[data-editable="1"]:not(.planned):not(.absent)').first();
+  const genericUserId = await genericCell.getAttribute('data-user-id');
+  const genericDate = await genericCell.getAttribute('data-date');
+  await genericCell.click();
+  await page.keyboard.press('p');
+  await page.locator('#action-fields [name="count_in_manpower"]').uncheck();
+  await page.locator('#action-fields [name="note"]').fill(genericNote);
+  await page.locator('#action-submit').click();
+  const savedGenericCell = page.locator(`.planner-cell[data-user-id="${genericUserId}"][data-date="${genericDate}"]`);
+  await expect(savedGenericCell.locator(`.plan-chip.excluded-from-manpower:has(.plan-note[data-note="${genericNote}"])`)).toContainText('poza manpowerem');
 
   await savedCell.dispatchEvent('pointerdown', { button: 0 });
   await freeCell.dispatchEvent('pointerdown', { button: 0, ctrlKey: true });
@@ -481,6 +508,49 @@ test('tabele pozostają w obszarze strony', async ({ page }, testInfo) => {
     await expect(page.locator('body')).toHaveClass(/nav-open/);
     await expect(page.locator('#nav')).toBeVisible();
   }
+});
+
+test('szybkie dodawanie statusu obsługuje tekst ze średnikami i tabelę kolumn podstawowych', async ({ page }) => {
+  const configured = await page.evaluate(async () => {
+    const request = async (path, options = {}) => {
+      const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || `${response.status} ${path}`);
+      return body;
+    };
+    const suffix = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+    const group = await request('/api/status-groups', { method: 'POST', body: JSON.stringify({ name: `Szybkie dodawanie ${suffix}` }) });
+    const type = await request(`/api/status-groups/${group.id}/columns`, { method: 'POST', body: JSON.stringify({ name: 'Typ urządzenia', column_role: 'basic', field_type: 'text' }) });
+    const name = await request(`/api/status-groups/${group.id}/columns`, { method: 'POST', body: JSON.stringify({ name: 'Nazwa urządzenia', column_role: 'basic', field_type: 'text' }) });
+    return { groupId: group.id, typeId: type.id, nameId: name.id };
+  });
+  await page.reload();
+  await expect(page.locator('#content')).toBeVisible();
+  await openView(page, 'status');
+
+  await page.locator('#bulk-status-open').click();
+  await page.locator('#bulk-status-matrix-group').selectOption(String(configured.groupId));
+  await expect(page.locator('#bulk-status-text-hint')).toContainText('Typ urządzenia ; Nazwa urządzenia');
+  await page.locator('#bulk-status-names').fill('Napęd;M1\nCzujnik;B2');
+  await page.locator('#bulk-status-form .primary').click();
+  await expect(page.locator('#bulk-status-dialog')).not.toBeVisible();
+  let saved = await page.evaluate(groupId => fetch('/api/status?controller=all').then(response => response.json()).then(items => items.filter(item => item.status_group_id === groupId)), configured.groupId);
+  expect(saved.some(item => item.matrix_values[configured.typeId] === 'Napęd' && item.matrix_values[configured.nameId] === 'M1')).toBe(true);
+  expect(saved.some(item => item.matrix_values[configured.typeId] === 'Czujnik' && item.matrix_values[configured.nameId] === 'B2')).toBe(true);
+
+  await page.locator('#bulk-status-open').click();
+  await page.locator('#bulk-status-matrix-group').selectOption(String(configured.groupId));
+  await page.locator('#bulk-status-mode-switch [data-mode="table"]').click();
+  await expect(page.locator('#bulk-status-table-mode')).toBeVisible();
+  await expect(page.locator('#bulk-status-table-head')).toContainText('Typ urządzenia');
+  const firstRow = page.locator('#bulk-status-table-body tr').first();
+  await firstRow.locator(`[data-bulk-status-column="${configured.typeId}"]`).fill('Wyspa zaworowa');
+  await firstRow.locator(`[data-bulk-status-column="${configured.nameId}"]`).fill('YV1');
+  await page.locator('#bulk-status-form .primary').click();
+  await expect(page.locator('#bulk-status-dialog')).not.toBeVisible();
+  saved = await page.evaluate(groupId => fetch('/api/status?controller=all').then(response => response.json()).then(items => items.filter(item => item.status_group_id === groupId)), configured.groupId);
+  expect(saved.some(item => item.matrix_values[configured.typeId] === 'Wyspa zaworowa' && item.matrix_values[configured.nameId] === 'YV1')).toBe(true);
+  await expectViewportContained(page);
 });
 
 test('odprawa i zagnieżdżone szczegóły zachowują okno źródłowe', async ({ page }, testInfo) => {
