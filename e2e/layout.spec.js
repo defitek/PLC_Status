@@ -709,6 +709,18 @@ test('Status przełącza globalne i wewnętrzne grupowanie funkcyjne', async ({ 
   await page.locator('.status-matrix-table [data-status-sort-controller].active').first().click();
   const persistedWidth = await page.locator(`.status-matrix-table th[data-status-column-key="${columnKey}"]`).first().evaluate(header => header.getBoundingClientRect().width);
   expect(Math.abs(persistedWidth - resizedWidth)).toBeLessThanOrEqual(2);
+  const currentHandle = page.locator(`.status-matrix-table [data-status-column-resizer="${columnKey}"]`).first();
+  const shrinkX = await currentHandle.evaluate(handle => handle.getBoundingClientRect().left + 3);
+  await currentHandle.dispatchEvent('pointerdown', { button: 0, clientX: shrinkX, pointerId: 8, pointerType: 'mouse' });
+  await page.evaluate(x => document.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: x, pointerId: 8, pointerType: 'mouse' })), shrinkX - 90);
+  await page.evaluate(x => document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, clientX: x, pointerId: 8, pointerType: 'mouse' })), shrinkX - 90);
+  const shrunkenWidth = await page.locator(`.status-matrix-table th[data-status-column-key="${columnKey}"]`).first().evaluate(header => header.getBoundingClientRect().width);
+  expect(shrunkenWidth).toBeLessThan(persistedWidth - 25);
+  const controllerContent = await page.locator('.status-matrix-table td.matrix-controller-cell').first().evaluate(cell => {
+    const label = cell.querySelector('b'); const cellBox = cell.getBoundingClientRect(); const labelBox = label.getBoundingClientRect(); const style = getComputedStyle(label);
+    return { verticalAlign: getComputedStyle(cell).verticalAlign, labelFits: labelBox.width <= cellBox.width, overflow: style.overflow, textOverflow: style.textOverflow };
+  });
+  expect(controllerContent).toEqual({ verticalAlign: 'middle', labelFits: true, overflow: 'hidden', textOverflow: 'ellipsis' });
   const withinToggle = page.locator('.matrix-functional-group-row button').first();
   await withinToggle.click();
   await expect(withinToggle).toHaveAttribute('aria-expanded', 'false');
