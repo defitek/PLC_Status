@@ -6,6 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ENTITY_TABLES as TABLES } from './database/constants.js';
 import { hashPassword, validPassword, verifyPassword } from './database/security.js';
+import { nextProjectColor, normalizeProjectColor } from './database/project-colors.js';
 import {
   PRIORITY_VALUES,
   normalizeMeetingPriority,
@@ -1708,7 +1709,7 @@ function createRepository(db, defaultProjectId) {
     const groupMap = new Map(hierarchy.groups.map(group => [group.id, group]));
     const projectUsers = plannerProjectUsers();
     const canManageRequirements = ['system_admin', 'project_admin', 'moderator'].includes(currentUser?.role);
-    const currentProject = one('SELECT id,code,name FROM projects WHERE id=?', activeProjectId());
+    const currentProject = one('SELECT id,code,name,planner_color FROM projects WHERE id=?', activeProjectId());
     const vehicles = all('SELECT * FROM planner_vehicles WHERE project_id=? AND active=1 ORDER BY sort_order,code,id', activeProjectId());
     const vehicleMap = new Map(vehicles.map(vehicle => [Number(vehicle.id), vehicle]));
     const entries = all(`SELECT pe.*,u.display_name,creator.display_name created_by_name
@@ -1719,12 +1720,12 @@ function createRepository(db, defaultProjectId) {
       ORDER BY pe.plan_date,u.sort_order,pe.id`, activeProjectId(), range.from, range.to).map(entry => {
         const area = groupMap.get(Number(entry.controller_group_id));
         const vehicle = vehicleMap.get(Number(entry.vehicle_id));
-        return { ...entry, activity_type: entry.transport_mode === 'transport_only' ? 'transport' : 'work', transport_code: vehicle?.code || 'T', vehicle_registration: vehicle?.registration_number || '', project_code: currentProject?.code || '', project_name: currentProject?.name || '', is_current_project: true, area_name: area?.name || '', area_path: area?.path_label || '', area_depth: area?.depth || 0, root_area_id: area?.root_group_id || null };
+        return { ...entry, activity_type: entry.transport_mode === 'transport_only' ? 'transport' : 'work', transport_code: vehicle?.code || 'T', vehicle_registration: vehicle?.registration_number || '', project_code: currentProject?.code || '', project_name: currentProject?.name || '', project_color: currentProject?.planner_color || '#2563eb', is_current_project: true, area_name: area?.name || '', area_path: area?.path_label || '', area_depth: area?.depth || 0, root_area_id: area?.root_group_id || null };
       });
     const crossProjectVisibility = canManageRequirements
       ? { sql: 'AND EXISTS(SELECT 1 FROM project_memberships current_pm WHERE current_pm.project_id=? AND current_pm.user_id=pe.user_id AND current_pm.active=1 AND current_pm.planner_enabled=1)', params: [activeProjectId()] }
       : { sql: 'AND pe.user_id=?', params: [Number(currentUser?.id || 0)] };
-    const crossProjectEntries = all(`SELECT pe.*,u.display_name,creator.display_name created_by_name,p.code project_code,p.name project_name,
+    const crossProjectEntries = all(`SELECT pe.*,u.display_name,creator.display_name created_by_name,p.code project_code,p.name project_name,p.planner_color project_color,
       COALESCE(pv.code,'T') transport_code,COALESCE(pv.registration_number,'') vehicle_registration
       FROM planner_entries pe JOIN users u ON u.id=pe.user_id
       JOIN projects p ON p.id=pe.project_id AND p.active=1
@@ -1839,16 +1840,25 @@ function createRepository(db, defaultProjectId) {
     });
     let timeDetails = null;
     if (canManageRequirements) {
+      const plannerUserIds = projectUsers.map(user => Number(user.id)).filter(Boolean);
+      const plannerUserPlaceholders = plannerUserIds.map(() => '?').join(',');
       const historicalStarts = [
-        one('SELECT MIN(plan_date) value FROM planner_entries WHERE project_id=?', activeProjectId())?.value,
+        plannerUserIds.length ? one(`SELECT MIN(pe.plan_date) value FROM planner_entries pe
+          JOIN projects p ON p.id=pe.project_id AND p.active=1
+          JOIN project_memberships pm ON pm.project_id=pe.project_id AND pm.user_id=pe.user_id AND pm.active=1 AND pm.planner_enabled=1
+          WHERE pe.user_id IN (${plannerUserPlaceholders})`, ...plannerUserIds)?.value : null,
         one(`SELECT MIN(sa.absence_date) value FROM system_absences sa JOIN project_memberships pm ON pm.user_id=sa.user_id
           WHERE pm.project_id=? AND pm.active=1`, activeProjectId())?.value,
         one('SELECT MIN(plan_date) value FROM planner_time_adjustments WHERE project_id=?', activeProjectId())?.value
       ].filter(Boolean).sort();
       const calculationFrom = historicalStarts[0] && historicalStarts[0] < range.from ? historicalStarts[0] : range.from;
       const calculationRange = safeDateRange(calculationFrom, range.to, 7305);
-      const calculationEntries = calculationFrom === range.from ? entries : all(`SELECT * FROM planner_entries
-        WHERE project_id=? AND plan_date BETWEEN ? AND ? ORDER BY plan_date,user_id,id`, activeProjectId(), calculationFrom, range.to);
+      const calculationEntries = plannerUserIds.length ? all(`SELECT pe.*,p.code project_code,p.name project_name,p.planner_color project_color
+        FROM planner_entries pe
+        JOIN projects p ON p.id=pe.project_id AND p.active=1
+        JOIN project_memberships pm ON pm.project_id=pe.project_id AND pm.user_id=pe.user_id AND pm.active=1 AND pm.planner_enabled=1
+        WHERE pe.user_id IN (${plannerUserPlaceholders}) AND pe.plan_date BETWEEN ? AND ?
+        ORDER BY pe.plan_date,pe.user_id,p.sort_order,pe.id`, ...plannerUserIds, calculationFrom, range.to) : [];
       const calculationAbsences = calculationFrom === range.from ? absences : all(`SELECT sa.* FROM system_absences sa
         JOIN project_memberships pm ON pm.user_id=sa.user_id AND pm.project_id=? AND pm.active=1
         WHERE sa.absence_date BETWEEN ? AND ? ORDER BY sa.absence_date,sa.user_id`, activeProjectId(), calculationFrom, range.to);
@@ -1872,7 +1882,7 @@ function createRepository(db, defaultProjectId) {
       WHERE request.target_project_id=? AND request.status='pending' ORDER BY request.plan_date,u.sort_order,request.id`, activeProjectId()) : [];
     const outgoingCrossProjectRequests = canManageRequirements ? all(`${requestSelect}
       WHERE request.source_project_id=? AND request.status='pending' ORDER BY request.plan_date,u.sort_order,request.id`, activeProjectId()) : [];
-    const targetProjects = canManageRequirements ? all('SELECT id,code,name FROM projects WHERE active=1 AND id!=? ORDER BY sort_order,name,id', activeProjectId()) : [];
+    const targetProjects = canManageRequirements ? all('SELECT id,code,name,planner_color FROM projects WHERE active=1 AND id!=? ORDER BY sort_order,name,id', activeProjectId()) : [];
     return { ...range, users, entries, cross_project_entries: crossProjectEntries, incoming_cross_project_requests: incomingCrossProjectRequests, outgoing_cross_project_requests: outgoingCrossProjectRequests, target_projects: targetProjects, absences, holidays, annotations, overlap_reviews: overlapReviews, time_adjustments: canManageRequirements ? timeAdjustments : [], work, summary, area_summary, area_day_summary, shift_summary, mode_summary, areas: hierarchy.groups, vehicles, requirements, time_details: timeDetails, can_manage_requirements: canManageRequirements, can_manage_time: canManageRequirements };
   }
 
@@ -4166,10 +4176,18 @@ function createRepository(db, defaultProjectId) {
 
     projects() { return all('SELECT * FROM projects ORDER BY sort_order,name'); },
     saveProject(id, input) {
-      const values = { code: clean(input.code), name: clean(input.name), description: clean(input.description), active: Number(input.active ?? 1) ? 1 : 0 };
+      const existing = id ? one('SELECT * FROM projects WHERE id=?', asId(id)) : null;
+      if (id && !existing) throw appError('Nie znaleziono projektu', 404);
+      const automaticColor = nextProjectColor(all('SELECT planner_color FROM projects WHERE id!=? ORDER BY sort_order,id', asId(id) || 0).map(project => project.planner_color), asId(id) || one('SELECT COALESCE(MAX(id),0)+1 value FROM projects').value);
+      const values = {
+        code: clean(input.code), name: clean(input.name), description: clean(input.description),
+        planner_color: normalizeProjectColor(input.planner_color, existing?.planner_color || automaticColor),
+        active: Number(input.active ?? 1) ? 1 : 0
+      };
       if (!values.code || !values.name) throw appError('Kod i nazwa projektu są wymagane');
+      if (one('SELECT 1 FROM projects WHERE planner_color=? AND id!=?', values.planner_color, asId(id) || 0)) throw appError('Ten kolor jest już przypisany do innego projektu. Wybierz inny kolor.');
       if (id) {
-        db.prepare('UPDATE projects SET code=?,name=?,description=?,active=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(values.code, values.name, values.description, values.active, id);
+        db.prepare('UPDATE projects SET code=?,name=?,description=?,planner_color=?,active=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(values.code, values.name, values.description, values.planner_color, values.active, id);
         return one('SELECT * FROM projects WHERE id=?', id);
       }
       const nextOrder = one('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM projects').value;
@@ -5632,7 +5650,7 @@ function createRepository(db, defaultProjectId) {
       const upcomingLimit = new Date(); upcomingLimit.setUTCDate(upcomingLimit.getUTCDate() + 13);
       const upcomingDate = upcomingLimit.toISOString().slice(0, 10);
       const selectedProjectId = activeProjectId();
-      const accessibleProjects = all(`SELECT p.id,p.code,p.name,p.sort_order,pm.role,pm.summary_area_source
+      const accessibleProjects = all(`SELECT p.id,p.code,p.name,p.planner_color,p.sort_order,pm.role,pm.summary_area_source
         FROM projects p JOIN project_memberships pm ON pm.project_id=p.id AND pm.user_id=?
         WHERE p.active=1 AND pm.active=1 ORDER BY p.sort_order,p.name`, currentUser.id);
       const plannedProjectIds = new Set(all(`SELECT DISTINCT pe.project_id FROM planner_entries pe JOIN projects p ON p.id=pe.project_id AND p.active=1
@@ -5641,7 +5659,7 @@ function createRepository(db, defaultProjectId) {
       plannedProjectIds.add(selectedProjectId);
       const projectsInScope = accessibleProjects.filter(project => plannedProjectIds.has(Number(project.id)));
       const aggregate = { assigned_tasks: [], created_tasks: [], related_tasks: [], general_tasks: [], points: [], notes: [], statuses: [], status_updates: [], overdue_tasks: [], overdue_points: [], assigned_areas: [], planner: [], area_upcoming: { tasks: [], points: [], statuses: [] } };
-      const annotate = (row, project) => ({ ...row, project_id: project.id, project_code: project.code, project_name: project.name });
+      const annotate = (row, project) => ({ ...row, project_id: project.id, project_code: project.code, project_name: project.name, project_color: project.planner_color || '#2563eb' });
 
       for (const project of projectsInScope) projectStorage.run(project.id, () => {
         const projectUser = { ...currentUser, role: currentUser.system_role === 'system_admin' ? 'system_admin' : project.role, current_project: project };
@@ -5692,7 +5710,7 @@ function createRepository(db, defaultProjectId) {
       const mine = {
         ...aggregate,
         area_source: 'planner',
-        projects_in_scope: projectsInScope.map(project => ({ id: project.id, code: project.code, name: project.name, selected: project.id === selectedProjectId }))
+        projects_in_scope: projectsInScope.map(project => ({ id: project.id, code: project.code, name: project.name, planner_color: project.planner_color, selected: project.id === selectedProjectId }))
       };
       mine.metrics = {
         tasks_total: mine.related_tasks.length,

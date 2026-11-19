@@ -197,7 +197,9 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   const savedCell = page.locator(`.planner-cell[data-user-id="${userId}"][data-date="${date}"]`);
   const transportChip = savedCell.locator(`.plan-chip.transport-only:has(.plan-note[data-note="${transportNote}"])`);
   await expect(transportChip).toContainText(transportCode);
-  await expect(transportChip).toContainText('7 h 17 min');
+  await expect(transportChip).not.toContainText('Transport');
+  await expect(transportChip).not.toContainText('7 h 17 min');
+  await expect(transportChip).toHaveAttribute('title', /7 h 17 min/);
   await expect(page.locator('#planner-bulk-approve')).toBeHidden();
 
   await savedCell.click();
@@ -234,13 +236,27 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   await workCell.click();
   await page.keyboard.press('p');
   await expect(page.locator('#action-title')).toContainText('Dodaj pracę');
-  const rootAreaValues = await page.locator('#action-fields [name="controller_group_ids"]').evaluateAll(inputs => inputs.map(input => ({ value: input.value, label: input.closest('label')?.textContent?.trim() || '' })).filter(item => !item.label.includes(' / ')).slice(0, 2).map(item => item.value));
-  expect(rootAreaValues).toHaveLength(2);
+  const rootAreas = await page.locator('#action-fields [name="controller_group_ids"]').evaluateAll(inputs => inputs.map(input => ({ value: input.value, label: input.closest('label')?.textContent?.trim() || '' })).filter(item => !item.label.includes(' / ')).slice(0, 2));
+  expect(rootAreas).toHaveLength(2);
   await page.locator('#action-fields [data-ui-multiselect="controller_group_ids"] summary').click();
-  for (const value of rootAreaValues) await page.locator(`#action-fields [name="controller_group_ids"][value="${value}"]`).check();
+  for (const area of rootAreas) await page.locator(`#action-fields [name="controller_group_ids"][value="${area.value}"]`).check();
   await page.locator('#action-fields [name="note"]').fill(workNote);
   await page.locator('#action-submit').click();
-  await expect(workCell.locator(`.plan-chip[data-current-project="1"]:has(.plan-note[data-note="${workNote}"])`)).toHaveCount(2);
+  const mergedWorkChip = workCell.locator(`.plan-chip[data-current-project="1"]:has(.plan-note[data-note="${workNote}"])`);
+  await expect(mergedWorkChip).toHaveCount(1);
+  for (const area of rootAreas) await expect(mergedWorkChip).toContainText(area.label);
+  await expect(mergedWorkChip).toHaveAttribute('data-entry-ids', /\d+,\d+/);
+  const markerPositions = await mergedWorkChip.evaluate(chip => ({ left: chip.querySelector('.mode-label').getBoundingClientRect().left, right: chip.querySelector('.shift-label').getBoundingClientRect().left }));
+  expect(markerPositions.left).toBeLessThan(markerPositions.right);
+  await expect(mergedWorkChip).toHaveAttribute('style', /--project-color:#[0-9a-f]{6}/);
+  await mergedWorkChip.dispatchEvent('pointerdown', { button: 0, buttons: 1 });
+  await page.locator('body').dispatchEvent('pointerup', { button: 0 });
+  await expect(page.locator('#planner-entry-selection-count')).toHaveText('2');
+  await page.locator('#planner-selection-clear').click();
+  const tileHeights = await Promise.all([transportChip, freeCell.locator('.absence-chip.time_off'), vacationCell.locator('.absence-chip.vacation'), mergedWorkChip].map(locator => locator.evaluate(element => Math.round(element.getBoundingClientRect().height))));
+  expect(new Set(tileHeights).size).toBe(1);
+  const fixedColors = await Promise.all([transportChip, freeCell.locator('.absence-chip.time_off'), vacationCell.locator('.absence-chip.vacation')].map(locator => locator.evaluate(element => getComputedStyle(element).backgroundColor)));
+  expect(new Set(fixedColors).size).toBe(3);
 
   await workCell.click();
   await page.keyboard.press('e');
@@ -249,7 +265,7 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   await expect(groupedWorkRow.locator('[data-plan-area]:checked')).toHaveCount(2);
   await groupedWorkRow.locator('[data-plan-manpower]').uncheck();
   await page.locator('#planner-form .dialog-actions .primary').click();
-  await expect(workCell.locator(`.plan-chip.excluded-from-manpower:has(.plan-note[data-note="${workNote}"])`)).toHaveCount(2);
+  await expect(workCell.locator(`.plan-chip.excluded-from-manpower:has(.plan-note[data-note="${workNote}"])`)).toHaveCount(1);
 
   const genericCell = page.locator('.planner-cell[data-editable="1"]:not(.planned):not(.absent)').first();
   const genericUserId = await genericCell.getAttribute('data-user-id');
@@ -644,7 +660,7 @@ test('Status przełącza globalne i wewnętrzne grupowanie funkcyjne', async ({ 
   await expectViewportContained(page);
 });
 
-test('Planner sortuje kafelki i zwija nadmiar powyżej trzech', async ({ page }) => {
+test('Planner sortuje kafelki i scala obszary jednego projektu', async ({ page }) => {
   await page.evaluate(async () => {
     const users = await fetch('/api/users').then(response => response.json());
     const participant = users.find(user => user.project_active) || users[0];
@@ -682,11 +698,10 @@ test('Planner sortuje kafelki i zwija nadmiar powyżej trzech', async ({ page })
   await expect(savedCell.locator('.plan-chip').nth(0)).toHaveClass(/transport-only/);
   await expect(savedCell.locator('.plan-chip').nth(1)).toContainText('OFF');
   await expect(savedCell.locator('.plan-chip').nth(1)).not.toContainText('Bez obszaru');
-  await expect(savedCell.locator('.planner-cell-expand')).toHaveText('+1');
-  await savedCell.locator('.planner-cell-expand').click();
-  await expect(savedCell.locator('.plan-chip:visible')).toHaveCount(4);
   await expect(savedCell.locator('.plan-chip').nth(2)).toContainText(areas[0].name);
-  await expect(savedCell.locator('.plan-chip').nth(3)).toContainText(areas[1].name);
+  await expect(savedCell.locator('.plan-chip').nth(2)).toContainText(areas[1].name);
+  await expect(savedCell.locator('.plan-chip').nth(2)).toHaveAttribute('data-entry-ids', /\d+,\d+/);
+  await expect(savedCell.locator('.planner-cell-expand')).toHaveCount(0);
   await expectViewportContained(page);
   await page.evaluate(async ({ userId, date }) => {
     const response = await fetch('/api/planner/day', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: userId, plan_date: date, entries: [] }) });
@@ -709,7 +724,7 @@ test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzypr
       username: `planner.cross.${suffix}`, display_name: `Pracownik międzyprojektowy ${suffix}`, password: 'test-password-123',
       project_role: 'user', project_active: 1, planner_enabled: 1, assignable: 1, active: 1
     }) });
-    return { sourceProjectId: me.current_project.id, targetProjectId: target.id, workerId: worker.id, workerName: worker.display_name };
+    return { sourceProjectId: me.current_project.id, targetProjectId: target.id, targetProjectCode: target.code, targetProjectColor: target.planner_color, workerId: worker.id, workerName: worker.display_name };
   }, `${Date.now()}-${Math.floor(Math.random() * 10000)}`);
   await openView(page, 'planner');
   await page.locator('#planner-days').selectOption('31');
@@ -772,7 +787,28 @@ test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzypr
   const approvedChip = page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"] .plan-chip.night-shift`);
   await expect(approvedChip).toContainText('OFF');
   await expect(approvedChip).toContainText('N');
+  await expect(approvedChip).toHaveAttribute('style', new RegExp(`--project-color:${setup.targetProjectColor}`, 'i'));
   await expect(incoming).toHaveCount(0);
+
+  await page.evaluate(async sourceProjectId => {
+    const response = await fetch('/api/select-project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project_id: sourceProjectId }) });
+    if (!response.ok) throw new Error((await response.json()).error || 'Nie udało się wrócić do projektu źródłowego');
+  }, setup.sourceProjectId);
+  await page.reload();
+  await openView(page, 'planner');
+  const externalNightChip = page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"] .plan-chip.other-project.night-shift`);
+  await expect(externalNightChip).toContainText('OFF');
+  await expect(externalNightChip).toContainText('N');
+  await expect(externalNightChip).not.toContainText(setup.targetProjectCode);
+  await expect(externalNightChip).toHaveAttribute('style', new RegExp(`--project-color:${setup.targetProjectColor}`, 'i'));
+  expect(await externalNightChip.evaluate(element => getComputedStyle(element).backgroundImage)).toContain('repeating-linear-gradient');
+
+  await page.evaluate(async targetProjectId => {
+    const response = await fetch('/api/select-project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project_id: targetProjectId }) });
+    if (!response.ok) throw new Error((await response.json()).error || 'Nie udało się przełączyć projektu do sprzątania');
+  }, setup.targetProjectId);
+  await page.reload();
+  await openView(page, 'planner');
   await page.evaluate(async ({ workerId, planDate }) => {
     const planner = await fetch(`/api/planner?from=${planDate}&to=${planDate}`).then(response => response.json());
     const entry = planner.entries.find(item => Number(item.user_id) === Number(workerId) && item.plan_date === planDate);

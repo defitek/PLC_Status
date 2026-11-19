@@ -393,9 +393,12 @@ test('migration ledger applies every migration only once', () => {
   repository.close();
   const first = new DatabaseSync(temporary.path);
   const applied = first.prepare('SELECT id,applied_at FROM schema_migrations ORDER BY id').all();
+  const projectColors = first.prepare('SELECT planner_color FROM projects ORDER BY id').all().map(item => item.planner_color);
   first.close();
   assert.ok(applied.length >= 46);
   assert.equal(new Set(applied.map(item => item.id)).size, applied.length);
+  assert.equal(new Set(projectColors).size, projectColors.length);
+  projectColors.forEach(color => assert.match(color, /^#[0-9a-f]{6}$/));
 
   repository = openDatabase(temporary.path);
   repository.close();
@@ -404,6 +407,28 @@ test('migration ledger applies every migration only once', () => {
     assert.deepEqual(reopened.prepare('SELECT id,applied_at FROM schema_migrations ORDER BY id').all(), applied);
   } finally {
     reopened.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
+test('project Planner colors migrate on an existing database and remain unique', () => {
+  const temporary = temporaryDatabase();
+  let repository = openDatabase(temporary.path);
+  repository.close();
+  const legacy = new DatabaseSync(temporary.path);
+  legacy.exec("DELETE FROM schema_migrations WHERE id='058-project-planner-colors'; ALTER TABLE projects DROP COLUMN planner_color");
+  legacy.close();
+  repository = openDatabase(temporary.path);
+  repository.close();
+  const migrated = new DatabaseSync(temporary.path);
+  try {
+    const colors = migrated.prepare('SELECT planner_color FROM projects ORDER BY sort_order,id').all().map(item => item.planner_color);
+    assert.ok(colors.length >= 2);
+    assert.equal(new Set(colors).size, colors.length);
+    colors.forEach(color => assert.match(color, /^#[0-9a-f]{6}$/));
+    assert.ok(migrated.prepare("SELECT 1 FROM schema_migrations WHERE id='058-project-planner-colors'").get());
+  } finally {
+    migrated.close();
     rmSync(temporary.directory, { recursive: true, force: true });
   }
 });
@@ -1222,6 +1247,10 @@ test('Planner requires target-project approval and excludes transport from ON/OF
     const sourceProjectId = 1;
     const targetProject = repository.availableProjects(account.id).find(project => project.id !== sourceProjectId);
     assert.ok(targetProject);
+    const sourceProject = repository.availableProjects(account.id).find(project => project.id === sourceProjectId);
+    assert.match(sourceProject.planner_color, /^#[0-9a-f]{6}$/);
+    assert.match(targetProject.planner_color, /^#[0-9a-f]{6}$/);
+    assert.notEqual(sourceProject.planner_color, targetProject.planner_color);
     const planDate = '2031-04-14';
     const rejectedDate = '2031-04-15';
     let workerId;
@@ -1259,12 +1288,15 @@ test('Planner requires target-project approval and excludes transport from ON/OF
       assert.equal(planner.entries.some(item => item.user_id === workerId && item.plan_date === rejectedDate), false);
       assert.ok(planner.users.some(user => user.id === workerId), 'approval activates the worker in the target Planner');
       assert.equal(planner.incoming_cross_project_requests.length, 0);
+      assert.equal(planner.time_details.details.find(item => item.user_id === workerId && item.date === planDate).actual_hours, 12, 'online work and transport from both projects must be calculated once in the global day total');
     });
     repository.withProject(sourceProjectId, () => {
       const admin = repository.me(account.id, sourceProjectId);
       const planner = repository.planner(planDate, rejectedDate, admin);
       assert.equal(planner.outgoing_cross_project_requests.length, 0);
-      assert.ok(planner.cross_project_entries.some(entry => entry.user_id === workerId && entry.plan_date === planDate && entry.project_id === targetProject.id));
+      const externalEntry = planner.cross_project_entries.find(entry => entry.user_id === workerId && entry.plan_date === planDate && entry.project_id === targetProject.id);
+      assert.equal(externalEntry.project_color, targetProject.planner_color);
+      assert.equal(planner.time_details.details.find(item => item.user_id === workerId && item.date === planDate).actual_hours, 12);
     });
   } finally {
     repository.close();
@@ -1724,6 +1756,9 @@ test('V14 shares users across projects, exposes cross-project plans and supports
     const originalArea = repository.controllerGroups().find(item => !item.parent_id);
     repository.savePlannerDay({ user_id: worker.id, plan_date: planDate, entries: [{ activity_type: 'work', controller_group_id: originalArea.id, work_mode: 'offline', shift: 'Dzień', note: 'Plan bazowy' }] }, admin);
     const project = repository.saveProject(null, { code: 'V14', name: 'Projekt V14', description: 'Test globalnego zespołu', active: 1 });
+    assert.match(project.planner_color, /^#[0-9a-f]{6}$/);
+    assert.notEqual(project.planner_color, repository.projects().find(item => item.id === 1).planner_color);
+    assert.equal(repository.saveProject(project.id, { ...project, planner_color: '#123456' }).planner_color, '#123456');
     assert.equal(repository.availableProjects(worker.id).some(item => item.id === project.id), false);
 
     let completedTask;

@@ -2,6 +2,7 @@ import { seedDemoData } from '../demo-data.js';
 import { ENTITY_TABLES as TABLES } from './constants.js';
 import { hashPassword, validPassword } from './security.js';
 import { DEFAULT_STATUS_WORKFLOW_STATES, PRIORITY_VALUES, statusValues } from '../public/modules/workflow-model.js';
+import { nextProjectColor } from './project-colors.js';
 
 const clean = value => typeof value === 'string' ? value.trim() : '';
 
@@ -83,7 +84,18 @@ export function prepareDatabase(db, { seedDemo, demoLimit = 100 }) {
   runMigration(db, '055-planner-transport-minute-precision', () => migratePlannerTransportMinutePrecision(db));
   runMigration(db, '056-planner-manpower-scope', () => migratePlannerManpowerScope(db));
   runMigration(db, '057-planner-cross-project-requests', () => migratePlannerCrossProjectRequests(db));
+  runMigration(db, '058-project-planner-colors', () => migrateProjectPlannerColors(db));
   return defaultProjectId;
+}
+
+function migrateProjectPlannerColors(db) {
+  if (!columnNames(db, 'projects').has('planner_color')) db.exec("ALTER TABLE projects ADD COLUMN planner_color TEXT NOT NULL DEFAULT '#2563eb'");
+  const used = [];
+  const update = db.prepare('UPDATE projects SET planner_color=? WHERE id=?');
+  for (const project of db.prepare('SELECT id FROM projects ORDER BY sort_order,id').all()) {
+    const color = nextProjectColor(used, project.id);
+    update.run(color, project.id); used.push(color);
+  }
 }
 
 function migratePlannerCrossProjectRequests(db) {

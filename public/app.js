@@ -250,6 +250,40 @@ function controllerLabel(item) {
   const code = typeof item === 'string' ? item : item.controller || item.code;
   return state.controllers.find(controller => controller.code === code)?.display_name || code || '';
 }
+function safeProjectColor(value) { return /^#[0-9a-f]{6}$/i.test(String(value || '')) ? String(value).toLowerCase() : '#2563eb'; }
+function projectColorStyle(value) {
+  const color = safeProjectColor(value);
+  const red = Number.parseInt(color.slice(1, 3), 16); const green = Number.parseInt(color.slice(3, 5), 16); const blue = Number.parseInt(color.slice(5, 7), 16);
+  const contrast = (red * 299 + green * 587 + blue * 114) / 1000 > 155 ? '#111827' : '#ffffff';
+  return `--project-color:${color};--project-contrast:${contrast}`;
+}
+function plannerChipEntryIds(chip) {
+  return String(chip?.dataset.entryIds || chip?.dataset.entryId || '').split(',').map(Number).filter(Boolean);
+}
+function plannerDisplayEntries(entries = []) {
+  const display = []; const workGroups = new Map();
+  for (const entry of entries) {
+    const transport = entry.activity_type === 'transport' || entry.transport_mode === 'transport_only';
+    if (transport) {
+      display.push({ ...entry, merged_entry_ids: [Number(entry.id)], merged_entries: [entry], display_area_label: '' });
+      continue;
+    }
+    const key = [Number(entry.project_id || state.me.current_project?.id || 0), entry.work_mode || 'online', entry.shift || 'Dzień', Number(entry.count_in_manpower) === 0 ? 0 : 1].join(':');
+    if (!workGroups.has(key)) workGroups.set(key, { ...entry, merged_entry_ids: [], merged_entries: [], display_area_labels: [], display_notes: [] });
+    const group = workGroups.get(key);
+    group.merged_entry_ids.push(Number(entry.id)); group.merged_entries.push(entry);
+    const area = entry.area_path || entry.area_name || '';
+    if (area && !group.display_area_labels.includes(area)) group.display_area_labels.push(area);
+    if (entry.note && !group.display_notes.includes(entry.note)) group.display_notes.push(entry.note);
+  }
+  for (const group of workGroups.values()) display.push({
+    ...group,
+    note: group.display_notes.join(' · '),
+    display_area_label: group.display_area_labels.join(' + '),
+    area_count: group.display_area_labels.length
+  });
+  return display;
+}
 function hierarchyGroupOptions() { return state.controllerGroups.map(group => ({ value: group.id, label: `${'  '.repeat(Math.max(0, Number(group.depth || 1) - 1))}${group.path_label || group.name}` })); }
 function taskHierarchyOptions() {
   const values = [];
@@ -659,7 +693,7 @@ function fillScopeSelect(select, selected = 'all') {
 function openProjectDialog(mandatory = false) {
   const dialog = $('#project-dialog');
   $('#project-close').hidden = mandatory || !state.me.current_project;
-  $('#project-list').innerHTML = state.projects.map(project => `<button type="button" class="project-option" data-project-id="${project.id}"><span class="project-code">${escapeHtml(project.code)}</span><span class="project-option-name"><b>${escapeHtml(project.name || project.code)}</b><small>${escapeHtml(project.description || 'Projekt bez opisu')}</small></span><span class="badge blue">${escapeHtml(roleName(project.project_role))}</span></button>`).join('') || '<div class="empty">Brak dostępnych projektów. Skontaktuj się z administratorem systemu.</div>';
+  $('#project-list').innerHTML = state.projects.map(project => `<button type="button" class="project-option" data-project-id="${project.id}" style="${projectColorStyle(project.planner_color)}"><span class="project-code">${escapeHtml(project.code)}</span><span class="project-option-name"><b>${escapeHtml(project.name || project.code)}</b><small>${escapeHtml(project.description || 'Projekt bez opisu')}</small></span><span class="badge blue">${escapeHtml(roleName(project.project_role))}</span></button>`).join('') || '<div class="empty">Brak dostępnych projektów. Skontaktuj się z administratorem systemu.</div>';
   $$('.project-option').forEach(button => button.addEventListener('click', async () => {
     try {
       state.me = await api('/api/select-project', { method: 'POST', body: JSON.stringify({ project_id: Number(button.dataset.projectId) }) });
@@ -1685,7 +1719,7 @@ function renderMine() {
   $('#content').innerHTML = `<section class="personal-command compact"><div><span class="eyebrow">Plan pracy · ${escapeHtml(state.me.display_name)}</span><h2>${overdue.length ? `${overdue.length} pozycji wymaga reakcji` : 'Plan jest pod kontrolą'}</h2><p>Zakres z Plannera: <b>${escapeHtml(projectLabels)}</b> · ${(data.assigned_areas || []).map(item => `${item.project_code ? `${escapeHtml(item.project_code)} · ` : ''}${escapeHtml(item.path_label || item.name)}`).join(', ') || 'brak przypisania na 14 dni'}</p></div><div class="personal-stats compact"><span><b>${taskProgress}%</b>Zadania</span><span><b>${pointProgress}%</b>Punkty</span><span><b>${statusProgress}%</b>Status</span><span><b>${data.metrics.notes_mentions}</b>Wzmianki</span></div></section>
   <nav class="start-shortcuts" aria-label="Skróty pracy"><button type="button" data-start-view="announcements">Do działania <b>${messageCenterActions('mine').length}</b></button><button type="button" data-start-view="tasks">Otwórz pracę</button><button type="button" data-start-view="planner">Pokaż plan</button></nav>
   ${overdue.length ? `<section class="urgent-lane"><header><strong>Do pilnego działania</strong><span>${overdue.length} zaległych</span></header><div>${overdue.slice(0, 12).map(({ type, item }) => `<button data-jump="${type}" data-id="${item.id}" data-project-id="${item.project_id || ''}"><span>!</span><b>${item.project_code ? `<em class="project-prefix">${escapeHtml(item.project_code)}</em>` : ''}${escapeHtml(entityLabel(typeToEntity(type), item))}</b><small>${displayDate(item.due_date || item.reminder_date)}</small></button>`).join('')}</div></section>` : ''}
-  <section class="personal-plan-calendar"><header><div><strong>Mój plan manpoweru</strong><small>Wszystkie projekty · najbliższe 14 dni</small></div><span>${(data.planner || []).length} wpisów</span></header><div class="personal-plan-days">${planDays.map(date => { const entries = plannerByDate.get(date) || []; return `<article class="personal-plan-day ${date === today() ? 'today' : ''}"><header><b>${date.slice(8, 10)}</b><small>${new Intl.DateTimeFormat('pl-PL', { weekday: 'short', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`))}</small></header><div>${entries.map(entry => { const transport = entry.activity_type === 'transport'; const label = transport ? 'Transport' : entry.area_path || entry.area_name || 'Ogólne'; const timing = transport ? formatPlannerTransportDuration(entry.duration_hours) : entry.shift || ''; return `<span class="mini-plan-chip ${transport ? 'transport' : entry.work_mode || 'online'}" title="${escapeHtml(`${entry.project_code || ''} · ${label} · ${timing}`)}"><b>${transport ? 'T' : entry.work_mode === 'offline' ? 'OFF' : 'ON'}</b><em>${escapeHtml(entry.project_code || '')}</em><span>${escapeHtml(label)}</span><small>${escapeHtml(timing)}</small></span>`; }).join('') || '<i>—</i>'}</div></article>`; }).join('')}</div></section>
+  <section class="personal-plan-calendar"><header><div><strong>Mój plan manpoweru</strong><small>Wszystkie projekty · najbliższe 14 dni</small></div><span>${(data.planner || []).length} wpisów</span></header><div class="personal-plan-days">${planDays.map(date => { const entries = plannerDisplayEntries(plannerByDate.get(date) || []); return `<article class="personal-plan-day ${date === today() ? 'today' : ''}"><header><b>${date.slice(8, 10)}</b><small>${new Intl.DateTimeFormat('pl-PL', { weekday: 'short', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`))}</small></header><div>${entries.map(entry => { const transport = entry.activity_type === 'transport'; const label = transport ? '' : entry.display_area_label || entry.area_path || entry.area_name || ''; const timing = transport ? '' : entry.shift === 'Noc' ? 'N' : 'D'; return `<span class="mini-plan-chip ${transport ? 'transport' : `project-work ${entry.work_mode || 'online'} ${entry.shift === 'Noc' ? 'night-shift' : ''}`}" style="${transport ? '' : projectColorStyle(entry.project_color)}" title="${escapeHtml(`${entry.project_name || entry.project_code || ''}${label ? ` · ${label}` : ''}${transport ? ` · ${entry.transport_code || 'T'}${entry.vehicle_registration ? ` · ${entry.vehicle_registration}` : ''}` : ` · ${entry.work_mode === 'offline' ? 'OFF' : 'ON'} · ${timing}`}`)}"><b>${transport ? entry.transport_code || 'T' : entry.work_mode === 'offline' ? 'OFF' : 'ON'}</b><span>${escapeHtml(label)}</span>${transport ? '' : `<small>${timing}</small>`}</span>`; }).join('') || '<i>—</i>'}</div></article>`; }).join('')}</div></section>
   <div class="workbench-grid compact"><section class="focus-lane"><header><div><strong>Moje aktywne zadania</strong><small>Bez ukończonych podzadań przypisanych tylko do Ciebie</small></div><span>${data.assigned_tasks.filter(item => item.status !== 'Done').length}</span></header>${data.assigned_tasks.filter(item => item.status !== 'Done').slice(0, 20).map(item => personalTaskRow(item)).join('') || '<div class="empty">Nie masz aktywnych zadań.</div>'}</section>
   <section class="focus-lane"><header><div><strong>Najbliższe z mojego planu</strong><small>Wszystkie zaplanowane projekty · następne 14 dni</small></div><span>${upcoming.length}</span></header>${upcoming.slice(0, 20).map(({ type, item, date }) => `<button class="focus-row" data-jump="${type}" data-id="${item.id}" data-project-id="${item.project_id || ''}"><span class="type-dot ${typeToEntity(type)}"></span><span><b>${item.project_code ? `<em class="project-prefix">${escapeHtml(item.project_code)}</em>` : ''}${escapeHtml(entityLabel(typeToEntity(type), item))}</b><small>${escapeHtml(controllerLabel(item))} · ${escapeHtml(badgeText(item.status))}</small></span><time>${date ? displayDate(date) : '→'}</time></button>`).join('') || '<div class="empty">Brak zbliżających się pozycji.</div>'}</section>
   ${summarySection('Otwarte punkty i wzmianki', data.points.filter(item => item.status !== 'Closed'), 'points', item => item.title)}
@@ -2149,6 +2183,15 @@ async function openAutomationEditor(existing = null) {
 
 function canCoordinate() { return ['moderator', 'project_admin', 'system_admin'].includes(state.me.role); }
 
+function plannerProjectLegend(data) {
+  const projects = new Map();
+  for (const entry of [...(data.entries || []), ...(data.cross_project_entries || [])]) {
+    const id = Number(entry.project_id || state.me.current_project?.id || 0);
+    if (!projects.has(id)) projects.set(id, { code: entry.project_code || state.me.current_project?.code || 'Projekt', name: entry.project_name || '', color: safeProjectColor(entry.project_color || state.me.current_project?.planner_color) });
+  }
+  return [...projects.values()].map(project => `<span class="project-color-key" title="${escapeHtml(project.name || project.code)}" style="${projectColorStyle(project.color)}"><i></i>${escapeHtml(project.code)}</span>`).join('');
+}
+
 function renderPlanner() {
   queueMicrotask(decorateUnifiedWorkspace);
   const previousPlannerScroll = $('.planner-scroll');
@@ -2169,7 +2212,7 @@ function renderPlanner() {
   ${canCoordinate() ? plannerBulkToolbar() : ''}
   ${canCoordinate() ? plannerCrossProjectRequestsHtml(data.incoming_cross_project_requests || [], data.outgoing_cross_project_requests || []) : ''}
   ${plannerUnifiedSection(data.users || [], days, entryMap, workMap, summaryMap, data.area_day_summary || [], data.can_manage_requirements, absenceMap, timeMap, holidayMap, data.can_manage_time && state.plannerShowHours, overlapMap, data.annotations || [])}
-  <p class="planner-legend"><span class="mode-dot online"></span> ON · fabryka <span class="mode-dot offline"></span> OFF · biuro <span><b>T</b> transport · poza kalkulacją ON/OFF <span class="night-shift-key"></span> N · zmiana nocna <span class="other-project-key"></span> plan w innym projekcie <span class="workload-dot"></span> zadania / punkty / status / notatki${data.can_manage_requirements ? '<span class="requirement-shortage-key"></span> obsada poniżej zapotrzebowania' : ''}</p>`;
+  <p class="planner-legend"><span class="mode-dot online"></span> ON · fabryka <span class="mode-dot offline"></span> OFF · biuro <span class="transport-color-key"></span> T · transport poza kalkulacją ON/OFF <span class="vacation-color-key"></span> urlop <span class="time-off-color-key"></span> wolne <span class="night-shift-key"></span> N · zmiana nocna ${plannerProjectLegend(data)} <span class="workload-dot"></span> zadania / punkty / status / notatki${data.can_manage_requirements ? '<span class="requirement-shortage-key"></span> obsada poniżej zapotrzebowania' : ''}</p>`;
   $('#planner-days').value = String(state.plannerDays);
   $('#planner-days').addEventListener('change', async event => { state.plannerDays = Number(event.target.value); state.plannerScrollLeft = 0; state.plannerScrollTop = 0; clearPlannerSelections(false); await reloadPlanner(); });
   $$('.planner-shift').forEach(button => button.addEventListener('click', async () => { state.plannerFrom = addDays(state.plannerFrom, Number(button.dataset.days)); state.plannerScrollLeft = 0; state.plannerScrollTop = 0; clearPlannerSelections(false); await reloadPlanner(); }));
@@ -2214,7 +2257,7 @@ function renderPlanner() {
           event.stopPropagation();
           return toast('To przypisanie pochodzi z innego projektu. Przełącz projekt, aby je edytować.');
         }
-        showPlannerContext(event, Number(cell.dataset.userId), cell.dataset.date, Number(chip?.dataset.entryId) || null);
+        showPlannerContext(event, Number(cell.dataset.userId), cell.dataset.date, plannerChipEntryIds(chip));
       });
       cell.addEventListener('dragover', event => { if (cell.dataset.editable !== '1') return; event.preventDefault(); cell.classList.add('drag-over'); });
       cell.addEventListener('dragleave', () => cell.classList.remove('drag-over'));
@@ -2242,10 +2285,11 @@ function renderPlanner() {
           clearPlannerSelections(false); rectangleStart = plannerCellGridPosition(cell); selectingRectangle = true;
           selectPlannerRectangle(rectangleStart, rectangleStart); return;
         }
-        const id = Number(chip.dataset.entryId); const additive = event.ctrlKey || event.metaKey;
-        if (!additive && !state.plannerEntrySelection.has(id)) clearPlannerSelections(false);
+        const ids = plannerChipEntryIds(chip); const id = ids[0]; const additive = event.ctrlKey || event.metaKey;
+        const selected = ids.length && ids.every(entryId => state.plannerEntrySelection.has(entryId));
+        if (!additive && !selected) clearPlannerSelections(false);
         else if (state.plannerSelection.size) { state.plannerSelection.clear(); $$('.planner-cell.multi-selected').forEach(cell => cell.classList.remove('multi-selected')); }
-        setPlannerEntrySelected(chip, additive ? !state.plannerEntrySelection.has(id) : true);
+        setPlannerEntrySelected(chip, additive ? !selected : true);
       });
       chip.addEventListener('dblclick', event => { event.preventDefault(); event.stopPropagation(); const cell = chip.closest('.planner-cell'); openPlannerCell(Number(cell.dataset.userId), cell.dataset.date); });
       chip.addEventListener('dragstart', event => { if (event.shiftKey || selectingRectangle) return event.preventDefault(); state.plannerDragging = true; state.plannerDragEntry = Number(chip.dataset.entryId); event.dataTransfer.effectAllowed = 'copyMove'; event.dataTransfer.setData('text/planner-entry', chip.dataset.entryId); chip.classList.add('dragging'); });
@@ -2376,8 +2420,8 @@ function setPlannerCellSelected(cell, selected) {
 }
 
 function setPlannerEntrySelected(chip, selected) {
-  const id = Number(chip.dataset.entryId);
-  if (selected) state.plannerEntrySelection.add(id); else state.plannerEntrySelection.delete(id);
+  const ids = plannerChipEntryIds(chip);
+  ids.forEach(id => { if (selected) state.plannerEntrySelection.add(id); else state.plannerEntrySelection.delete(id); });
   chip.classList.toggle('entry-selected', selected);
   updatePlannerBulkCount();
 }
@@ -2672,7 +2716,7 @@ function plannerCell(user, date, entries, work, absence, timeDetail, holiday, sh
   const editable = canCoordinate() && (Number(user.planner_enabled) || date === today());
   const cellKey = plannerSelectionKey(user.id, date);
   const expanded = state.plannerExpandedCells.has(cellKey);
-  const sortedEntries = [...entries].sort((left, right) => {
+  const sortedEntries = plannerDisplayEntries(entries).sort((left, right) => {
     const rank = entry => entry.activity_type === 'transport' || entry.transport_mode === 'transport_only' ? 1 : entry.controller_group_id ? 3 : 2;
     return rank(left) - rank(right) || controllerHierarchyOrder(left) - controllerHierarchyOrder(right) || String(left.area_path || left.area_name || '').localeCompare(String(right.area_path || right.area_name || ''), 'pl', { numeric: true });
   });
@@ -2681,21 +2725,24 @@ function plannerCell(user, date, entries, work, absence, timeDetail, holiday, sh
   const chips = sortedEntries.map((entry, entryIndex) => {
     const transport = entry.activity_type === 'transport' || entry.transport_mode === 'transport_only';
     const current = entry.is_current_project !== false;
-    const selectedEntry = current && state.plannerEntrySelection.has(Number(entry.id));
+    const entryIds = (entry.merged_entry_ids || [entry.id]).map(Number).filter(Boolean);
+    const selectedEntry = current && entryIds.length && entryIds.every(id => state.plannerEntrySelection.has(id));
     const showOverlap = current && overlap && !overlapPlaced;
     if (showOverlap) overlapPlaced = true;
     const collision = showOverlap ? `<span class="planner-overlap-actions ${overlap.status}" title="Nakładanie się projektów: ${escapeHtml(overlap.other_project_codes || 'inny projekt')}">${overlap.status === 'approved' ? '<b aria-label="Kolizja zatwierdzona">✓</b>' : overlap.status === 'rejected' ? '<b aria-label="Kolizja odrzucona">×</b>' : canCoordinate() ? `<button type="button" data-overlap-action="approve" data-user-id="${user.id}" data-date="${date}" aria-label="Zatwierdź kolizję">✓</button><button type="button" data-overlap-action="reject" data-user-id="${user.id}" data-date="${date}" aria-label="Odrzuć plan">×</button>` : '<b>⚠</b>'}</span>` : '';
     const duration = transport ? formatPlannerTransportDuration(entry.duration_hours) : '';
     const transportCode = entry.transport_code || 'T';
-    const itemLabel = transport ? entry.vehicle_registration || 'Transport' : entry.area_path || entry.area_name || '';
-    const contextLabel = [current ? '' : entry.project_code, itemLabel].filter(Boolean).join(' · ');
+    const contextLabel = transport ? '' : entry.display_area_label || entry.area_path || entry.area_name || '';
     const night = !transport && entry.shift === 'Noc';
-    const title = showOverlap ? `Nakładanie się projektów: ${escapeHtml(overlap.other_project_codes || 'inny projekt')}` : transport ? `${escapeHtml(transportCode)}${entry.vehicle_registration ? ` · ${escapeHtml(entry.vehicle_registration)}` : ''} · transport poza kalkulacją ON/OFF · ${duration}` : Number(entry.count_in_manpower) === 0 ? 'Ta osoba nie jest uwzględniana w kalkulacji manpoweru' : '';
+    const projectColor = safeProjectColor(entry.project_color || state.me.current_project?.planner_color);
+    const title = transport
+      ? `${transportCode}${entry.vehicle_registration ? ` · ${entry.vehicle_registration}` : ''} · transport poza kalkulacją ON/OFF${duration ? ` · ${duration}` : ''}`
+      : [entry.project_name || entry.project_code, contextLabel, entry.work_mode === 'offline' ? 'OFF' : 'ON', night ? 'Noc' : 'Dzień', Number(entry.count_in_manpower) === 0 ? 'Poza kalkulacją manpoweru' : '', showOverlap ? `Nakładanie się projektów: ${overlap.other_project_codes || 'inny projekt'}` : ''].filter(Boolean).join(' · ');
     const extra = entryIndex >= visibleEntryLimit;
-    return `<span class="plan-chip ${transport ? 'transport-only' : entry.work_mode} ${night ? 'night-shift' : ''} ${Number(entry.count_in_manpower) === 0 ? 'excluded-from-manpower' : ''} ${current ? '' : 'other-project'} ${selectedEntry ? 'entry-selected' : ''} ${showOverlap ? `has-overlap ${overlap.status}` : ''}" ${extra ? 'data-planner-extra' : ''} ${extra && !expanded ? 'hidden' : ''} title="${title}" data-entry-id="${entry.id}" data-current-project="${current ? 1 : 0}" data-project-id="${entry.project_id || state.me.current_project?.id}" draggable="${editable && current ? 'true' : 'false'}">${transport ? `<b class="mode-label">${escapeHtml(transportCode)}</b>` : `<b class="mode-label">${entry.work_mode === 'offline' ? 'OFF' : 'ON'}</b>`}${contextLabel ? `<span>${escapeHtml(contextLabel)}</span>` : ''}${entry.note ? `<span class="plan-note" data-note="${escapeHtml(entry.note)}" title="${escapeHtml(entry.note)}" tabindex="0" aria-label="Notatka: ${escapeHtml(entry.note)}">i</span>` : ''}${collision}<small>${transport ? duration : night ? 'N' : 'D'}</small></span>`;
+    return `<span class="plan-chip ${transport ? 'transport-only' : `project-work ${entry.work_mode}`} ${night ? 'night-shift' : ''} ${Number(entry.count_in_manpower) === 0 ? 'excluded-from-manpower' : ''} ${current ? '' : 'other-project'} ${selectedEntry ? 'entry-selected' : ''} ${showOverlap ? `has-overlap ${overlap.status}` : ''}" style="${transport ? '' : projectColorStyle(projectColor)}" ${extra ? 'data-planner-extra' : ''} ${extra && !expanded ? 'hidden' : ''} title="${escapeHtml(title)}" data-entry-id="${entryIds[0] || entry.id}" data-entry-ids="${entryIds.join(',')}" data-current-project="${current ? 1 : 0}" data-project-id="${entry.project_id || state.me.current_project?.id}" draggable="${editable && current ? 'true' : 'false'}"><b class="mode-label">${transport ? escapeHtml(transportCode) : entry.work_mode === 'offline' ? 'OFF' : 'ON'}</b>${contextLabel ? `<span>${escapeHtml(contextLabel)}</span>` : '<span></span>'}${entry.note ? `<span class="plan-note" data-note="${escapeHtml(entry.note)}" title="${escapeHtml(entry.note)}" tabindex="0" aria-label="Notatka: ${escapeHtml(entry.note)}">i</span>` : ''}${collision}${transport ? '' : `<small class="shift-label">${night ? 'N' : 'D'}</small>`}</span>`;
   }).join('');
   const workload = work && (work.tasks || work.points || work.statuses || work.notes) ? `<span class="workload" title="Zadania / otwarte punkty / status / notatki">${work.tasks}/${work.points}/${work.statuses}/${work.notes}</span>` : '';
-  const absenceChip = absence ? `<span class="absence-chip ${absence.absence_type}" draggable="${editable ? 'true' : 'false'}"><b>${absence.absence_type === 'vacation' ? 'URLOP' : 'WOLNE'}</b><small>${escapeHtml(absence.note || '')}</small></span>` : '';
+  const absenceChip = absence ? `<span class="absence-chip ${absence.absence_type}" draggable="${editable ? 'true' : 'false'}" title="${escapeHtml(absence.note || (absence.absence_type === 'vacation' ? 'Urlop' : 'Wolne'))}"><b>${absence.absence_type === 'vacation' ? 'URLOP' : 'WOLNE'}</b>${absence.note ? `<small>${escapeHtml(absence.note)}</small>` : ''}</span>` : '';
   const tileCount = sortedEntries.length + Number(Boolean(absence));
   const expandButton = tileCount > 3 ? `<button type="button" class="planner-cell-expand" data-planner-expand="${escapeHtml(cellKey)}" aria-expanded="${expanded}">${expanded ? 'Zwiń' : `+${tileCount - 3}`}</button>` : '';
   const hours = showTime && timeDetail ? `<span class="planner-hours-chip" title="Dzisiaj: ${Number(timeDetail.actual_hours + timeDetail.credited_hours).toFixed(1)} h · narastająco bez mnożnika: ${Number(timeDetail.overtime_raw_cumulative || 0).toFixed(1)} h · z mnożnikiem: ${Number(timeDetail.overtime_weighted_cumulative || 0).toFixed(1)} h"><b>${Number(timeDetail.actual_hours + timeDetail.credited_hours).toFixed(1)}h</b><i>Σ ${Number(timeDetail.overtime_raw_cumulative || 0).toFixed(1)} / ${Number(timeDetail.overtime_weighted_cumulative || 0).toFixed(1)}</i></span>` : '';
@@ -3411,15 +3458,21 @@ async function pastePlannerRange(userId, anchorDate, source, kind) {
   } catch (error) { toast(error.message, true); }
 }
 
-function showPlannerContext(event, userId, date, entryId = null) {
+function showPlannerContext(event, userId, date, entryIds = []) {
   if (!canCoordinate()) return;
   event.preventDefault(); event.stopPropagation();
   const user = (state.planner.users || []).find(item => item.id === userId);
   if (!user) return toast('Nie znaleziono użytkownika projektu', true);
   const menu = $('#context-menu');
+  const normalizedEntryIds = [].concat(entryIds || []).map(Number).filter(Boolean);
+  const entryId = normalizedEntryIds[0] || null;
   const entry = entryId ? state.planner.entries.find(item => item.id === entryId) : null;
   if (entry) {
-    if (!state.plannerEntrySelection.has(Number(entry.id))) { clearPlannerSelections(false); state.plannerEntrySelection.add(Number(entry.id)); event.target.closest('.plan-chip')?.classList.add('entry-selected'); }
+    if (!normalizedEntryIds.every(id => state.plannerEntrySelection.has(id))) {
+      clearPlannerSelections(false);
+      normalizedEntryIds.forEach(id => state.plannerEntrySelection.add(id));
+      event.target.closest('.plan-chip')?.classList.add('entry-selected');
+    }
   } else {
     const key = plannerSelectionKey(userId, date);
     if (!state.plannerSelection.has(key)) { clearPlannerSelections(false); state.plannerSelection.add(key); event.target.closest('.planner-cell')?.classList.add('multi-selected'); }
@@ -5137,7 +5190,7 @@ function configPanelDefinition(key) {
   const plannerVehiclesConfig = `<section class="config-subsection"><header><span><h3>Auta transportowe</h3><small class="sub">Kod T oznacza transport bez wskazanego auta. Zdefiniowane auta są pokazywane jako T1, T2 itd.</small></span><button type="button" class="secondary" id="new-planner-vehicle">+ Dodaj auto</button></header><div class="planner-vehicle-list">${(state.config.planner_vehicles || []).map(vehicle => `<div class="settings-row"><span><b>${escapeHtml(vehicle.code)}</b><small class="sub">${escapeHtml(vehicle.registration_number)}</small></span><button type="button" class="mini edit-planner-vehicle" data-id="${vehicle.id}">Edytuj</button><button type="button" class="mini danger-outline delete-planner-vehicle" data-id="${vehicle.id}">Usuń</button></div>`).join('') || '<div class="empty compact-empty">Brak zdefiniowanych aut. Transport będzie oznaczany jako T.</div>'}</div></section>`;
   const plannerConfig = `<section class="config-panel-body planner-config-grid">${plannerVehiclesConfig}<section class="config-subsection"><h3>Globalne normy czasu pracy</h3><p class="sub">Jedna konfiguracja obowiązuje we wszystkich projektach.</p><div class="planner-setting-grid">${plannerSettingFields.map(([key, label, fallback]) => `<label class="field"><span>${label}</span><input class="planner-setting" data-key="${key}" type="number" min="0" step="0.25" value="${escapeHtml(state.config.settings[key] || fallback)}"></label>`).join('')}</div></section><section class="config-subsection"><h3>Święta systemowe</h3><p class="sub">Ta lista jest wspólna dla wszystkich projektów.</p><div class="holiday-list-config">${(state.config.planner_holidays || []).map(item => `<div class="settings-row"><span><b>${displayDate(item.holiday_date)}</b> · ${escapeHtml(item.name)}</span><button class="mini edit-planner-holiday" data-id="${item.id}">Edytuj</button><button class="mini delete-planner-holiday" data-id="${item.id}">Usuń</button></div>`).join('') || '<div class="empty compact-empty">Brak zdefiniowanych świąt.</div>'}</div><label class="field"><span>Szybkie dodawanie — DD.MM.RRRR Nazwa święta</span><textarea id="planner-holidays-bulk" rows="7" placeholder="25.12.2026 Boże Narodzenie\n26.12.2026 Drugi dzień świąt"></textarea></label><button class="secondary" id="planner-holidays-bulk-save">Dodaj listę świąt</button></section></section>`;
   const definitions = {
-    projects: ['Projekty systemu', `<section class="config-panel-body"><p class="sub">Konta są globalne, a role i dostęp są niezależne dla każdego projektu.</p>${state.projects.map(item => `<div class="settings-row"><span><b>${escapeHtml(item.code)}</b><small class="sub">${escapeHtml(item.description || '')}</small></span><button class="mini edit-project" data-id="${item.id}">Edytuj</button><button class="mini danger-outline delete-project" data-id="${item.id}" ${state.projects.length <= 1 ? 'disabled title="Nie można usunąć ostatniego projektu"' : ''}>Usuń</button></div>`).join('')}<button class="secondary" id="new-project">+ Dodaj projekt</button></section>`],
+    projects: ['Projekty systemu', `<section class="config-panel-body"><p class="sub">Konta są globalne, a role i dostęp są niezależne dla każdego projektu. Kolor rozróżnia projekty w Plannerze.</p>${state.projects.map(item => `<div class="settings-row project-settings-row" style="${projectColorStyle(item.planner_color)}"><i class="project-color-swatch" aria-hidden="true"></i><span><b>${escapeHtml(item.code)}</b><small class="sub">${escapeHtml(item.description || '')}</small></span><button class="mini edit-project" data-id="${item.id}">Edytuj</button><button class="mini danger-outline delete-project" data-id="${item.id}" ${state.projects.length <= 1 ? 'disabled title="Nie można usunąć ostatniego projektu"' : ''}>Usuń</button></div>`).join('')}<button class="secondary" id="new-project">+ Dodaj projekt</button></section>`],
     security: ['Dziennik bezpieczeństwa', `<section class="config-panel-body"><p class="sub">Ostatnie zdarzenia uwierzytelniania i zmian dostępu. Rejestr jest przechowywany przez 180 dni.</p>${(state.securityEvents || []).map(item => `<div class="settings-row security-event ${escapeHtml(item.outcome)}"><span><b>${escapeHtml(item.event_type)}</b><small class="sub">${escapeHtml(item.username || 'nieznane konto')} · ${escapeHtml(item.ip_address || 'brak adresu')} · ${displayDateTime(item.created_at)}</small></span><em>${escapeHtml(item.outcome)}</em></div>`).join('') || '<div class="empty compact-empty">Brak zarejestrowanych zdarzeń.</div>'}</section>`],
     hierarchy: ['Hierarchia obszarów / sterowników', `<section class="config-panel-body"><p class="sub">Projekt → obszar → podobszar → sterownik. Wybierz element po lewej, a jego działania pojawią się po prawej.</p>${controllerHierarchyConfig(admin)}</section>`],
     status_matrix: ['Tabele i pola statusu', statusMatrixConfig(canEdit)],
@@ -5479,7 +5532,7 @@ async function saveControllerGroup(id, parentId, existingName = '') {
 
 async function editProject(id = null) {
   const existing = state.projects.find(item => item.id === id);
-  const result = await uiForm({ title: id ? 'Edytuj projekt' : 'Nowy projekt', fields: [{ name: 'code', label: 'Kod projektu', value: existing?.code || 'NOWY', required: true }, { name: 'name', label: 'Nazwa projektu', value: existing?.name || 'Nowy projekt', required: true }, { name: 'description', label: 'Opis', type: 'textarea', value: existing?.description || '', full: true }] });
+  const result = await uiForm({ title: id ? 'Edytuj projekt' : 'Nowy projekt', description: id ? 'Kolor jest stałym oznaczeniem projektu we wszystkich widokach Plannera.' : 'Kolor Plannera zostanie dobrany automatycznie i będzie można go później zmienić.', fields: [{ name: 'code', label: 'Kod projektu', value: existing?.code || 'NOWY', required: true }, { name: 'name', label: 'Nazwa projektu', value: existing?.name || 'Nowy projekt', required: true }, ...(existing ? [{ name: 'planner_color', label: 'Kolor projektu w Plannerze', type: 'color', value: safeProjectColor(existing.planner_color) }] : []), { name: 'description', label: 'Opis', type: 'textarea', value: existing?.description || '', full: true }] });
   if (!result?.code || !result?.name) return;
   try { await api('/api/projects' + (id ? `/${id}` : ''), { method: id ? 'PATCH' : 'POST', body: JSON.stringify({ ...result, active: 1 }) }); state.me = await api('/api/me'); state.projects = state.me.projects || []; updateIdentity(); renderSettings(); toast('Projekt został zapisany'); } catch (error) { toast(error.message, true); }
 }
