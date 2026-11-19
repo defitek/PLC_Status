@@ -260,7 +260,10 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   await page.locator('#action-fields [name="note"]').fill(genericNote);
   await page.locator('#action-submit').click();
   const savedGenericCell = page.locator(`.planner-cell[data-user-id="${genericUserId}"][data-date="${genericDate}"]`);
-  await expect(savedGenericCell.locator(`.plan-chip.excluded-from-manpower:has(.plan-note[data-note="${genericNote}"])`)).toContainText('poza manpowerem');
+  const genericChip = savedGenericCell.locator(`.plan-chip.excluded-from-manpower:has(.plan-note[data-note="${genericNote}"])`);
+  await expect(genericChip).toContainText('ON');
+  await expect(genericChip).not.toContainText('Bez obszaru');
+  await expect(genericChip).toHaveAttribute('title', /manpoweru/);
 
   await savedGenericCell.click();
   await page.keyboard.press('e');
@@ -271,7 +274,8 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   await expect(directGenericRow.locator('[data-plan-area]:checked')).toHaveCount(0);
   await expect(directGenericRow.locator('[data-plan-manpower]')).toBeChecked();
   await page.locator('#planner-form .dialog-actions .primary').click();
-  await expect(savedGenericCell.locator('.plan-chip[data-current-project="1"]:not(.excluded-from-manpower)')).toContainText('Bez obszaru');
+  await expect(savedGenericCell.locator('.plan-chip[data-current-project="1"]:not(.excluded-from-manpower)')).toContainText('ON');
+  await expect(savedGenericCell.locator('.plan-chip[data-current-project="1"]:not(.excluded-from-manpower)')).not.toContainText('Bez obszaru');
 
   await savedCell.dispatchEvent('pointerdown', { button: 0 });
   await freeCell.dispatchEvent('pointerdown', { button: 0, ctrlKey: true });
@@ -596,6 +600,9 @@ test('kopiowanie grup statusu ma uporządkowany zakres i zwijany konfigurator', 
   await expect(page.locator('#action-fields .field > span')).toHaveText(['Nazwa nowej grupy', 'Grupa źródłowa', 'Zakres kopiowania']);
   await expect(page.locator('#action-fields [name="source_group_id"]')).toHaveValue(String(configured.groupId));
   await expect(page.locator('#action-fields [name="element_refs"]:checked')).toHaveCount(2);
+  await expect(page.locator('#action-fields .ui-grouped-multiselect h4')).toHaveText(['Kolumny podstawowe 1', 'Podpunkty 1']);
+  const checkboxColumns = await page.locator('#action-fields .ui-grouped-multiselect section').evaluateAll(sections => sections.map(section => [...section.querySelectorAll('label input')].map(input => Math.round(input.getBoundingClientRect().left))));
+  expect(checkboxColumns.every(column => new Set(column).size <= 1)).toBe(true);
   await page.locator('#action-fields [name="new_group_name"]').fill(configured.copyName);
   await page.locator('#action-submit').click();
   await expect(page.locator('#action-dialog')).not.toBeVisible();
@@ -612,12 +619,28 @@ test('Status przełącza globalne i wewnętrzne grupowanie funkcyjne', async ({ 
   await page.locator('#action-submit').click();
   await expect(page.locator('#status-group-functional')).toContainText('globalne');
   await expect(page.locator('.status-functional-global').first()).toBeVisible();
+  const globalFunction = page.locator('.status-functional-global').first();
+  await globalFunction.locator(':scope > header > button').click();
+  await expect(globalFunction).toHaveClass(/collapsed/);
+  await expect(globalFunction.locator(':scope > div')).toHaveCount(0);
+  await globalFunction.locator(':scope > header > button').click();
+  await expect(globalFunction).not.toHaveClass(/collapsed/);
+  const controllerToggle = page.locator('.status-controller-block > header > button').first();
+  if (await controllerToggle.count()) {
+    await controllerToggle.click();
+    await expect(controllerToggle).toHaveAttribute('aria-expanded', 'false');
+    await controllerToggle.click();
+  }
 
   await page.locator('#status-group-functional').click();
   await page.locator('#action-fields [name="mode"]').selectOption('within');
   await page.locator('#action-submit').click();
   await expect(page.locator('#status-group-functional')).toContainText('wewnątrz grup');
   await expect(page.locator('.matrix-functional-group-row').first()).toBeVisible();
+  await expect(page.locator('.status-matrix-table th.matrix-controller-cell').first()).toContainText('Sterownik');
+  const withinToggle = page.locator('.matrix-functional-group-row button').first();
+  await withinToggle.click();
+  await expect(withinToggle).toHaveAttribute('aria-expanded', 'false');
   await expectViewportContained(page);
 });
 
@@ -657,7 +680,8 @@ test('Planner sortuje kafelki i zwija nadmiar powyżej trzech', async ({ page })
   const savedCell = page.locator(`.planner-cell[data-user-id="${userId}"][data-date="${date}"]`);
   await expect(savedCell.locator('.plan-chip:visible')).toHaveCount(3);
   await expect(savedCell.locator('.plan-chip').nth(0)).toHaveClass(/transport-only/);
-  await expect(savedCell.locator('.plan-chip').nth(1)).toContainText('Bez obszaru');
+  await expect(savedCell.locator('.plan-chip').nth(1)).toContainText('OFF');
+  await expect(savedCell.locator('.plan-chip').nth(1)).not.toContainText('Bez obszaru');
   await expect(savedCell.locator('.planner-cell-expand')).toHaveText('+1');
   await savedCell.locator('.planner-cell-expand').click();
   await expect(savedCell.locator('.plan-chip:visible')).toHaveCount(4);
@@ -668,6 +692,93 @@ test('Planner sortuje kafelki i zwija nadmiar powyżej trzech', async ({ page })
     const response = await fetch('/api/planner/day', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: userId, plan_date: date, entries: [] }) });
     if (!response.ok) throw new Error((await response.json()).error || 'Nie udało się posprzątać planu testowego');
   }, { userId, date });
+});
+
+test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzyprojektowy', async ({ page }) => {
+  const setup = await page.evaluate(async suffix => {
+    const request = async (path, options = {}) => {
+      const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || `${response.status} ${path}`);
+      return body;
+    };
+    const me = await request('/api/me');
+    const target = me.projects.find(project => Number(project.id) !== Number(me.current_project.id));
+    if (!target) throw new Error('Brak drugiego projektu do testu');
+    const worker = await request('/api/users', { method: 'POST', body: JSON.stringify({
+      username: `planner.cross.${suffix}`, display_name: `Pracownik międzyprojektowy ${suffix}`, password: 'test-password-123',
+      project_role: 'user', project_active: 1, planner_enabled: 1, assignable: 1, active: 1
+    }) });
+    return { sourceProjectId: me.current_project.id, targetProjectId: target.id, workerId: worker.id, workerName: worker.display_name };
+  }, `${Date.now()}-${Math.floor(Math.random() * 10000)}`);
+  await openView(page, 'planner');
+  await page.locator('#planner-days').selectOption('31');
+  const rowCells = page.locator(`.planner-cell[data-user-id="${setup.workerId}"]`);
+  await expect(rowCells).toHaveCount(31);
+  const scroller = page.locator('.planner-scroll');
+  const beforeScroll = await scroller.evaluate(element => { element.scrollLeft = 420; return element.scrollLeft; });
+  await page.locator('#planner-tools-toggle').click();
+  await expect.poll(() => scroller.evaluate(element => element.scrollLeft)).toBeGreaterThanOrEqual(Math.max(1, beforeScroll - 2));
+
+  await rowCells.nth(1).dispatchEvent('pointerdown', { button: 0, buttons: 1 });
+  await page.locator('body').dispatchEvent('pointerup', { button: 0 });
+  await rowCells.nth(4).dispatchEvent('pointerdown', { button: 0, buttons: 1, ctrlKey: true, shiftKey: true });
+  await page.locator('body').dispatchEvent('pointerup', { button: 0 });
+  await expect(page.locator(`.planner-cell[data-user-id="${setup.workerId}"].multi-selected`)).toHaveCount(4);
+  await page.locator('#planner-selection-clear').click();
+  await rowCells.nth(6).dispatchEvent('pointerdown', { button: 0, buttons: 1, ctrlKey: true });
+  await rowCells.nth(8).dispatchEvent('pointerenter', { buttons: 1, ctrlKey: true });
+  await page.locator('body').dispatchEvent('pointerup', { button: 0 });
+  await expect(page.locator(`.planner-cell[data-user-id="${setup.workerId}"].multi-selected`)).toHaveCount(3);
+  await page.locator('#planner-selection-clear').click();
+
+  const planDate = await rowCells.first().getAttribute('data-date');
+  await page.evaluate(async ({ workerId, planDate }) => {
+    const response = await fetch('/api/planner/day', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: workerId, plan_date: planDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'offline', shift: 'Noc', count_in_manpower: 1 }] }) });
+    if (!response.ok) throw new Error((await response.json()).error || 'Nie udało się zapisać nocnego planu');
+  }, { workerId: setup.workerId, planDate });
+  await page.locator('[data-view="planner"]').evaluate(button => button.click());
+  const nightChip = page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"] .plan-chip.night-shift`);
+  await expect(nightChip).toContainText('OFF');
+  await expect(nightChip).toContainText('N');
+  await expect(nightChip).not.toContainText('Bez obszaru');
+  await page.evaluate(async ({ workerId, planDate }) => {
+    const response = await fetch('/api/planner/day', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: workerId, plan_date: planDate, entries: [] }) });
+    if (!response.ok) throw new Error((await response.json()).error || 'Nie udało się wyczyścić planu źródłowego');
+  }, { workerId: setup.workerId, planDate });
+  await page.locator('[data-view="planner"]').evaluate(button => button.click());
+
+  const requestCell = page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"]`);
+  await requestCell.dispatchEvent('pointerdown', { button: 0, buttons: 1 });
+  await page.locator('body').dispatchEvent('pointerup', { button: 0 });
+  await page.locator('#planner-bulk-cross-project').click();
+  await page.locator('#action-fields [name="target_project_id"]').selectOption(String(setup.targetProjectId));
+  await page.locator('#action-fields [name="work_mode"]').selectOption('offline');
+  await page.locator('#action-fields [name="shift"]').selectOption('Noc');
+  await page.locator('#action-fields [name="note"]').fill('Nocne wsparcie projektu docelowego');
+  await page.locator('#action-submit').click();
+  await expect(page.locator('.planner-cross-project-row.outgoing', { hasText: setup.workerName })).toBeVisible();
+
+  await page.evaluate(async targetProjectId => {
+    const response = await fetch('/api/select-project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project_id: targetProjectId }) });
+    if (!response.ok) throw new Error((await response.json()).error || 'Nie udało się przełączyć projektu');
+  }, setup.targetProjectId);
+  await page.reload();
+  await expect(page.locator('#content')).toBeVisible();
+  await openView(page, 'planner');
+  const incoming = page.locator('.planner-cross-project-row.incoming', { hasText: setup.workerName });
+  await expect(incoming).toBeVisible();
+  await incoming.locator('[data-planner-cross-project-action="approve"]').click();
+  const approvedChip = page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"] .plan-chip.night-shift`);
+  await expect(approvedChip).toContainText('OFF');
+  await expect(approvedChip).toContainText('N');
+  await expect(incoming).toHaveCount(0);
+  await page.evaluate(async ({ workerId, planDate }) => {
+    const planner = await fetch(`/api/planner?from=${planDate}&to=${planDate}`).then(response => response.json());
+    const entry = planner.entries.find(item => Number(item.user_id) === Number(workerId) && item.plan_date === planDate);
+    if (entry) await fetch(`/api/planner/entries/${entry.id}`, { method: 'DELETE' });
+  }, { workerId: setup.workerId, planDate });
+  await expectViewportContained(page);
 });
 
 test('odprawa i zagnieżdżone szczegóły zachowują okno źródłowe', async ({ page }, testInfo) => {

@@ -1214,6 +1214,64 @@ test('V8 supports announcements, aggregated KPI trends, unified Planner requirem
   }
 });
 
+test('Planner requires target-project approval and excludes transport from ON/OFF headcount', () => {
+  const temporary = temporaryDatabase();
+  const repository = openDatabase(temporary.path);
+  try {
+    const account = repository.authenticate('admin');
+    const sourceProjectId = 1;
+    const targetProject = repository.availableProjects(account.id).find(project => project.id !== sourceProjectId);
+    assert.ok(targetProject);
+    const planDate = '2031-04-14';
+    const rejectedDate = '2031-04-15';
+    let workerId;
+    repository.withProject(sourceProjectId, () => {
+      const admin = repository.me(account.id, sourceProjectId);
+      const worker = repository.saveUser(null, { username: 'cross.project.worker', display_name: 'Cross Project Worker', password: 'secret123', project_role: 'user', planner_enabled: 1 });
+      workerId = worker.id;
+      repository.savePlannerDay({ user_id: workerId, plan_date: planDate, entries: [{ activity_type: 'transport', duration_hours: 1.5 }] }, admin);
+      const transportOnly = repository.planner(planDate, planDate, admin);
+      assert.equal(transportOnly.summary[0].headcount, 1);
+      assert.equal(transportOnly.summary[0].online_headcount, 0);
+      assert.equal(transportOnly.summary[0].offline_headcount, 0);
+      assert.equal(transportOnly.mode_summary.range_online, 0);
+      assert.equal(transportOnly.mode_summary.range_offline, 0);
+      repository.createPlannerCrossProjectRequests({ target_project_id: targetProject.id, items: [
+        { user_id: workerId, plan_date: planDate, work_mode: 'online', shift: 'Noc', count_in_manpower: 1, note: 'Wsparcie nocnego rozruchu' },
+        { user_id: workerId, plan_date: rejectedDate, work_mode: 'offline', shift: 'Dzień', count_in_manpower: 0 }
+      ] }, admin);
+      assert.equal(repository.planner(planDate, rejectedDate, admin).outgoing_cross_project_requests.length, 2);
+    });
+    repository.withProject(targetProject.id, () => {
+      const admin = repository.me(account.id, targetProject.id);
+      let planner = repository.planner(planDate, rejectedDate, admin);
+      assert.equal(planner.incoming_cross_project_requests.length, 2);
+      assert.equal(planner.entries.some(entry => entry.user_id === workerId), false, 'pending request must not create a plan');
+      const approved = planner.incoming_cross_project_requests.find(item => item.plan_date === planDate);
+      const rejected = planner.incoming_cross_project_requests.find(item => item.plan_date === rejectedDate);
+      repository.reviewPlannerCrossProjectRequest(approved.id, { action: 'approve' }, admin);
+      repository.reviewPlannerCrossProjectRequest(rejected.id, { action: 'reject' }, admin);
+      planner = repository.planner(planDate, rejectedDate, admin);
+      const entry = planner.entries.find(item => item.user_id === workerId && item.plan_date === planDate);
+      assert.equal(entry.work_mode, 'online');
+      assert.equal(entry.shift, 'Noc');
+      assert.equal(entry.controller_group_id, null);
+      assert.equal(planner.entries.some(item => item.user_id === workerId && item.plan_date === rejectedDate), false);
+      assert.ok(planner.users.some(user => user.id === workerId), 'approval activates the worker in the target Planner');
+      assert.equal(planner.incoming_cross_project_requests.length, 0);
+    });
+    repository.withProject(sourceProjectId, () => {
+      const admin = repository.me(account.id, sourceProjectId);
+      const planner = repository.planner(planDate, rejectedDate, admin);
+      assert.equal(planner.outgoing_cross_project_requests.length, 0);
+      assert.ok(planner.cross_project_entries.some(entry => entry.user_id === workerId && entry.plan_date === planDate && entry.project_id === targetProject.id));
+    });
+  } finally {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
 test('V9 supports guarded duplication, comments, pushes, calendar ranges and work-time calculation', () => {
   const temporary = temporaryDatabase();
   const repository = openDatabase(temporary.path);
@@ -1307,7 +1365,7 @@ test('V9 supports guarded duplication, comments, pushes, calendar ranges and wor
       const normalizedTransport = managerPlanner.entries.find(item => item.user_id === worker.id && item.plan_date === '2026-10-11');
       assert.equal(normalizedTransport.controller_group_id, null, 'transport must not retain a project area');
       assert.equal(normalizedTransport.shift, 'Dzień', 'transport must not retain a selected work shift');
-      assert.equal(managerPlanner.summary.find(item => item.plan_date === '2026-10-11').offline_headcount, 1);
+      assert.equal(managerPlanner.summary.find(item => item.plan_date === '2026-10-11').offline_headcount, 0, 'transport must remain outside ON/OFF headcount');
       assert.equal(managerPlanner.area_day_summary.find(item => item.id === root.id).days[0].online_required, 2);
       assert.equal(workerPlanner.requirements.length, 0);
       assert.equal(workerPlanner.time_details, null);

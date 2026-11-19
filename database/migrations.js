@@ -82,7 +82,33 @@ export function prepareDatabase(db, { seedDemo, demoLimit = 100 }) {
   runMigration(db, '054-task-image-content-tokens', () => migrateTaskImageContentTokens(db));
   runMigration(db, '055-planner-transport-minute-precision', () => migratePlannerTransportMinutePrecision(db));
   runMigration(db, '056-planner-manpower-scope', () => migratePlannerManpowerScope(db));
+  runMigration(db, '057-planner-cross-project-requests', () => migratePlannerCrossProjectRequests(db));
   return defaultProjectId;
+}
+
+function migratePlannerCrossProjectRequests(db) {
+  db.exec(`CREATE TABLE IF NOT EXISTS planner_cross_project_requests (
+    id INTEGER PRIMARY KEY,
+    source_project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    target_project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    plan_date TEXT NOT NULL,
+    work_mode TEXT NOT NULL DEFAULT 'online' CHECK(work_mode IN ('online','offline')),
+    shift TEXT NOT NULL DEFAULT 'Dzień',
+    count_in_manpower INTEGER NOT NULL DEFAULT 1 CHECK(count_in_manpower IN (0,1)),
+    note TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),
+    requested_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    decided_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    linked_entry_id INTEGER REFERENCES planner_entries(id) ON DELETE SET NULL,
+    decided_at TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK(source_project_id!=target_project_id),
+    UNIQUE(source_project_id,target_project_id,user_id,plan_date)
+  ) STRICT;
+  CREATE INDEX IF NOT EXISTS idx_planner_cross_project_target ON planner_cross_project_requests(target_project_id,status,plan_date,user_id);
+  CREATE INDEX IF NOT EXISTS idx_planner_cross_project_source ON planner_cross_project_requests(source_project_id,status,created_at DESC)`);
 }
 
 function migratePlannerManpowerScope(db) {

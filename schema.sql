@@ -556,6 +556,27 @@ CREATE TABLE IF NOT EXISTS planner_entries (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS planner_cross_project_requests (
+  id INTEGER PRIMARY KEY,
+  source_project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  target_project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  plan_date TEXT NOT NULL,
+  work_mode TEXT NOT NULL DEFAULT 'online' CHECK(work_mode IN ('online','offline')),
+  shift TEXT NOT NULL DEFAULT 'Dzień',
+  count_in_manpower INTEGER NOT NULL DEFAULT 1 CHECK(count_in_manpower IN (0,1)),
+  note TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),
+  requested_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  decided_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  linked_entry_id INTEGER REFERENCES planner_entries(id) ON DELETE SET NULL,
+  decided_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CHECK(source_project_id!=target_project_id),
+  UNIQUE(source_project_id,target_project_id,user_id,plan_date)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS planner_requirements (
   id INTEGER PRIMARY KEY,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -1125,6 +1146,8 @@ CREATE INDEX IF NOT EXISTS idx_project_memberships_user ON project_memberships(u
 CREATE INDEX IF NOT EXISTS idx_planner_vehicles_project ON planner_vehicles(project_id,sort_order,code);
 CREATE INDEX IF NOT EXISTS idx_planner_project_date ON planner_entries(project_id,plan_date,user_id);
 CREATE INDEX IF NOT EXISTS idx_planner_user_date_project ON planner_entries(user_id,plan_date,project_id);
+CREATE INDEX IF NOT EXISTS idx_planner_cross_project_target ON planner_cross_project_requests(target_project_id,status,plan_date,user_id);
+CREATE INDEX IF NOT EXISTS idx_planner_cross_project_source ON planner_cross_project_requests(source_project_id,status,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_planner_requirements_date ON planner_requirements(project_id,plan_date,controller_group_id);
 CREATE INDEX IF NOT EXISTS idx_announcements_project ON announcements(project_id,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_announcement_labels_project ON announcement_labels(project_id,sort_order,name);
