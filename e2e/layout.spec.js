@@ -685,6 +685,8 @@ test('Status przełącza globalne i wewnętrzne grupowanie funkcyjne', async ({ 
   await page.locator('#action-submit').click();
   await expect(page.locator('#status-group-functional')).toContainText('wewnątrz grup');
   await expect(page.locator('.matrix-functional-group-row').first()).toBeVisible();
+  const headerAlignment = await page.locator('.status-matrix-table th').evaluateAll(headers => [...new Set(headers.map(header => getComputedStyle(header).verticalAlign))]);
+  expect(headerAlignment).toEqual(['middle']);
   const controllerHeader = page.locator('.status-matrix-table th.matrix-controller-cell').first();
   await expect(controllerHeader).toContainText('Sterownik');
   await controllerHeader.locator('[data-status-sort-controller]').click();
