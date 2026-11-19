@@ -179,7 +179,7 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   await expect(page.locator('#planner-bulk-vacation')).toHaveText('+ Urlop');
   await expect(page.locator('#planner-bulk-approve')).toBeHidden();
 
-  const cell = page.locator('.planner-cell[data-editable="1"]').first();
+  const cell = page.locator('.planner-cell[data-editable="1"]:not(.planned):not(.absent)').first();
   const userId = await cell.getAttribute('data-user-id');
   const date = await cell.getAttribute('data-date');
   await cell.click();
@@ -571,6 +571,103 @@ test('szybkie dodawanie statusu obsługuje tekst ze średnikami i tabelę kolumn
   saved = await page.evaluate(groupId => fetch('/api/status?controller=all').then(response => response.json()).then(items => items.filter(item => item.status_group_id === groupId)), configured.groupId);
   expect(saved.some(item => item.matrix_values[configured.typeId] === 'Wyspa zaworowa' && item.matrix_values[configured.nameId] === 'YV1')).toBe(true);
   await expectViewportContained(page);
+});
+
+test('kopiowanie grup statusu ma uporządkowany zakres i zwijany konfigurator', async ({ page }) => {
+  const configured = await page.evaluate(async () => {
+    const request = async (path, options = {}) => {
+      const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || `${response.status} ${path}`);
+      return body;
+    };
+    const suffix = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+    const group = await request('/api/status-groups', { method: 'POST', body: JSON.stringify({ name: `Źródło kopiowania ${suffix}` }) });
+    await request(`/api/status-groups/${group.id}/columns`, { method: 'POST', body: JSON.stringify({ name: 'Nazwa urządzenia', column_role: 'basic', field_type: 'text' }) });
+    await request(`/api/status-groups/${group.id}/columns`, { method: 'POST', body: JSON.stringify({ name: 'Kontrola sygnału', column_role: 'subpoint', field_type: 'status', include_in_progress: 1 }) });
+    return { groupId: group.id, groupName: group.name, copyName: `Kopia ${suffix}` };
+  });
+  await page.reload();
+  await openView(page, 'settings');
+  await page.locator('[data-config-panel="status_matrix"]').click();
+  await expect(page.locator('#config-full-dialog')).toBeVisible();
+  const sourceCard = page.locator(`.status-config-group[data-status-config-group="${configured.groupId}"]`);
+  await sourceCard.locator('.copy-status-layout').click();
+  await expect(page.locator('#action-fields .field > span')).toHaveText(['Nazwa nowej grupy', 'Grupa źródłowa', 'Zakres kopiowania']);
+  await expect(page.locator('#action-fields [name="source_group_id"]')).toHaveValue(String(configured.groupId));
+  await expect(page.locator('#action-fields [name="element_refs"]:checked')).toHaveCount(2);
+  await page.locator('#action-fields [name="new_group_name"]').fill(configured.copyName);
+  await page.locator('#action-submit').click();
+  await expect(page.locator('#action-dialog')).not.toBeVisible();
+  await expect(page.locator('.status-config-group', { hasText: configured.copyName })).toBeVisible();
+  await sourceCard.locator('.status-config-group-toggle').click();
+  await expect(sourceCard.locator('.status-config-group-body')).toBeHidden();
+  await expectViewportContained(page);
+});
+
+test('Status przełącza globalne i wewnętrzne grupowanie funkcyjne', async ({ page }) => {
+  await openView(page, 'status');
+  await page.locator('#status-group-functional').click();
+  await page.locator('#action-fields [name="mode"]').selectOption('global');
+  await page.locator('#action-submit').click();
+  await expect(page.locator('#status-group-functional')).toContainText('globalne');
+  await expect(page.locator('.status-functional-global').first()).toBeVisible();
+
+  await page.locator('#status-group-functional').click();
+  await page.locator('#action-fields [name="mode"]').selectOption('within');
+  await page.locator('#action-submit').click();
+  await expect(page.locator('#status-group-functional')).toContainText('wewnątrz grup');
+  await expect(page.locator('.matrix-functional-group-row').first()).toBeVisible();
+  await expectViewportContained(page);
+});
+
+test('Planner sortuje kafelki i zwija nadmiar powyżej trzech', async ({ page }) => {
+  await page.evaluate(async () => {
+    const users = await fetch('/api/users').then(response => response.json());
+    const participant = users.find(user => user.project_active) || users[0];
+    const response = await fetch(`/api/users/${participant.id}/planner`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ planner_enabled: 1 }) });
+    if (!response.ok) throw new Error((await response.json()).error || 'Nie udało się włączyć uczestnika Plannera');
+  });
+  await page.reload();
+  await openView(page, 'planner');
+  const cell = page.locator('.planner-cell[data-editable="1"]').first();
+  const userId = Number(await cell.getAttribute('data-user-id'));
+  const date = await cell.getAttribute('data-date');
+  const areas = await page.evaluate(async suffix => {
+    const request = async (path, options = {}) => {
+      const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || `${response.status} ${path}`);
+      return body;
+    };
+    const first = await request('/api/controller-groups', { method: 'POST', body: JSON.stringify({ name: `E2E Obszar A ${suffix}` }) });
+    const second = await request('/api/controller-groups', { method: 'POST', body: JSON.stringify({ name: `E2E Obszar B ${suffix}` }) });
+    return [first, second];
+  }, `${Date.now()}-${Math.floor(Math.random() * 10000)}`);
+  await page.evaluate(async ({ userId, date, areas }) => {
+    const response = await fetch('/api/planner/day', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: userId, plan_date: date, entries: [
+      { activity_type: 'work', controller_group_id: areas[1].id, work_mode: 'online', shift: 'Dzień' },
+      { activity_type: 'work', allow_without_area: 1, work_mode: 'offline', shift: 'Dzień' },
+      { activity_type: 'transport', duration_hours: 1 },
+      { activity_type: 'work', controller_group_id: areas[0].id, work_mode: 'online', shift: 'Dzień' }
+    ] }) });
+    if (!response.ok) throw new Error((await response.json()).error || 'Nie udało się zapisać planu');
+  }, { userId, date, areas });
+  await page.locator('[data-view="planner"]').evaluate(button => button.click());
+  const savedCell = page.locator(`.planner-cell[data-user-id="${userId}"][data-date="${date}"]`);
+  await expect(savedCell.locator('.plan-chip:visible')).toHaveCount(3);
+  await expect(savedCell.locator('.plan-chip').nth(0)).toHaveClass(/transport-only/);
+  await expect(savedCell.locator('.plan-chip').nth(1)).toContainText('Bez obszaru');
+  await expect(savedCell.locator('.planner-cell-expand')).toHaveText('+1');
+  await savedCell.locator('.planner-cell-expand').click();
+  await expect(savedCell.locator('.plan-chip:visible')).toHaveCount(4);
+  await expect(savedCell.locator('.plan-chip').nth(2)).toContainText(areas[0].name);
+  await expect(savedCell.locator('.plan-chip').nth(3)).toContainText(areas[1].name);
+  await expectViewportContained(page);
+  await page.evaluate(async ({ userId, date }) => {
+    const response = await fetch('/api/planner/day', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: userId, plan_date: date, entries: [] }) });
+    if (!response.ok) throw new Error((await response.json()).error || 'Nie udało się posprzątać planu testowego');
+  }, { userId, date });
 });
 
 test('odprawa i zagnieżdżone szczegóły zachowują okno źródłowe', async ({ page }, testInfo) => {

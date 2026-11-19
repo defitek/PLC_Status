@@ -2022,8 +2022,12 @@ function createRepository(db, defaultProjectId) {
   }
 
   function movePlannerEntry(input, currentUser) {
-    const entry = one('SELECT * FROM planner_entries WHERE id=? AND project_id=?', asId(input.entry_id), activeProjectId());
-    if (!entry) throw appError('Nie znaleziono przypisania Plannera', 404);
+    const entryIds = [...new Set((Array.isArray(input.entry_ids) ? input.entry_ids : [input.entry_id]).map(asId).filter(Boolean))].slice(0, 30);
+    if (!entryIds.length) throw appError('Wybierz co najmniej jedną aktywność Plannera');
+    const entries = all(`SELECT * FROM planner_entries WHERE project_id=? AND id IN (${entryIds.map(() => '?').join(',')}) ORDER BY id`, activeProjectId(), ...entryIds);
+    if (entries.length !== entryIds.length) throw appError('Nie znaleziono jednego z zaznaczonych przypisań Plannera', 404);
+    const entry = entries[0];
+    if (entries.some(item => Number(item.user_id) !== Number(entry.user_id) || item.plan_date !== entry.plan_date)) throw appError('Przenoszone aktywności muszą pochodzić z jednego dnia i od jednego pracownika');
     const targetUserId = asId(input.target_user_id);
     const targetDate = nullableDate(input.target_date);
     if (!targetUserId || !targetDate) throw appError('Pracownik i dzień docelowy są wymagane');
@@ -2032,9 +2036,10 @@ function createRepository(db, defaultProjectId) {
     if (entry.user_id === targetUserId && entry.plan_date === targetDate) return plannerData(targetDate, targetDate, currentUser);
     const sourceRows = all('SELECT * FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=? ORDER BY id', activeProjectId(), entry.user_id, entry.plan_date);
     const targetRows = all('SELECT * FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=? ORDER BY id', activeProjectId(), targetUserId, targetDate);
-    const moved = { id: entry.id, controller_group_id: entry.controller_group_id, work_mode: entry.work_mode, shift: entry.shift, transport_mode: entry.transport_mode, duration_hours: entry.duration_hours, count_in_manpower: entry.count_in_manpower, vehicle_id: entry.vehicle_id, note: entry.note };
-    const target = normalizePlannerEntries([...targetRows, moved]);
-    const source = normalizePlannerEntries(sourceRows.filter(row => row.id !== entry.id));
+    const selectedIds = new Set(entries.map(item => Number(item.id)));
+    const moved = entries.map(item => ({ id: item.id, controller_group_id: item.controller_group_id, work_mode: item.work_mode, shift: item.shift, transport_mode: item.transport_mode, duration_hours: item.duration_hours, count_in_manpower: item.count_in_manpower, vehicle_id: item.vehicle_id, note: item.note }));
+    const target = normalizePlannerEntries([...targetRows, ...moved]);
+    const source = normalizePlannerEntries(sourceRows.filter(row => !selectedIds.has(Number(row.id))));
     db.exec('BEGIN IMMEDIATE');
     try {
       replacePlannerDay(targetUserId, targetDate, target, currentUser);
@@ -4535,7 +4540,22 @@ function createRepository(db, defaultProjectId) {
       };
       db.exec('BEGIN IMMEDIATE');
       try {
-        if (mode === 'whole_group') {
+        if (mode === 'new_group_selected') {
+          const selectedRefs = new Set((Array.isArray(input.element_refs) ? input.element_refs : []).map(clean).filter(Boolean));
+          const direct = statusColumnLayout(source.group.id).columns.filter(column => selectedRefs.has(`direct:${column.id}`));
+          const subgroupCopies = all('SELECT * FROM status_subgroups WHERE status_group_id=? AND active=1 ORDER BY sort_order,id', source.group.id).map(subgroup => ({
+            subgroup,
+            columns: statusColumnLayout(source.group.id, subgroup.id).columns.filter(column => selectedRefs.has(`subgroup:${subgroup.id}:${column.id}`))
+          })).filter(item => item.columns.length);
+          if (!direct.length && !subgroupCopies.length) throw appError('Wybierz co najmniej jeden element układu do skopiowania');
+          const order = Number(one('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM status_groups WHERE project_id=?', activeProjectId())?.value || 0);
+          const newGroupId = insertRecord('status_groups', { project_id: activeProjectId(), name: uniqueGroupName(input.new_group_name), description: source.group.description || '', sort_order: order, active: 1 });
+          copyColumns(direct, newGroupId, null);
+          subgroupCopies.forEach(({ subgroup, columns }, index) => {
+            const newSubgroupId = insertRecord('status_subgroups', { status_group_id: newGroupId, name: subgroup.name, description: subgroup.description || '', sort_order: index, active: 1 });
+            copyColumns(columns, newGroupId, newSubgroupId);
+          });
+        } else if (mode === 'whole_group') {
           const order = Number(one('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM status_groups WHERE project_id=?', activeProjectId())?.value || 0);
           const newGroupId = insertRecord('status_groups', { project_id: activeProjectId(), name: uniqueGroupName(input.new_group_name), description: source.group.description || '', sort_order: order, active: 1 });
           const direct = statusColumnLayout(source.group.id).columns;

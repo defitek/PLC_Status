@@ -126,6 +126,16 @@ test('V20 supports hierarchical annotations, meeting priorities and review histo
     repository.copyStatusLayoutElements({ source_group_id: source.id, target_group_id: target.id, mode: 'selected', column_ids: [column.id] });
     const copied = repository.config().status_groups.find(group => group.id === target.id).columns.find(item => item.name === column.name);
     assert.equal(copied.description, 'Potwierdź kierunek obrotów');
+    const sourceSubgroup = repository.saveStatusSubgroup(source.id, null, { name: 'Podgrupa napędów' });
+    const subgroupColumn = repository.saveStatusColumn(source.id, sourceSubgroup.id, null, { name: 'Potwierdzenie STO', column_role: 'subpoint', field_type: 'status', include_in_progress: 1 });
+    repository.copyStatusLayoutElements({
+      source_group_id: source.id, mode: 'new_group_selected', new_group_name: 'Napędy V19 — wybrane',
+      element_refs: [`direct:${column.id}`, `subgroup:${sourceSubgroup.id}:${subgroupColumn.id}`]
+    });
+    const selectedCopy = repository.config().status_groups.find(group => group.name === 'Napędy V19 — wybrane');
+    assert.deepEqual(selectedCopy.columns.map(item => item.name), ['Test kierunku']);
+    assert.deepEqual(selectedCopy.subgroups.map(item => item.name), ['Podgrupa napędów']);
+    assert.deepEqual(selectedCopy.subgroups[0].columns.map(item => item.name), ['Potwierdzenie STO']);
 
     const meeting = repository.saveProjectMeeting(null, {
       period_from: '2026-10-26', period_to: '2026-10-30', title: 'Plan uruchomienia V19',
@@ -1177,10 +1187,15 @@ test('V8 supports announcements, aggregated KPI trends, unified Planner requirem
       assert.equal(managerPlan.area_day_summary.find(item => item.id === roots[0].id).days[0].online_required, 3);
 
       repository.setPlannerEnabled(guest.id, { planner_enabled: 1 });
-      repository.savePlannerDay({ user_id: guest.id, plan_date: today, entries: [{ controller_group_id: roots[0].id, work_mode: 'online', shift: 'Dzień' }] }, admin);
-      const entry = repository.planner(today, today, admin).entries.find(item => item.user_id === guest.id);
-      repository.movePlannerEntry({ entry_id: entry.id, target_user_id: guest.id, target_date: tomorrow, copy: true }, admin);
-      assert.ok(repository.planner(today, tomorrow, admin).entries.some(item => item.user_id === guest.id && item.plan_date === tomorrow));
+      repository.savePlannerDay({ user_id: guest.id, plan_date: today, entries: [
+        { controller_group_id: roots[0].id, work_mode: 'online', shift: 'Dzień' },
+        { controller_group_id: roots[1].id, work_mode: 'offline', shift: 'Dzień' }
+      ] }, admin);
+      const selectedEntries = repository.planner(today, today, admin).entries.filter(item => item.user_id === guest.id);
+      repository.movePlannerEntry({ entry_id: selectedEntries[0].id, entry_ids: selectedEntries.map(item => item.id), target_user_id: guest.id, target_date: tomorrow, copy: true }, admin);
+      const copiedEntries = repository.planner(today, tomorrow, admin).entries.filter(item => item.user_id === guest.id);
+      assert.equal(copiedEntries.filter(item => item.plan_date === today).length, 2);
+      assert.equal(copiedEntries.filter(item => item.plan_date === tomorrow).length, 2);
 
       const overview = repository.overview('all');
       const rootTrend = overview.hierarchy_trends.find(item => item.scope === `group:${roots[0].id}`);

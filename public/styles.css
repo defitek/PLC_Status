@@ -575,6 +575,7 @@ dialog::backdrop { background:#101827a3; }
 .status-layout-actions { display:flex; flex:0 0 auto; gap:6px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }.button-file { display:inline-flex; align-items:center; justify-content:center; cursor:pointer; }.button-file input { position:absolute; width:1px; height:1px; overflow:hidden; opacity:0; pointer-events:none; }
 .status-config-group { overflow:hidden; border:1px solid var(--line); border-radius:9px; background:var(--surface); }
 .status-config-group>header,.status-config-subgroup>header { display:flex; gap:6px; align-items:center; min-height:44px; padding:7px 9px; background:var(--panel-alt); border-bottom:1px solid var(--line); }
+.status-config-group-toggle { flex:0 0 28px; width:28px; padding-inline:0; font-size:12px; }.status-config-group-body.hidden { display:none; }
 .status-config-group>header>span:not(.order-buttons),.status-config-subgroup>header>span:not(.order-buttons) { display:grid; min-width:120px; margin-right:auto; }.status-config-group-title { font-size:13px; }.status-config-group>header small,.status-config-subgroup>header small { color:var(--muted); font-size:8px; }
 .status-config-direct { padding:8px; }.status-config-direct>h4 { margin:0 0 6px; color:var(--muted); font-size:9px; text-transform:uppercase; letter-spacing:.05em; }
 .status-config-subgroups { display:grid; gap:7px; padding:0 8px 8px; }.status-config-subgroup { overflow:hidden; border:1px solid var(--line); border-radius:7px; }
@@ -587,6 +588,8 @@ dialog::backdrop { background:#101827a3; }
 .status-subpoint-field.text input { width:100%; min-width:0; }.status-text-marker { display:grid; place-items:center; flex:0 0 22px; width:22px; height:22px; color:var(--blue); background:var(--blue-soft); border:1px solid color-mix(in srgb,var(--blue) 25%,var(--line)); border-radius:5px; font-size:8px; font-style:normal; font-weight:800; }
 .matrix-last-update { min-width:145px!important; text-align:center!important; vertical-align:middle!important; }.matrix-last-update b,.matrix-last-update small { display:block; text-align:center; }.matrix-last-update b { font-size:8px; }.matrix-last-update small,.matrix-last-update span { color:var(--muted); font-size:7px; }
 .status-matrix-table .matrix-functional-group-row>th { position:static; left:auto; z-index:0; padding:5px 9px; color:var(--blue); text-align:left; background:var(--blue-soft); border-top:1px solid var(--line); border-bottom:1px solid var(--line); font-size:9px; text-transform:uppercase; letter-spacing:.05em; }
+.status-controller-block { display:grid; gap:9px; }.status-controller-block+ .status-controller-block { margin-top:12px; padding-top:12px; border-top:2px solid var(--line); }.status-controller-block>header { padding:8px 11px; color:var(--text); background:color-mix(in srgb,var(--blue-soft) 55%,var(--surface)); border:1px solid color-mix(in srgb,var(--blue) 28%,var(--line)); border-radius:8px; }.status-controller-block>header b,.status-controller-block>header small,.status-functional-global>header b,.status-functional-global>header small { display:block; }.status-controller-block>header small,.status-functional-global>header small { margin-top:2px; color:var(--muted); font-size:8px; }.status-functional-global { overflow:hidden; border:1px solid color-mix(in srgb,var(--blue) 32%,var(--line)); border-radius:9px; background:var(--panel-alt); }.status-functional-global>header { padding:7px 10px; color:var(--blue); background:var(--blue-soft); border-bottom:1px solid var(--line); }.status-functional-global>div { display:grid; gap:8px; padding:8px; }.status-functional-global .status-matrix-group { margin:0; }
+.status-copy-scope .ui-multiselect { grid-template-columns:repeat(2,minmax(0,1fr)); max-height:min(300px,42vh); gap:3px; padding:5px; }.status-copy-scope .ui-multiselect label { min-height:25px; padding:3px 5px; font-size:9px; }
 
 @media(max-width:800px) {
   .status-matrix-content { max-height:calc(100vh - 255px); }
@@ -595,6 +598,7 @@ dialog::backdrop { background:#101827a3; }
   .status-config-group>header,.status-config-subgroup>header { align-items:flex-start; flex-wrap:wrap; }
   .status-column-kinds,.status-basic-fields>div,.status-subpoint-fields>div:last-child { grid-template-columns:1fr; }
   .status-config-intro { align-items:flex-start; flex-direction:column; }.status-layout-actions { width:100%; justify-content:flex-start; }
+  .status-copy-scope .ui-multiselect { grid-template-columns:1fr; }
   .record-scope-summary { grid-template-columns:1fr; }
   .status-subpoint-field { grid-template-columns:1fr; }
 }
@@ -1554,6 +1558,7 @@ input:is([type=checkbox],[type=radio]) { accent-color:var(--blue); cursor:pointe
 .planner-manpower-toggle input { width:15px; min-width:15px; margin:0; padding:0; }.planner-manpower-toggle[hidden] { display:none; }
 .planner-area-multiselect { width:100%; }.planner-area-multiselect>.mentions { max-height:240px; }.planner-area-multiselect .planner-no-area-option { border-bottom:1px solid var(--line); }.planner-area-multiselect .planner-no-area-option span { display:grid; gap:2px; }.planner-area-multiselect .planner-no-area-option small { color:var(--muted); font-size:8px; font-weight:400; }
 .plan-chip.excluded-from-manpower { border:1px dashed currentColor; opacity:.78; }
+.planner-cell-expand { display:block; min-height:18px; margin:2px auto 0; padding:1px 6px; color:var(--blue); background:var(--blue-soft); border:1px solid color-mix(in srgb,var(--blue) 35%,var(--line)); border-radius:9px; font-size:7px; font-weight:800; line-height:1; cursor:pointer; }.planner-cell.entries-expanded { height:auto; min-height:74px; vertical-align:top; }.planner-cell.entries-expanded .planner-cell-expand { margin-bottom:18px; }
 .planner-vehicle-list { display:grid; gap:5px; }.planner-vehicle-list .settings-row { min-height:42px; }
 
 /* Szybkie dodawanie punktów statusu */
