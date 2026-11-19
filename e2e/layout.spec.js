@@ -628,6 +628,38 @@ test('kopiowanie grup statusu ma uporządkowany zakres i zwijany konfigurator', 
   await expectViewportContained(page);
 });
 
+test('konfigurator importuje grupy statusu z tekstu z tabulatorami', async ({ page }, testInfo) => {
+  const suffix = `${testInfo.project.name}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+  const groupName = `Import tekstowy ${suffix}`;
+  await openView(page, 'settings');
+  await page.locator('[data-config-panel="status_matrix"]').click();
+  await page.locator('#status-layout-text-import').click();
+  const textarea = page.locator('#action-fields [name="layout_text"]');
+  await textarea.fill(` ${groupName}\n\tDevice Type`);
+  await expect(page.locator('#status-text-import-preview')).toContainText('Wiersz 1');
+  await expect(page.locator('#action-submit')).toBeDisabled();
+  await textarea.fill(`${groupName}\n\tDevice Type\n\tDevice Name\n\t\t+24V\tCzy urządzenie jest zasilone +24V?\tNIE\n\t\tGreen\tCzy urządzenie jest w pełni skonfigurowane?\tTAK`);
+  await expect(page.locator('#status-text-import-preview')).toContainText('1 grupa, 4 kolumn i podpunktów');
+  await expect(page.locator('#action-submit')).toBeEnabled();
+  await page.locator('#action-submit').click();
+  await expect(page.locator('#action-dialog')).not.toBeVisible();
+  await expect.poll(() => page.evaluate(async name => {
+    const config = await fetch('/api/config').then(response => response.json());
+    const group = (config.status_groups || []).find(item => item.name === name);
+    if (!group) return null;
+    return (group.columns || []).map(column => ({ name: column.name, role: column.column_role, description: column.description, included: Number(column.include_in_progress) }));
+  }, groupName)).not.toBeNull();
+  const columns = await page.evaluate(async name => {
+    const config = await fetch('/api/config').then(response => response.json());
+    return config.status_groups.find(item => item.name === name).columns;
+  }, groupName);
+  expect(columns.find(column => column.name === 'Device Type')).toMatchObject({ column_role: 'basic', field_type: 'text' });
+  expect(columns.find(column => column.name === '+24V')).toMatchObject({ column_role: 'subpoint', field_type: 'status', description: 'Czy urządzenie jest zasilone +24V?', include_in_progress: 0 });
+  expect(columns.find(column => column.name === 'Green')).toMatchObject({ column_role: 'subpoint', field_type: 'status', include_in_progress: 1 });
+  await expect(page.locator('.status-config-group', { hasText: groupName })).toBeVisible();
+  await expectViewportContained(page);
+});
+
 test('Status przełącza globalne i wewnętrzne grupowanie funkcyjne', async ({ page }) => {
   await openView(page, 'status');
   await page.locator('#status-group-functional').click();
@@ -653,7 +685,30 @@ test('Status przełącza globalne i wewnętrzne grupowanie funkcyjne', async ({ 
   await page.locator('#action-submit').click();
   await expect(page.locator('#status-group-functional')).toContainText('wewnątrz grup');
   await expect(page.locator('.matrix-functional-group-row').first()).toBeVisible();
-  await expect(page.locator('.status-matrix-table th.matrix-controller-cell').first()).toContainText('Sterownik');
+  const controllerHeader = page.locator('.status-matrix-table th.matrix-controller-cell').first();
+  await expect(controllerHeader).toContainText('Sterownik');
+  await controllerHeader.locator('[data-status-sort-controller]').click();
+  await expect(page.locator('.status-matrix-table [data-status-sort-controller].active').first()).toContainText('↑');
+  await page.locator('.status-matrix-table [data-status-sort-controller].active').first().click();
+  await expect(page.locator('.status-matrix-table [data-status-sort-controller].active').first()).toContainText('↓');
+  const fittedController = await page.locator('.status-matrix-table th.matrix-controller-cell').first().evaluate(header => ({
+    minWidth: getComputedStyle(header).minWidth,
+    whiteSpace: getComputedStyle(header).whiteSpace
+  }));
+  expect(fittedController.minWidth).toBe('0px');
+  expect(fittedController.whiteSpace).toBe('nowrap');
+  const resizeHandle = page.locator('.status-matrix-table [data-status-column-resizer]').first();
+  const columnKey = await resizeHandle.getAttribute('data-status-column-resizer');
+  const initialWidth = await resizeHandle.locator('xpath=..').evaluate(header => header.getBoundingClientRect().width);
+  const startX = await resizeHandle.evaluate(handle => handle.getBoundingClientRect().left + 3);
+  await resizeHandle.dispatchEvent('pointerdown', { button: 0, clientX: startX, pointerId: 7, pointerType: 'mouse' });
+  await page.evaluate(x => document.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: x, pointerId: 7, pointerType: 'mouse' })), startX + 48);
+  await page.evaluate(x => document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, clientX: x, pointerId: 7, pointerType: 'mouse' })), startX + 48);
+  const resizedWidth = await page.locator(`.status-matrix-table th[data-status-column-key="${columnKey}"]`).first().evaluate(header => header.getBoundingClientRect().width);
+  expect(resizedWidth).toBeGreaterThan(initialWidth + 30);
+  await page.locator('.status-matrix-table [data-status-sort-controller].active').first().click();
+  const persistedWidth = await page.locator(`.status-matrix-table th[data-status-column-key="${columnKey}"]`).first().evaluate(header => header.getBoundingClientRect().width);
+  expect(Math.abs(persistedWidth - resizedWidth)).toBeLessThanOrEqual(2);
   const withinToggle = page.locator('.matrix-functional-group-row button').first();
   await withinToggle.click();
   await expect(withinToggle).toHaveAttribute('aria-expanded', 'false');

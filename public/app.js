@@ -29,7 +29,7 @@ const state = {
   operationsTab: 'triage', operationsLoading: new Set(), triageSelection: new Set(), savedViewApplying: false, activeSavedView: {}, taskDependencyOptions: [], dependencyOptions: null, dependencyOptionsAll: false,
   dataCache: { projectId: null, entries: new Map(), versions: new Map() },
   collapsedStatusGroups: new Set(), collapsedStatusConfigGroups: new Set(), collapsedTaskGroups: new Set(), statusTransfer: null, overviewHierarchyLevel: 'areas', statusMatrixQuery: '', statusFunctionGroupFilter: '', statusFunctionGroupingMode: '', statusShowControllerColumn: false, statusShowUnassigned: false,
-  statusMatrixSort: { columnId: null, direction: 1 },
+  statusMatrixSort: { key: '', columnId: null, direction: 1 }, statusColumnWidths: {}, statusColumnWidthProjectId: null, statusColumnResizeCleanup: null,
   hiddenColumns: { status: new Set(), tasks: new Set(), points: new Set(), external: new Set() },
   grouping: { status: 'category', tasks: '', notes: 'scope', history: 'hierarchy' },
   sort: { status: { key: '', direction: 1 }, tasks: { key: '', direction: 1 }, points: { key: '', direction: 1 }, external: { key: 'next_followup', direction: 1 } }
@@ -165,6 +165,27 @@ function ensureProjectCache() {
   state.dataCache = { projectId, entries: new Map(), versions: new Map() };
   state.operations = null;
   state.operationsLoading.clear();
+}
+
+function ensureStatusColumnWidths() {
+  const projectId = Number(state.me?.current_project?.id) || 0;
+  if (state.statusColumnWidthProjectId === projectId) return state.statusColumnWidths;
+  state.statusColumnWidthProjectId = projectId;
+  try {
+    const stored = JSON.parse(localStorage.getItem(`status-column-widths:${projectId}`) || '{}');
+    state.statusColumnWidths = stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
+  } catch { state.statusColumnWidths = {}; }
+  return state.statusColumnWidths;
+}
+
+function persistStatusColumnWidths() {
+  try { localStorage.setItem(`status-column-widths:${Number(state.me?.current_project?.id) || 0}`, JSON.stringify(state.statusColumnWidths)); } catch { /* ustawienia przeglądarki mogą blokować pamięć lokalną */ }
+}
+
+function statusColumnAttributes(key) {
+  const width = Number(ensureStatusColumnWidths()[key]);
+  const style = Number.isFinite(width) && width > 0 ? ` style="width:${width}px;min-width:${width}px;max-width:${width}px"` : '';
+  return `data-status-column-key="${escapeHtml(key)}"${style}`;
 }
 
 function invalidateDataCache(...keys) {
@@ -812,6 +833,7 @@ function uiForm({ title, description = '', fields = [], submitLabel = 'Zastosuj'
   $('#action-description').textContent = description;
   $('#action-submit').textContent = submitLabel;
   $('#action-submit').className = danger ? 'danger' : 'primary';
+  $('#action-submit').disabled = false;
   $('#action-secondary').hidden = !secondaryLabel;
   $('#action-secondary').textContent = secondaryLabel;
   $('#action-secondary').className = secondaryDanger ? 'danger' : 'secondary';
@@ -4210,6 +4232,7 @@ function bindStatusModeButtons() {
 
 function drawStatusRows() {
   const root = $('#status-matrix-content'); if (!root) return;
+  state.statusColumnResizeCleanup?.();
   const query = String(state.statusMatrixQuery || '').trim().toLocaleLowerCase('pl');
   const matches = item => (!state.statusFunctionGroupFilter || Number(item.function_group_id) === Number(state.statusFunctionGroupFilter)) && (!query || `${item.function_detail} ${item.function_group_name || ''} ${controllerLabel(item)} ${item.current_note || ''} ${Object.values(item.matrix_values || {}).join(' ')}`.toLocaleLowerCase('pl').includes(query));
   const groups = state.config.status_groups || [];
@@ -4226,10 +4249,16 @@ function drawStatusRows() {
   $$('[data-status-sort-column]').forEach(button => button.addEventListener('click', () => {
     const columnId = Number(button.dataset.statusSortColumn);
     if (!columnId) return;
-    if (Number(state.statusMatrixSort.columnId) === columnId) state.statusMatrixSort.direction *= -1;
-    else state.statusMatrixSort = { columnId, direction: 1 };
+    if (state.statusMatrixSort.key === 'column' && Number(state.statusMatrixSort.columnId) === columnId) state.statusMatrixSort.direction *= -1;
+    else state.statusMatrixSort = { key: 'column', columnId, direction: 1 };
     drawStatusRows();
   }));
+  $$('[data-status-sort-controller]').forEach(button => button.addEventListener('click', () => {
+    if (state.statusMatrixSort.key === 'controller') state.statusMatrixSort.direction *= -1;
+    else state.statusMatrixSort = { key: 'controller', columnId: null, direction: 1 };
+    drawStatusRows();
+  }));
+  bindStatusColumnResizers(root);
   $$('[data-status-cell]').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); const item = state.status.find(row => row.id === Number(button.dataset.id)); const column = (state.config.status_groups || []).flatMap(group => [...(group.columns || []), ...(group.subgroups || []).flatMap(subgroup => subgroup.columns || [])]).find(value => value.id === Number(button.dataset.column)); editStatusMatrixCell(item, column, button); }));
   $$('[data-status-open]').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); openRecord('status', state.status.find(item => item.id === Number(button.dataset.statusOpen))); }));
   $$('#status-matrix-content tr[data-id]').forEach(row => {
@@ -4237,6 +4266,52 @@ function drawStatusRows() {
     appendEditLockNote(row, item, 'td');
     row.addEventListener('click', event => { if (!event.target.closest('[data-status-cell],[data-status-open]')) openRecord('status', item); });
     row.addEventListener('contextmenu', event => showStatusContext(event, item));
+  });
+}
+
+function bindStatusColumnResizers(root) {
+  const handles = [...root.querySelectorAll('[data-status-column-resizer]')];
+  if (!handles.length) { state.statusColumnResizeCleanup = null; return; }
+  let removeActiveListeners = null;
+  const stopActiveResize = () => { removeActiveListeners?.(); removeActiveListeners = null; document.body.classList.remove('status-column-resizing'); };
+  state.statusColumnResizeCleanup = stopActiveResize;
+  const applyWidth = (key, width) => {
+    root.querySelectorAll('[data-status-column-key]').forEach(element => {
+      if (element.dataset.statusColumnKey !== key) return;
+      element.style.width = `${width}px`;
+      element.style.minWidth = `${width}px`;
+      element.style.maxWidth = `${width}px`;
+    });
+  };
+  handles.forEach(handle => {
+    handle.addEventListener('pointerdown', event => {
+      if (event.button !== 0) return;
+      event.preventDefault(); event.stopPropagation(); stopActiveResize();
+      const key = handle.dataset.statusColumnResizer;
+      const header = handle.closest('th');
+      const startX = event.clientX; const startWidth = header?.getBoundingClientRect().width || 92;
+      document.body.classList.add('status-column-resizing');
+      const move = moveEvent => {
+        const width = Math.max(key === 'controller' ? 64 : 72, Math.min(560, Math.round(startWidth + moveEvent.clientX - startX)));
+        ensureStatusColumnWidths()[key] = width;
+        applyWidth(key, width);
+      };
+      const up = () => { persistStatusColumnWidths(); stopActiveResize(); };
+      document.addEventListener('pointermove', move);
+      document.addEventListener('pointerup', up, { once: true });
+      document.addEventListener('pointercancel', up, { once: true });
+      removeActiveListeners = () => {
+        document.removeEventListener('pointermove', move);
+        document.removeEventListener('pointerup', up);
+        document.removeEventListener('pointercancel', up);
+      };
+    });
+    handle.addEventListener('dblclick', event => {
+      event.preventDefault(); event.stopPropagation();
+      delete ensureStatusColumnWidths()[handle.dataset.statusColumnResizer];
+      persistStatusColumnWidths();
+      drawStatusRows();
+    });
   });
 }
 
@@ -4303,10 +4378,15 @@ function statusMatrixTableHtml(rows, columns, emptyLabel, keyPrefix = '') {
   const visibleColumns = columns.filter(column => !hidden.has(`matrix_${column.id}`));
   const updateHidden = hidden.has('progress_updated');
   const showController = Boolean(state.statusShowControllerColumn);
-  const activeSortColumn = columns.find(column => Number(column.id) === Number(state.statusMatrixSort.columnId));
+  const controllerSortActive = state.statusMatrixSort.key === 'controller';
+  const activeSortColumn = state.statusMatrixSort.key === 'column' ? columns.find(column => Number(column.id) === Number(state.statusMatrixSort.columnId)) : null;
   const sortedRows = [...rows].sort((a, b) => {
     const functional = state.statusFunctionGroupingMode === 'within' ? `${a.function_group_name || 'Bez grupy funkcyjnej'}\u001f${a.controller_id || 0}\u001f${a.function_group_id || 0}`.localeCompare(`${b.function_group_name || 'Bez grupy funkcyjnej'}\u001f${b.controller_id || 0}\u001f${b.function_group_id || 0}`, 'pl', { numeric: true }) : 0;
     if (functional) return functional;
+    if (controllerSortActive) {
+      const compared = String(controllerLabel(a) || '').localeCompare(String(controllerLabel(b) || ''), 'pl', { numeric: true, sensitivity: 'base' });
+      if (compared) return compared * state.statusMatrixSort.direction;
+    }
     if (activeSortColumn) {
       const left = a.matrix_values?.[activeSortColumn.id] ?? (activeSortColumn.field_type === 'status' ? a.status : '');
       const right = b.matrix_values?.[activeSortColumn.id] ?? (activeSortColumn.field_type === 'status' ? b.status : '');
@@ -4326,12 +4406,20 @@ function statusMatrixTableHtml(rows, columns, emptyLabel, keyPrefix = '') {
     const groupHeader = state.statusFunctionGroupingMode === 'within' && changedFunctionGroup ? `<tr class="matrix-functional-group-row"><th colspan="${visibleColumns.length + Number(!updateHidden) + Number(showController) + 1}"><button type="button" data-status-global-toggle="${escapeHtml(functionKey)}" aria-expanded="${!functionCollapsed}"><i>${functionCollapsed ? '▸' : '▾'}</i><span>${escapeHtml(functionGroup)}</span></button></th></tr>` : '';
     previousFunctionGroup = functionIdentity;
     if (functionCollapsed) return groupHeader;
-    return `${groupHeader}<tr data-id="${item.id}">${showController ? `<td class="matrix-controller-cell"><b>${escapeHtml(controllerLabel(item))}</b></td>` : ''}${visibleColumns.map(column => {
+    return `${groupHeader}<tr data-id="${item.id}">${showController ? `<td class="matrix-controller-cell" ${statusColumnAttributes('controller')}><b>${escapeHtml(controllerLabel(item))}</b></td>` : ''}${visibleColumns.map(column => {
     const value = item.matrix_values?.[column.id] ?? (column.field_type === 'status' ? item.status : '');
-    return `<td class="matrix-cell ${column.field_type}"><button type="button" data-status-cell data-id="${item.id}" data-column="${column.id}" title="${escapeHtml(column.description || (column.field_type === 'status' ? `${column.name}: ${badgeMap[value]?.[0] || value}` : `Edytuj: ${column.name}`))}">${column.field_type === 'status' ? statusSymbol(value, true) : `<span class="matrix-text-value">${escapeHtml(value || '—')}</span>`}</button></td>`;
-  }).join('')}<td class="matrix-last-update" ${updateHidden ? 'hidden' : ''}>${item.progress_updated_at ? `<b>${displayDateTime(item.progress_updated_at)}</b><small>${escapeHtml(item.progress_updated_by_name || 'użytkownik historyczny')}</small>` : '<span>Brak zmian postępu</span>'}</td><td class="matrix-row-action"><button type="button" class="mini" data-status-open="${item.id}" title="Otwórz szczegóły">•••</button></td></tr>`;
+    return `<td class="matrix-cell ${column.field_type}" ${statusColumnAttributes(`column:${column.id}`)}><button type="button" data-status-cell data-id="${item.id}" data-column="${column.id}" title="${escapeHtml(column.description || (column.field_type === 'status' ? `${column.name}: ${badgeMap[value]?.[0] || value}` : `Edytuj: ${column.name}`))}">${column.field_type === 'status' ? statusSymbol(value, true) : `<span class="matrix-text-value">${escapeHtml(value || '—')}</span>`}</button></td>`;
+  }).join('')}${updateHidden ? '' : `<td class="matrix-last-update" ${statusColumnAttributes('updated')}>${item.progress_updated_at ? `<b>${displayDateTime(item.progress_updated_at)}</b><small>${escapeHtml(item.progress_updated_by_name || 'użytkownik historyczny')}</small>` : '<span>Brak zmian postępu</span>'}</td>`}<td class="matrix-row-action"><button type="button" class="mini" data-status-open="${item.id}" title="Otwórz szczegóły">•••</button></td></tr>`;
   }).join('');
-  return `<div class="tablewrap status-matrix-table"><table><thead><tr>${showController ? '<th class="matrix-controller-cell"><span>Sterownik</span></th>' : ''}${visibleColumns.map(column => { const active = Number(state.statusMatrixSort.columnId) === Number(column.id); return `<th title="${escapeHtml(column.description || '')}"><button type="button" class="matrix-sort-button ${active ? 'active' : ''}" data-status-sort-column="${column.id}" title="${escapeHtml(column.description || `Sortuj po kolumnie ${column.name}`)}"><span>${escapeHtml(column.name)}</span><i>${active ? state.statusMatrixSort.direction > 0 ? '↑' : '↓' : '↕'}</i></button></th>`; }).join('')}<th ${updateHidden ? 'hidden' : ''}><span>Ostatnia aktualizacja</span></th><th class="matrix-row-action"><span class="sr-only">Szczegóły</span></th></tr></thead><tbody>${body}</tbody></table></div>`;
+  const resizeHandle = key => `<i class="status-column-resizer" data-status-column-resizer="${escapeHtml(key)}" title="Przeciągnij, aby zmienić szerokość. Kliknij dwukrotnie, aby przywrócić dopasowanie automatyczne."></i>`;
+  const columnGroup = `<colgroup>${showController ? `<col ${statusColumnAttributes('controller')}>` : ''}${visibleColumns.map(column => `<col ${statusColumnAttributes(`column:${column.id}`)}>`).join('')}${updateHidden ? '' : `<col ${statusColumnAttributes('updated')}>`}<col class="matrix-row-action-column"></colgroup>`;
+  const controllerHeader = showController ? `<th class="matrix-controller-cell status-resizable-column" ${statusColumnAttributes('controller')}><button type="button" class="matrix-sort-button ${controllerSortActive ? 'active' : ''}" data-status-sort-controller title="Sortuj po sterowniku"><span>Sterownik</span><i>${controllerSortActive ? state.statusMatrixSort.direction > 0 ? '↑' : '↓' : '↕'}</i></button>${resizeHandle('controller')}</th>` : '';
+  const columnHeaders = visibleColumns.map(column => {
+    const key = `column:${column.id}`; const active = state.statusMatrixSort.key === 'column' && Number(state.statusMatrixSort.columnId) === Number(column.id);
+    return `<th class="status-resizable-column" ${statusColumnAttributes(key)} title="${escapeHtml(column.description || '')}"><button type="button" class="matrix-sort-button ${active ? 'active' : ''}" data-status-sort-column="${column.id}" title="${escapeHtml(column.description || `Sortuj po kolumnie ${column.name}`)}"><span>${escapeHtml(column.name)}</span><i>${active ? state.statusMatrixSort.direction > 0 ? '↑' : '↓' : '↕'}</i></button>${resizeHandle(key)}</th>`;
+  }).join('');
+  const updateHeader = updateHidden ? '' : `<th class="status-resizable-column" ${statusColumnAttributes('updated')}><span>Ostatnia aktualizacja</span>${resizeHandle('updated')}</th>`;
+  return `<div class="tablewrap status-matrix-table"><table>${columnGroup}<thead><tr>${controllerHeader}${columnHeaders}${updateHeader}<th class="matrix-row-action"><span class="sr-only">Szczegóły</span></th></tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 function statusMatrixGroupHtml(group, rows, keyPrefix = '') {
@@ -5003,7 +5091,7 @@ function statusMatrixConfig(canEdit) {
     return `${note}<div class="status-column-kinds"><section><h5>Kolumny podstawowe</h5>${basic.length ? rows(basic) : '<div class="empty compact-empty">Brak kolumn opisowych.</div>'}</section><section><h5>Podpunkty statusowe</h5>${subpoints.length ? rows(subpoints) : '<div class="empty compact-empty">Brak podpunktów do weryfikacji.</div>'}</section></div>`;
   };
   const addColumnButtons = (groupId, subgroupId = '', scope = null) => scope?.inheritance && !scope.inheritance.implicit ? '' : `<button class="mini add-status-column" data-column-role="basic" data-group="${groupId}" data-subgroup="${subgroupId}">+ Kolumna podstawowa</button><button class="mini add-status-column" data-column-role="subpoint" data-group="${groupId}" data-subgroup="${subgroupId}">+ Podpunkt statusowy</button>`;
-  const layoutActions = canEdit ? '<div class="status-layout-actions"><button type="button" class="mini" id="status-layout-export">Eksportuj układ JSON</button><label class="mini button-file">Importuj układ JSON<input type="file" id="status-layout-import" accept="application/json,.json"></label><button class="secondary" id="new-status-group">+ Dodaj grupę</button><button class="secondary" id="status-states-open">Stany punktów statusowych</button></div>' : '';
+  const layoutActions = canEdit ? '<div class="status-layout-actions"><button type="button" class="mini" id="status-layout-export">Eksportuj układ JSON</button><label class="mini button-file">Importuj układ JSON<input type="file" id="status-layout-import" accept="application/json,.json"></label><button type="button" class="mini" id="status-layout-text-import">Importuj z tekstu</button><button class="secondary" id="new-status-group">+ Dodaj grupę</button><button class="secondary" id="status-states-open">Stany punktów statusowych</button></div>' : '';
   const groupCards = groups.map((group, groupIndex) => {
     const collapsed = state.collapsedStatusConfigGroups.has(Number(group.id));
     const subgroups = (group.subgroups || []).map((subgroup, subgroupIndex, siblings) => `<section class="status-config-subgroup"><header>${canEdit ? orderControls('status_subgroups', siblings, subgroupIndex) : ''}<span><b>${escapeHtml(subgroup.name)}</b>${subgroup.description ? `<small>${escapeHtml(subgroup.description)}</small>` : ''}</span>${canEdit ? `<button class="mini edit-status-subgroup" data-group="${group.id}" data-id="${subgroup.id}">Edytuj</button>${addColumnButtons(group.id, subgroup.id, subgroup)}<button class="mini danger-outline delete-status-subgroup" data-group="${group.id}" data-id="${subgroup.id}">Usuń</button>` : ''}</header>${columnRows(group, subgroup)}</section>`).join('') || '<div class="empty compact-empty">Ta grupa nie ma podgrup. Punkty mogą znajdować się bezpośrednio w grupie.</div>';
@@ -5107,6 +5195,88 @@ async function importStatusLayoutFile(event) {
     await loadData(true);
   } catch (error) { toast(error instanceof SyntaxError ? 'Plik nie zawiera poprawnego JSON' : error.message, true); }
   finally { event.target.value = ''; }
+}
+
+function parseStatusLayoutText(source) {
+  const groups = []; const errors = []; let currentGroup = null;
+  const groupNames = new Set(); const columnNames = new Map();
+  String(source || '').replace(/\r\n?/g, '\n').split('\n').forEach((rawLine, index) => {
+    const lineNumber = index + 1;
+    if (!rawLine.trim()) return;
+    const leadingTabs = rawLine.match(/^\t*/)?.[0].length || 0;
+    if (/^ +\S/.test(rawLine) || /^\t+ +\S/.test(rawLine)) {
+      errors.push(`Wiersz ${lineNumber}: do definiowania poziomu użyj tabulatorów, nie spacji.`); return;
+    }
+    if (leadingTabs > 2) { errors.push(`Wiersz ${lineNumber}: dozwolone są maksymalnie dwa tabulatory na początku.`); return; }
+    const content = rawLine.slice(leadingTabs);
+    if (leadingTabs === 0) {
+      if (content.includes('\t')) { errors.push(`Wiersz ${lineNumber}: nazwa grupy nie może zawierać dodatkowych pól.`); return; }
+      const name = content.trim(); const normalized = name.toLocaleLowerCase('pl');
+      if (!name) { errors.push(`Wiersz ${lineNumber}: podaj nazwę grupy.`); return; }
+      if (groupNames.has(normalized)) { errors.push(`Wiersz ${lineNumber}: grupa „${name}” występuje w imporcie więcej niż raz.`); return; }
+      groupNames.add(normalized); columnNames.set(normalized, new Set());
+      currentGroup = { name, description: '', columns: [], subgroups: [] };
+      groups.push(currentGroup); return;
+    }
+    if (!currentGroup) { errors.push(`Wiersz ${lineNumber}: najpierw podaj grupę bez tabulatora.`); return; }
+    const usedNames = columnNames.get(currentGroup.name.toLocaleLowerCase('pl'));
+    if (leadingTabs === 1) {
+      if (content.includes('\t')) { errors.push(`Wiersz ${lineNumber}: kolumna podstawowa powinna zawierać tylko nazwę.`); return; }
+      const name = content.trim(); const normalized = name.toLocaleLowerCase('pl');
+      if (!name) { errors.push(`Wiersz ${lineNumber}: podaj nazwę kolumny podstawowej.`); return; }
+      if (usedNames.has(normalized)) { errors.push(`Wiersz ${lineNumber}: element „${name}” jest już zdefiniowany w grupie „${currentGroup.name}”.`); return; }
+      usedNames.add(normalized);
+      currentGroup.columns.push({ name, description: '', column_role: 'basic', field_type: 'text', include_in_progress: 0 });
+      return;
+    }
+    const fields = content.split('\t');
+    if (fields.length < 3) { errors.push(`Wiersz ${lineNumber}: podpunkt wymaga nazwy, opisu oraz wartości TAK albo NIE, rozdzielonych tabulatorami.`); return; }
+    const name = fields.shift().trim(); const progressFlag = fields.pop().trim().toLocaleUpperCase('pl'); const description = fields.join(' ').trim();
+    const normalized = name.toLocaleLowerCase('pl');
+    if (!name) { errors.push(`Wiersz ${lineNumber}: podaj nazwę podpunktu statusowego.`); return; }
+    if (!['TAK', 'NIE'].includes(progressFlag)) { errors.push(`Wiersz ${lineNumber}: ostatnie pole musi mieć wartość TAK albo NIE.`); return; }
+    if (usedNames.has(normalized)) { errors.push(`Wiersz ${lineNumber}: element „${name}” jest już zdefiniowany w grupie „${currentGroup.name}”.`); return; }
+    usedNames.add(normalized);
+    currentGroup.columns.push({ name, description, column_role: 'subpoint', field_type: 'status', include_in_progress: progressFlag === 'TAK' ? 1 : 0 });
+  });
+  if (!groups.length && !errors.length) errors.push('Wklej co najmniej jedną grupę wraz z jej kolumnami.');
+  groups.forEach(group => { if (!group.columns.length) errors.push(`Grupa „${group.name}” nie zawiera żadnych kolumn ani podpunktów.`); });
+  return { groups, errors, layout: { format: 'plc-status-layout', version: 1, exported_at: new Date().toISOString(), groups } };
+}
+
+function statusLayoutTextPreview(parsed) {
+  if (parsed.errors.length) return `<div class="status-text-import-preview invalid"><strong>Popraw format przed importem</strong><ul>${parsed.errors.map(error => `<li>${escapeHtml(error)}</li>`).join('')}</ul></div>`;
+  const columns = parsed.groups.reduce((sum, group) => sum + group.columns.length, 0);
+  return `<div class="status-text-import-preview valid"><strong>Gotowe do importu · ${parsed.groups.length} ${parsed.groups.length === 1 ? 'grupa' : 'grupy'}, ${columns} kolumn i podpunktów</strong><div>${parsed.groups.map(group => `<span><b>${escapeHtml(group.name)}</b><small>${group.columns.length} elementów</small></span>`).join('')}</div></div>`;
+}
+
+async function importStatusLayoutText() {
+  const example = "Hardware\n\tDevice Type\n\tDevice Name\n\t\t+24V\tCzy urządzenie jest zasilone +24V?\tNIE\n\t\tGreen\tCzy urządzenie jest w pełni skonfigurowane?\tTAK";
+  const formPromise = uiForm({
+    title: 'Import konfiguracji statusu z tekstu',
+    description: 'Każda grupa zaczyna się bez tabulatora. Jeden tabulator oznacza kolumnę podstawową, a dwa — podpunkt statusowy z opisem i flagą TAK/NIE.',
+    submitLabel: 'Importuj konfigurację',
+    fields: [
+      { name: 'layout_text', label: 'Konfiguracja do importu', type: 'textarea', rows: 15, full: true, hint: 'Istniejące grupy i kolumny o tych samych nazwach zostaną zaktualizowane; pozostałe elementy nie zostaną usunięte.' },
+      { type: 'html', full: true, html: `<details class="status-text-import-example"><summary>Pokaż przykład formatu</summary><pre>${escapeHtml(example)}</pre></details><div id="status-text-import-preview"></div>` }
+    ]
+  });
+  const textarea = $('#action-fields [name="layout_text"]'); const preview = $('#status-text-import-preview'); const submit = $('#action-submit');
+  const updatePreview = () => {
+    const parsed = parseStatusLayoutText(textarea.value);
+    preview.innerHTML = statusLayoutTextPreview(parsed);
+    submit.disabled = parsed.errors.length > 0;
+  };
+  textarea.addEventListener('input', updatePreview); updatePreview();
+  const result = await formPromise;
+  if (!result) return;
+  const parsed = parseStatusLayoutText(result.layout_text);
+  if (parsed.errors.length) { toast(parsed.errors[0], true); return; }
+  try {
+    const imported = await api('/api/status-layout/import', { method: 'POST', body: JSON.stringify(parsed.layout) });
+    toast(`Zaimportowano: ${imported.groups} grup i ${imported.columns} kolumn`);
+    await loadData(true);
+  } catch (error) { toast(error.message, true); }
 }
 
 function controllerHierarchyConfig(admin) {
@@ -5257,6 +5427,7 @@ function bindSettings() {
   $('#new-status-group')?.addEventListener('click', () => editStatusGroup());
   $('#status-layout-export')?.addEventListener('click', exportStatusLayout);
   $('#status-layout-import')?.addEventListener('change', importStatusLayoutFile);
+  $('#status-layout-text-import')?.addEventListener('click', importStatusLayoutText);
   $$('.status-config-group-toggle').forEach(button => button.addEventListener('click', () => {
     const id = Number(button.dataset.id); const card = button.closest('[data-status-config-group]'); const body = card.querySelector('.status-config-group-body');
     const collapsed = !state.collapsedStatusConfigGroups.has(id);
