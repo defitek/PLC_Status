@@ -314,6 +314,68 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   await expect(workCell.locator('.plan-chip[data-current-project="1"]')).toHaveCount(0);
 });
 
+test('Planner przelicza godziny po dodaniu święta i dla ręcznie wybranego okresu', async ({ page }) => {
+  await page.evaluate(async () => {
+    const users = await fetch('/api/users').then(response => response.json());
+    const participant = users.find(user => user.project_active) || users[0];
+    const response = await fetch(`/api/users/${participant.id}/planner`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ planner_enabled: 1 }) });
+    if (!response.ok) throw new Error((await response.json()).error || 'Nie udało się włączyć uczestnika Plannera');
+  });
+  await page.reload();
+  await expect(page.locator('#content')).toBeVisible();
+  await openView(page, 'planner');
+  const target = await page.locator('.planner-cell[data-editable="1"]').evaluateAll(cells => {
+    const candidate = cells.find(cell => {
+      const weekday = new Date(`${cell.dataset.date}T12:00:00Z`).getUTCDay();
+      return weekday > 0 && weekday < 6 && !cell.classList.contains('holiday');
+    });
+    return candidate ? { userId: Number(candidate.dataset.userId), date: candidate.dataset.date } : null;
+  });
+  expect(target).not.toBeNull();
+  await page.evaluate(async ({ userId, date }) => {
+    const response = await fetch('/api/planner/day', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: userId, plan_date: date, entries: [], absence_type: 'time_off', absence_note: 'Test przeliczenia święta' }) });
+    if (!response.ok) throw new Error((await response.json()).error || 'Nie udało się zapisać wolnego');
+  }, target);
+  const before = await page.evaluate(async ({ userId, date }) => {
+    const planner = await fetch(`/api/planner?from=${date}&to=${date}`).then(response => response.json());
+    return planner.time_details.details.find(item => item.user_id === userId && item.date === date);
+  }, target);
+  expect(before.overtime_weighted).toBeLessThan(0);
+
+  await page.waitForTimeout(500);
+  await page.locator('#planner-config-open').click();
+  const [year, month, day] = target.date.split('-');
+  await page.locator('#planner-holidays-bulk').fill(`${day}.${month}.${year} Święto E2E przeliczenia`);
+  await expect(page.locator('#planner-holidays-bulk')).toHaveValue(`${day}.${month}.${year} Święto E2E przeliczenia`);
+  await page.locator('#planner-holidays-bulk-save').click();
+  await expect(page.locator('#toast')).toContainText('godziny zostały przeliczone ponownie');
+  const after = await page.evaluate(async ({ userId, date }) => {
+    const planner = await fetch(`/api/planner?from=${date}&to=${date}`).then(response => response.json());
+    return planner.time_details.details.find(item => item.user_id === userId && item.date === date);
+  }, target);
+  expect(after.is_holiday).toBe(1);
+  expect(after.overtime_raw).toBe(0);
+  expect(after.overtime_weighted).toBe(0);
+  await page.locator('#config-full-close').click();
+
+  await page.locator('#planner-hours-open').click();
+  await page.locator('#planner-hours-from').fill(target.date);
+  await page.locator('#planner-hours-to').fill(target.date);
+  await page.locator('#planner-hours-recalculate').click();
+  await expect(page.locator('.planner-hours-toolbar small')).toContainText('Przeliczono:');
+  await page.locator('.hours-details summary').click();
+  const detail = page.locator('.hours-details tbody tr', { hasText: 'Wolne z nadgodzin' });
+  await expect(detail).toContainText('święto');
+  await expect(detail).toContainText('0.0 / 0.0 h');
+  await expectViewportContained(page);
+  await page.evaluate(async ({ userId, date }) => {
+    const config = await fetch('/api/config').then(response => response.json());
+    const holiday = (config.planner_holidays || []).find(item => item.holiday_date === date);
+    if (holiday) await fetch(`/api/planner/holidays/${holiday.id}`, { method: 'DELETE' });
+    await fetch('/api/planner/day', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: userId, plan_date: date, entries: [] }) });
+  }, target);
+});
+
 test('zadanie przyjmuje screenshot przez Ctrl+V, kompresuje go i pokazuje po zapisie', async ({ page }) => {
   await openView(page, 'tasks');
   await page.getByRole('button', { name: '+ Nowe zadanie', exact: true }).click();

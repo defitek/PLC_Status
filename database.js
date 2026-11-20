@@ -1921,7 +1921,8 @@ function createRepository(db, defaultProjectId) {
       const isSunday = weekday === 0;
       let actual = 0; let credited = 0; let overtimeRaw = 0; let overtimeWeighted = 0; let label = '';
       if (absence?.absence_type === 'time_off') {
-        overtimeRaw = -timeOffDebit; overtimeWeighted = -timeOffDebit; label = 'Wolne z nadgodzin';
+        const debit = holiday ? 0 : timeOffDebit;
+        overtimeRaw = -debit; overtimeWeighted = -debit; label = 'Wolne z nadgodzin';
       } else if (absence?.absence_type === 'vacation') {
         credited = !isSaturday && !isSunday && !holiday ? baseHours : 0; label = 'Urlop';
       } else if (dayEntries.length) {

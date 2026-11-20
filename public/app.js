@@ -3436,15 +3436,44 @@ async function addPlannerHoliday() {
     { name: 'holiday_date', label: 'Data', type: 'date', value: today(), required: true }, { name: 'name', label: 'Nazwa święta', required: true }
   ], submitLabel: 'Dodaj święto' });
   if (!result) return;
-  try { await api('/api/planner/holidays', { method: 'POST', body: JSON.stringify(result) }); await reloadPlanner(); renderPlannerRequirementsCalendar(); toast('Święto dodano'); } catch (error) { toast(error.message, true); }
+  try { await api('/api/planner/holidays', { method: 'POST', body: JSON.stringify(result) }); await refreshAfterPlannerHolidayChange('Święto dodano'); } catch (error) { toast(error.message, true); }
+}
+
+async function refreshAfterPlannerHolidayChange(message) {
+  await loadData(true);
+  if ($('#planner-hours-dialog')?.open) await recalculatePlannerHoursRange({ silent: true });
+  if ($('#planner-requirements-dialog')?.open) renderPlannerRequirementsCalendar();
+  toast(`${message} · godziny zostały przeliczone ponownie`);
+}
+
+function renderPlannerHoursReport(report, from, to, recalculatedAt = '') {
+  report ||= { users: [], details: [] };
+  const s = state.config.settings || {};
+  $('#planner-hours-content').innerHTML = `<section class="planner-hours-toolbar"><label><span>Od</span><input type="date" id="planner-hours-from" value="${escapeHtml(from)}"></label><label><span>Do</span><input type="date" id="planner-hours-to" value="${escapeHtml(to)}"></label><button type="button" class="primary" id="planner-hours-recalculate">Przelicz godziny</button><small>${recalculatedAt ? `Przeliczono: ${escapeHtml(recalculatedAt)}` : `Aktualny zakres: ${displayDate(from)} – ${displayDate(to)}`}</small></section><section class="hours-rules"><b>Zasady kalkulacji</b><span>ON ${escapeHtml(s.planner_online_hours || '10.5')} h</span><span>OFF ${escapeHtml(s.planner_offline_hours || '8')} h</span><span>Dzień roboczy: ${escapeHtml(s.planner_weekday_multiplier || '1.5')}× ponad ${escapeHtml(s.planner_base_hours || '8')} h</span><span>Sobota: ${escapeHtml(s.planner_saturday_multiplier || '1.5')}× całość</span><span>Niedziela / święto: ${escapeHtml(s.planner_sunday_holiday_multiplier || '2')}× całość</span><span>Wolne z nadgodzin: −${escapeHtml(s.planner_time_off_debit || '8')} h tylko w dzień roboczy</span></section><div class="tablewrap"><table class="hours-table"><thead><tr><th>Pracownik</th><th>Praca</th><th>Urlop zaliczony</th><th>Saldo bez mnożnika</th><th>Saldo z mnożnikiem</th><th>Przeciążenie</th></tr></thead><tbody>${report.users.map(item => `<tr class="${item.overloaded_weeks?.length ? 'overloaded' : ''}"><td><b>${escapeHtml(item.display_name)}</b></td><td>${Number(item.actual_hours).toFixed(1)} h</td><td>${Number(item.credited_hours).toFixed(1)} h</td><td><b>${Number(item.overtime_raw_balance || 0).toFixed(1)} h</b></td><td><b>${item.overtime_balance >= 0 ? '+' : ''}${Number(item.overtime_balance).toFixed(1)} h</b></td><td>${item.overloaded_weeks?.length ? `<span class="badge red">${item.overloaded_weeks.map(week => `${week.week}: ${week.hours} h`).join(', ')}</span>` : '<span class="badge green">w normie</span>'}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">Brak danych w zakresie.</td></tr>'}</tbody></table></div><details class="hours-details"><summary>Szczegóły dzienne i przebieg bilansu</summary><div class="tablewrap"><table><thead><tr><th>Data</th><th>Pracownik</th><th>Rodzaj</th><th>Praca od–do</th><th>Godziny pracy</th><th>Nadgodziny dnia</th><th>Σ bez mnożnika</th><th>Σ z mnożnikiem</th><th>Powód korekty</th></tr></thead><tbody>${report.details.filter(item => item.label || item.overtime_balance || item.adjustment_note).map(item => `<tr><td>${displayDate(item.date)}</td><td>${escapeHtml(item.display_name)}</td><td>${escapeHtml(item.label || '—')}${item.is_holiday ? ' · święto' : ''}</td><td>${item.work_start_time && item.work_end_time ? `${escapeHtml(item.work_start_time)}–${escapeHtml(item.work_end_time)}` : 'automatycznie'}</td><td>${Number(item.actual_hours).toFixed(1)} h</td><td>${Number(item.overtime_raw).toFixed(1)} / ${Number(item.overtime_weighted).toFixed(1)} h</td><td>${Number(item.overtime_raw_cumulative || 0).toFixed(1)} h${item.overtime_raw_balance_override !== null ? ' · korekta salda' : ''}</td><td>${Number(item.overtime_weighted_cumulative || 0).toFixed(1)} h${item.overtime_weighted_balance_override !== null ? ' · korekta salda' : ''}</td><td>${escapeHtml(item.adjustment_note || '—')}</td></tr>`).join('')}</tbody></table></div></details>`;
+  $('#planner-hours-recalculate').addEventListener('click', recalculatePlannerHoursRange);
 }
 
 function openPlannerHours() {
   if (!state.planner?.can_manage_time) return;
-  const report = state.planner.time_details || { users: [], details: [] };
-  const s = state.config.settings || {};
-  $('#planner-hours-content').innerHTML = `<section class="hours-rules"><b>Zasady kalkulacji</b><span>ON ${escapeHtml(s.planner_online_hours || '10.5')} h</span><span>OFF ${escapeHtml(s.planner_offline_hours || '8')} h</span><span>Dzień roboczy: ${escapeHtml(s.planner_weekday_multiplier || '1.5')}× ponad ${escapeHtml(s.planner_base_hours || '8')} h</span><span>Sobota: ${escapeHtml(s.planner_saturday_multiplier || '1.5')}× całość</span><span>Niedziela / święto: ${escapeHtml(s.planner_sunday_holiday_multiplier || '2')}× całość</span><span>Wolne z nadgodzin: −${escapeHtml(s.planner_time_off_debit || '8')} h</span></section><div class="tablewrap"><table class="hours-table"><thead><tr><th>Pracownik</th><th>Praca</th><th>Urlop zaliczony</th><th>Saldo bez mnożnika</th><th>Saldo z mnożnikiem</th><th>Przeciążenie</th></tr></thead><tbody>${report.users.map(item => `<tr class="${item.overloaded_weeks?.length ? 'overloaded' : ''}"><td><b>${escapeHtml(item.display_name)}</b></td><td>${Number(item.actual_hours).toFixed(1)} h</td><td>${Number(item.credited_hours).toFixed(1)} h</td><td><b>${Number(item.overtime_raw_balance || 0).toFixed(1)} h</b></td><td><b>${item.overtime_balance >= 0 ? '+' : ''}${Number(item.overtime_balance).toFixed(1)} h</b></td><td>${item.overloaded_weeks?.length ? `<span class="badge red">${item.overloaded_weeks.map(week => `${week.week}: ${week.hours} h`).join(', ')}</span>` : '<span class="badge green">w normie</span>'}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">Brak danych w zakresie.</td></tr>'}</tbody></table></div><details class="hours-details"><summary>Szczegóły dzienne i przebieg bilansu</summary><div class="tablewrap"><table><thead><tr><th>Data</th><th>Pracownik</th><th>Rodzaj</th><th>Praca od–do</th><th>Godziny pracy</th><th>Nadgodziny dnia</th><th>Σ bez mnożnika</th><th>Σ z mnożnikiem</th><th>Powód korekty</th></tr></thead><tbody>${report.details.filter(item => item.label || item.overtime_balance || item.adjustment_note).map(item => `<tr><td>${displayDate(item.date)}</td><td>${escapeHtml(item.display_name)}</td><td>${escapeHtml(item.label || '—')}${item.is_holiday ? ' · święto' : ''}</td><td>${item.work_start_time && item.work_end_time ? `${escapeHtml(item.work_start_time)}–${escapeHtml(item.work_end_time)}` : 'automatycznie'}</td><td>${Number(item.actual_hours).toFixed(1)} h</td><td>${Number(item.overtime_raw).toFixed(1)} / ${Number(item.overtime_weighted).toFixed(1)} h</td><td>${Number(item.overtime_raw_cumulative || 0).toFixed(1)} h${item.overtime_raw_balance_override !== null ? ' · korekta salda' : ''}</td><td>${Number(item.overtime_weighted_cumulative || 0).toFixed(1)} h${item.overtime_weighted_balance_override !== null ? ' · korekta salda' : ''}</td><td>${escapeHtml(item.adjustment_note || '—')}</td></tr>`).join('')}</tbody></table></div></details>`;
+  const to = addDays(state.plannerFrom, state.plannerDays - 1);
+  renderPlannerHoursReport(state.planner.time_details, state.plannerFrom, to);
   $('#planner-hours-dialog').showModal();
+}
+
+async function recalculatePlannerHoursRange({ silent = false } = {}) {
+  const from = $('#planner-hours-from')?.value; const to = $('#planner-hours-to')?.value;
+  const days = from && to && from <= to ? dateRange(from, to) : [];
+  if (!from || !to || from > to) return toast('Podaj prawidłowy zakres dat od–do', true);
+  if (!days.length || days.at(-1) !== to || days.length > 366) return toast('Zakres przeliczenia może obejmować maksymalnie 366 dni', true);
+  const button = $('#planner-hours-recalculate'); button.disabled = true; button.textContent = 'Przeliczanie…';
+  try {
+    const recalculated = await api(`/api/planner?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+    const visibleTo = addDays(state.plannerFrom, state.plannerDays - 1);
+    if (from === state.plannerFrom && to === visibleTo) { state.planner = recalculated; renderPlanner(); }
+    const timestamp = new Intl.DateTimeFormat('pl-PL', { dateStyle: 'short', timeStyle: 'medium' }).format(new Date());
+    renderPlannerHoursReport(recalculated.time_details, from, to, timestamp);
+    if (!silent) toast(`Przeliczono godziny dla okresu ${displayDate(from)} – ${displayDate(to)}`);
+  } catch (error) { button.disabled = false; button.textContent = 'Przelicz godziny'; toast(error.message, true); }
 }
 
 function plannerDaySnapshot(userId, date) {
@@ -5523,7 +5552,7 @@ function bindSettings() {
   $$('.planner-setting').forEach(input => input.addEventListener('change', event => saveSetting(event.target.dataset.key, event.target.value)));
   $('#planner-holidays-bulk-save')?.addEventListener('click', savePlannerHolidaysBulk);
   $$('.edit-planner-holiday').forEach(button => button.addEventListener('click', () => editPlannerHoliday(Number(button.dataset.id))));
-  $$('.delete-planner-holiday').forEach(button => button.addEventListener('click', async () => { if (!await uiConfirm('Usuń święto', 'Zmieni to kalkulację nadgodzin dla tego dnia.', 'Usuń', true)) return; try { await api(`/api/planner/holidays/${button.dataset.id}`, { method: 'DELETE' }); await loadData(true); toast('Święto usunięto'); } catch (error) { toast(error.message, true); } }));
+  $$('.delete-planner-holiday').forEach(button => button.addEventListener('click', async () => { if (!await uiConfirm('Usuń święto', 'Zmieni to kalkulację nadgodzin dla tego dnia.', 'Usuń', true)) return; try { await api(`/api/planner/holidays/${button.dataset.id}`, { method: 'DELETE' }); await refreshAfterPlannerHolidayChange('Święto usunięto'); } catch (error) { toast(error.message, true); } }));
   $('#new-planner-vehicle')?.addEventListener('click', () => editPlannerVehicle());
   $$('.edit-planner-vehicle').forEach(button => button.addEventListener('click', () => editPlannerVehicle(Number(button.dataset.id))));
   $$('.delete-planner-vehicle').forEach(button => button.addEventListener('click', async () => {
@@ -5583,7 +5612,7 @@ async function savePlannerHolidaysBulk() {
     items.push({ holiday_date: `${year}-${month}-${day}`, name: name.trim() });
   }
   if (!items.length) return toast('Wklej co najmniej jedno święto', true);
-  try { await api('/api/planner/holidays/bulk', { method: 'POST', body: JSON.stringify({ items }) }); await loadData(true); toast(`Dodano lub zaktualizowano ${items.length} świąt`); }
+  try { await api('/api/planner/holidays/bulk', { method: 'POST', body: JSON.stringify({ items }) }); await refreshAfterPlannerHolidayChange(`Dodano lub zaktualizowano ${items.length} świąt`); }
   catch (error) { toast(error.message, true); }
 }
 
@@ -5595,7 +5624,7 @@ async function editPlannerHoliday(id) {
     { name: 'name', label: 'Nazwa', value: existing.name, required: true }
   ], submitLabel: 'Zapisz święto' });
   if (!result) return;
-  try { await api(`/api/planner/holidays/${id}`, { method: 'PATCH', body: JSON.stringify(result) }); await loadData(true); toast('Święto zostało zmienione'); }
+  try { await api(`/api/planner/holidays/${id}`, { method: 'PATCH', body: JSON.stringify(result) }); await refreshAfterPlannerHolidayChange('Święto zostało zmienione'); }
   catch (error) { toast(error.message, true); }
 }
 

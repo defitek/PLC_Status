@@ -1378,9 +1378,19 @@ test('V9 supports guarded duplication, comments, pushes, calendar ranges and wor
       repository.savePlannerDay({
         user_id: worker.id, plan_date: '2026-10-08', entries: [{ controller_group_id: root.id, work_mode: 'online', shift: 'Dzień' }]
       }, admin);
+      const hoursBeforeHoliday = repository.planner('2026-10-08', '2026-10-08', admin).time_details.details.find(item => item.user_id === worker.id);
+      assert.equal(hoursBeforeHoliday.is_holiday, 0);
+      assert.equal(hoursBeforeHoliday.overtime_weighted, 3.75);
       repository.savePlannerHoliday(null, { holiday_date: '2026-10-08', name: 'Święto testowe V9' }, admin);
+      const hoursAfterHoliday = repository.planner('2026-10-08', '2026-10-08', admin).time_details.details.find(item => item.user_id === worker.id);
+      assert.equal(hoursAfterHoliday.is_holiday, 1);
+      assert.equal(hoursAfterHoliday.overtime_weighted, 21, 'dodanie święta musi natychmiast przeliczyć wcześniej zaplanowaną pracę');
       repository.savePlannerDay({ user_id: worker.id, plan_date: '2026-10-09', absence_type: 'vacation', absence_note: 'Urlop' }, admin);
       repository.savePlannerDay({ user_id: worker.id, plan_date: '2026-10-10', absence_type: 'time_off', absence_note: 'Odbiór nadgodzin' }, admin);
+      const timeOffHolidayRecord = repository.savePlannerHoliday(null, { holiday_date: '2026-10-10', name: 'Święto wolnego V9' }, admin);
+      const timeOffHoliday = repository.planner('2026-10-10', '2026-10-10', admin).time_details.details.find(item => item.user_id === worker.id);
+      assert.equal(timeOffHoliday.overtime_weighted, 0, 'wolne z nadgodzin nie może obciążać salda w święto');
+      repository.deletePlannerHoliday(timeOffHolidayRecord.id);
       repository.savePlannerDay({
         user_id: worker.id, plan_date: '2026-10-11', entries: [{ activity_type: 'transport', controller_group_id: root.id, shift: 'Noc', transport_mode: 'transport_only', duration_hours: 3.5 }]
       }, admin);
