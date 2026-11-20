@@ -2128,8 +2128,9 @@ function createRepository(db, defaultProjectId) {
         count_in_manpower: Number(item.count_in_manpower) === 0 ? 0 : 1, note: clean(item.note)
       }));
       const transportOnlyUpdate = Number(item.transport_only_update) === 1;
+      const replaceAll = explicitEntries || Number(item.replace_all) === 1;
       const normalized = normalizePlannerEntries(requestedEntries, targetProjectId);
-      if (!normalized.length && !transportOnlyUpdate) throw appError('Plan międzyprojektowy musi zawierać co najmniej jedną aktywność');
+      if (!normalized.length && !transportOnlyUpdate && !replaceAll) throw appError('Plan międzyprojektowy musi zawierać co najmniej jedną aktywność');
       if (transportOnlyUpdate && normalized.some(entry => entry.activityType !== 'transport')) throw appError('Bezpośrednia aktualizacja transportu może zawierać wyłącznie transport');
       const representative = normalized.find(entry => entry.activityType === 'work') || normalized[0] || { workMode: 'offline', shift: 'Dzień', countInManpower: 0, note: '' };
       return {
@@ -2138,7 +2139,7 @@ function createRepository(db, defaultProjectId) {
         shift: representative.shift,
         countInManpower: representative.countInManpower,
         note: clean(item.note || representative.note), normalized, transportOnlyUpdate,
-        replaceAll: explicitEntries || Number(item.replace_all) === 1
+        replaceAll
       };
     });
     const upsert = db.prepare(`INSERT INTO planner_cross_project_requests(
@@ -2156,7 +2157,7 @@ function createRepository(db, defaultProjectId) {
         const workEntries = item.normalized.filter(entry => entry.activityType === 'work');
         const transportEntries = item.normalized.filter(entry => entry.activityType === 'transport');
         const insert = (entry, requestId = null) => Number(insertEntry.run(targetProjectId, item.userId, item.planDate, entry.shift, entry.groupId, entry.workMode, entry.transportMode, entry.durationHours, entry.countInManpower, entry.vehicleId, entry.note, requestId, currentUser.id).lastInsertRowid);
-        if (item.transportOnlyUpdate || (!workEntries.length && transportEntries.length)) {
+        if (item.transportOnlyUpdate) {
           db.prepare("DELETE FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=? AND transport_mode='transport_only'").run(targetProjectId, item.userId, item.planDate);
           transportEntries.forEach(entry => insert(entry));
           directlySaved += 1;
@@ -2184,7 +2185,7 @@ function createRepository(db, defaultProjectId) {
           db.prepare("DELETE FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=? AND transport_mode='transport_only'").run(targetProjectId, item.userId, item.planDate);
           transportEntries.forEach(entry => insert(entry));
         }
-        if (requestId) db.prepare('UPDATE planner_cross_project_requests SET linked_entry_id=? WHERE id=?').run(entryIds[0], requestId);
+        if (requestId) db.prepare('UPDATE planner_cross_project_requests SET linked_entry_id=? WHERE id=?').run(entryIds[0] || 0, requestId);
         awaitingApproval += 1;
         syncPlannerOverlapReview(item.userId, item.planDate, currentUser);
       });
@@ -2219,7 +2220,7 @@ function createRepository(db, defaultProjectId) {
     try {
       let entry = one('SELECT * FROM planner_entries WHERE cross_project_request_id=? ORDER BY id LIMIT 1', request.id);
       // Zgodność z wpisami utworzonymi przez starszą wersję, w której plan powstawał dopiero po akceptacji.
-      if (!entry) {
+      if (!entry && Number(request.linked_entry_id) !== 0) {
         const result = db.prepare(`INSERT INTO planner_entries(project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,count_in_manpower,vehicle_id,note,cross_project_request_id,created_by)
           VALUES(?,?,?, ?,NULL,?,'none',0,?,NULL,?,?,?)`).run(activeProjectId(), request.user_id, request.plan_date, request.shift, request.work_mode, request.count_in_manpower, request.note, request.id, currentUser.id);
         entry = one('SELECT * FROM planner_entries WHERE id=?', Number(result.lastInsertRowid));

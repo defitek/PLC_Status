@@ -195,6 +195,7 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   await page.locator('#action-submit').click();
   await expect(page.locator('#action-dialog')).not.toBeVisible();
   await page.locator('#planner-detail-toggle').check();
+  await page.locator('#planner-show-areas').click();
   const savedCell = page.locator(`.planner-cell[data-user-id="${userId}"][data-date="${date}"]`);
   const transportChip = savedCell.locator(`.plan-chip.transport-only:has(.plan-note[data-note="${transportNote}"])`);
   await expect(transportChip).toContainText(transportCode);
@@ -831,10 +832,18 @@ test('Planner sortuje kafelki i scala obszary jednego projektu', async ({ page }
   await page.locator('[data-view="planner"]').evaluate(button => button.click());
   const savedCell = page.locator(`.planner-cell[data-user-id="${userId}"][data-date="${date}"]`);
   await expect(page.locator('#planner-detail-toggle')).not.toBeChecked();
+  await expect(page.locator('#planner-show-hours')).toHaveCount(0);
+  const simplifiedHeight = await savedCell.evaluate(element => element.getBoundingClientRect().height);
   await expect(savedCell.locator('.plan-chip:visible')).toHaveCount(2);
   await expect(savedCell.locator('.plan-chip.project-work')).not.toContainText(/\b(?:ON|OFF|D|N)\b/);
   await page.locator('#planner-detail-toggle').check();
+  await expect(page.locator('#planner-show-hours')).toBeVisible();
+  await expect(page.locator('#planner-show-areas')).toBeVisible();
+  await expect(savedCell.locator('.plan-chip').nth(2)).not.toContainText(areas[0].name);
+  await page.locator('#planner-show-areas').click();
+  await expect(page.locator('#planner-show-areas')).toHaveAttribute('aria-pressed', 'true');
   await expect(savedCell.locator('.plan-chip:visible')).toHaveCount(3);
+  expect(await savedCell.evaluate(element => element.getBoundingClientRect().height)).toBeGreaterThan(simplifiedHeight);
   await expect(savedCell.locator('.plan-chip').nth(0)).toHaveClass(/transport-only/);
   await expect(savedCell.locator('.plan-chip').nth(1)).toHaveClass(/offline-work/);
   await expect(savedCell.locator('.plan-chip').nth(1)).not.toContainText('OFF');
@@ -964,7 +973,11 @@ test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzypr
   await expect(externalNightChip).toHaveAttribute('style', new RegExp(`--project-color:${setup.targetProjectColor}`, 'i'));
   expect(await externalNightChip.evaluate(element => getComputedStyle(element).backgroundImage)).toContain('repeating-linear-gradient');
   await page.locator('.planner-scroll').evaluate(element => { element.scrollLeft = 0; });
-  await externalNightChip.click();
+  await expect(externalNightChip).toHaveAttribute('draggable', 'true');
+  await externalNightChip.dispatchEvent('pointerdown', { button: 0, buttons: 1 });
+  await page.locator('body').dispatchEvent('pointerup', { button: 0 });
+  await expect(page.locator('#planner-entry-selection-count')).toHaveText('1');
+  await externalNightChip.dblclick();
   await expect(page.locator('#planner-dialog-description')).toContainText('bez dodatkowej akceptacji');
   await page.locator('#planner-entry-add').click();
   const transportRow = page.locator('#planner-entry-list .planner-entry-row').last();
@@ -974,6 +987,37 @@ test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzypr
   await transportRow.locator('[data-plan-note]').fill('Transport edytowany z projektu źródłowego');
   await page.locator('#planner-form footer .primary').click();
   await expect(page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"] .plan-chip.other-project.approval-pending`)).toHaveCount(0);
+
+  const copyDate = await rowCells.nth(1).getAttribute('data-date');
+  const moveDate = await rowCells.nth(2).getAttribute('data-date');
+  const externalTransport = page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"] .plan-chip.other-project.transport-only`);
+  await expect(externalTransport).toHaveAttribute('draggable', 'true');
+  await externalTransport.dispatchEvent('pointerdown', { button: 0, buttons: 1 });
+  await page.locator('body').dispatchEvent('pointerup', { button: 0 });
+  await page.keyboard.press('Control+C');
+  const copyCell = page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${copyDate}"]`);
+  await copyCell.dispatchEvent('pointerdown', { button: 0, buttons: 1 });
+  await page.locator('body').dispatchEvent('pointerup', { button: 0 });
+  await page.keyboard.press('Control+V');
+  const copiedTransport = page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${copyDate}"] .plan-chip.other-project.transport-only`);
+  await expect(copiedTransport).toBeVisible();
+  await copiedTransport.evaluate((source, { workerId, moveDate }) => {
+    const target = document.querySelector(`.planner-cell[data-user-id="${workerId}"][data-date="${moveDate}"]`);
+    const transfer = new DataTransfer();
+    source.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+    target.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+    target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+    source.dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+  }, { workerId: setup.workerId, moveDate });
+  const movedTransport = page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${moveDate}"] .plan-chip.other-project.transport-only`);
+  await expect(movedTransport).toBeVisible();
+  await expect(copiedTransport).toHaveCount(0);
+  await movedTransport.dispatchEvent('pointerdown', { button: 0, buttons: 1 });
+  await page.locator('body').dispatchEvent('pointerup', { button: 0 });
+  await page.keyboard.press('Delete');
+  await expect(page.locator('#action-title')).toHaveText('Usuń zaznaczone kafelki');
+  await page.locator('#action-submit').click();
+  await expect(movedTransport).toHaveCount(0);
 
   await page.evaluate(async targetProjectId => {
     const response = await fetch('/api/select-project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project_id: targetProjectId }) });

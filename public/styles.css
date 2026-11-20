@@ -1641,3 +1641,14 @@ input:is([type=checkbox],[type=radio]) { accent-color:var(--blue); cursor:pointe
 .mini-plan-chip.project-work b { color:var(--project-contrast,#fff); background:var(--project-color,#2563eb); border-radius:2px; padding:1px 2px; }.mini-plan-chip.project-work small { display:block; margin-left:auto; font-weight:850; }
 .mini-plan-chip.project-work.night-shift { background-image:repeating-linear-gradient(135deg,transparent 0 5px,color-mix(in srgb,var(--project-color,#2563eb) 18%,transparent) 5px 7px); }
 .mini-plan-chip.transport { color:#0e7490; background:color-mix(in srgb,#0e7490 16%,var(--surface)); border:1px solid color-mix(in srgb,#0e7490 50%,var(--line)); }
+
+/* Planner: opcjonalne szczegóły i maksymalnie zwarty widok podstawowy */
+.planner-detail-options { display:inline-flex; gap:4px; align-items:center; }
+.planner-detail-options .mini[aria-pressed="true"] { color:var(--blue); background:var(--blue-soft); border-color:color-mix(in srgb,var(--blue) 55%,var(--line)); }
+.planner-hide-areas .planner-table tbody tr:not(.planner-annotation-row)>th.person-col small { display:none; }
+.planner-table .plan-chip.other-project[draggable="true"] { cursor:grab; }
+.planner-simplified .planner-table tbody tr { height:29px; }
+.planner-simplified .planner-table tbody td,
+.planner-simplified .planner-table tbody th.person-col { height:29px; min-height:29px; padding:2px 4px; }
+.planner-simplified .planner-table :is(.plan-chip,.absence-chip) { height:21px; min-height:21px; max-height:21px; margin-bottom:1px; padding-top:2px; padding-bottom:2px; }
+.planner-simplified .planner-cell-expand { min-height:15px; margin-top:1px; padding:0 5px; }
