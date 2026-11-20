@@ -194,6 +194,7 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   await page.locator('#action-fields [name="note"]').fill(transportNote);
   await page.locator('#action-submit').click();
   await expect(page.locator('#action-dialog')).not.toBeVisible();
+  await page.locator('#planner-detail-toggle').check();
   const savedCell = page.locator(`.planner-cell[data-user-id="${userId}"][data-date="${date}"]`);
   const transportChip = savedCell.locator(`.plan-chip.transport-only:has(.plan-note[data-note="${transportNote}"])`);
   await expect(transportChip).toContainText(transportCode);
@@ -213,7 +214,8 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   await page.locator('#planner-dialog-close').click();
 
   const freeCell = page.locator('.planner-cell[data-editable="1"]').nth(1);
-  await freeCell.click();
+  await freeCell.dispatchEvent('pointerdown', { button: 0, buttons: 1 });
+  await page.locator('body').dispatchEvent('pointerup', { button: 0 });
   await page.keyboard.press('w');
   await expect(page.locator('#action-title')).toContainText('Wolne');
   await page.locator('#action-fields [name="note"]').fill('Odbiór nadgodzin');
@@ -233,7 +235,8 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   await expect(vacationCell.locator('.absence-chip.vacation')).toContainText('URLOP');
 
   const workCell = page.locator('.planner-cell[data-editable="1"]').nth(3);
-  await workCell.click();
+  await workCell.dispatchEvent('pointerdown', { button: 0, buttons: 1 });
+  await page.locator('body').dispatchEvent('pointerup', { button: 0 });
   await page.keyboard.press('p');
   await expect(page.locator('#action-title')).toContainText('Dodaj pracę');
   const rootAreas = await page.locator('#action-fields [name="controller_group_ids"]').evaluateAll(inputs => inputs.map(input => ({ value: input.value, label: input.closest('label')?.textContent?.trim() || '' })).filter(item => !item.label.includes(' / ')).slice(0, 2));
@@ -246,8 +249,8 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   await expect(mergedWorkChip).toHaveCount(1);
   for (const area of rootAreas) await expect(mergedWorkChip).toContainText(area.label);
   await expect(mergedWorkChip).toHaveAttribute('data-entry-ids', /\d+,\d+/);
-  const markerPositions = await mergedWorkChip.evaluate(chip => ({ left: chip.querySelector('.mode-label').getBoundingClientRect().left, right: chip.querySelector('.shift-label').getBoundingClientRect().left }));
-  expect(markerPositions.left).toBeLessThan(markerPositions.right);
+  await expect(mergedWorkChip.locator('.mode-label')).toBeVisible();
+  await expect(mergedWorkChip.locator('.shift-label')).toHaveCount(0);
   await expect(mergedWorkChip).toHaveAttribute('style', /--project-color:#[0-9a-f]{6}/);
   await mergedWorkChip.dispatchEvent('pointerdown', { button: 0, buttons: 1 });
   await page.locator('body').dispatchEvent('pointerup', { button: 0 });
@@ -277,7 +280,8 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   await page.locator('#action-submit').click();
   const savedGenericCell = page.locator(`.planner-cell[data-user-id="${genericUserId}"][data-date="${genericDate}"]`);
   const genericChip = savedGenericCell.locator(`.plan-chip.excluded-from-manpower:has(.plan-note[data-note="${genericNote}"])`);
-  await expect(genericChip).toContainText('ON');
+  await expect(genericChip.locator('.mode-label')).toBeVisible();
+  await expect(genericChip).not.toContainText(/\b(?:ON|OFF|D|N)\b/);
   await expect(genericChip).not.toContainText('Bez obszaru');
   await expect(genericChip).toHaveAttribute('title', /manpoweru/);
 
@@ -290,7 +294,7 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   await expect(directGenericRow.locator('[data-plan-area]:checked')).toHaveCount(0);
   await expect(directGenericRow.locator('[data-plan-manpower]')).toBeChecked();
   await page.locator('#planner-form .dialog-actions .primary').click();
-  await expect(savedGenericCell.locator('.plan-chip[data-current-project="1"]:not(.excluded-from-manpower)')).toContainText('ON');
+  await expect(savedGenericCell.locator('.plan-chip[data-current-project="1"]:not(.excluded-from-manpower)')).not.toContainText(/\b(?:ON|OFF|D|N)\b/);
   await expect(savedGenericCell.locator('.plan-chip[data-current-project="1"]:not(.excluded-from-manpower)')).not.toContainText('Bez obszaru');
 
   await savedCell.dispatchEvent('pointerdown', { button: 0 });
@@ -324,6 +328,7 @@ test('Planner przelicza godziny po dodaniu święta i dla ręcznie wybranego okr
   await page.reload();
   await expect(page.locator('#content')).toBeVisible();
   await openView(page, 'planner');
+  await page.locator('#planner-detail-toggle').check();
   const target = await page.locator('.planner-cell[data-editable="1"]').evaluateAll(cells => {
     const candidate = cells.find(cell => {
       const weekday = new Date(`${cell.dataset.date}T12:00:00Z`).getUTCDay();
@@ -825,9 +830,14 @@ test('Planner sortuje kafelki i scala obszary jednego projektu', async ({ page }
   }, { userId, date, areas });
   await page.locator('[data-view="planner"]').evaluate(button => button.click());
   const savedCell = page.locator(`.planner-cell[data-user-id="${userId}"][data-date="${date}"]`);
+  await expect(page.locator('#planner-detail-toggle')).not.toBeChecked();
+  await expect(savedCell.locator('.plan-chip:visible')).toHaveCount(2);
+  await expect(savedCell.locator('.plan-chip.project-work')).not.toContainText(/\b(?:ON|OFF|D|N)\b/);
+  await page.locator('#planner-detail-toggle').check();
   await expect(savedCell.locator('.plan-chip:visible')).toHaveCount(3);
   await expect(savedCell.locator('.plan-chip').nth(0)).toHaveClass(/transport-only/);
-  await expect(savedCell.locator('.plan-chip').nth(1)).toContainText('OFF');
+  await expect(savedCell.locator('.plan-chip').nth(1)).toHaveClass(/offline-work/);
+  await expect(savedCell.locator('.plan-chip').nth(1)).not.toContainText('OFF');
   await expect(savedCell.locator('.plan-chip').nth(1)).not.toContainText('Bez obszaru');
   await expect(savedCell.locator('.plan-chip').nth(2)).toContainText(areas[0].name);
   await expect(savedCell.locator('.plan-chip').nth(2)).toContainText(areas[1].name);
@@ -858,7 +868,7 @@ test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzypr
     await request('/api/select-project', { method: 'POST', body: JSON.stringify({ project_id: target.id }) });
     await request(`/api/users/${worker.id}`, { method: 'PATCH', body: JSON.stringify({ project_role: 'user', project_active: 1, planner_enabled: 1, assignable: 1 }) });
     await request('/api/select-project', { method: 'POST', body: JSON.stringify({ project_id: me.current_project.id }) });
-    return { sourceProjectId: me.current_project.id, targetProjectId: target.id, targetProjectCode: target.code, targetProjectColor: target.planner_color, workerId: worker.id, workerName: worker.display_name };
+    return { sourceProjectId: me.current_project.id, sourceProjectShortCode: me.current_project.planner_short_code, targetProjectId: target.id, targetProjectCode: target.code, targetProjectShortCode: target.planner_short_code, targetProjectColor: target.planner_color, workerId: worker.id, workerName: worker.display_name };
   }, `${Date.now()}-${Math.floor(Math.random() * 10000)}`);
   await openView(page, 'planner');
   await page.locator('#planner-days').selectOption('31');
@@ -888,8 +898,9 @@ test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzypr
   }, { workerId: setup.workerId, planDate });
   await page.locator('[data-view="planner"]').evaluate(button => button.click());
   const nightChip = page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"] .plan-chip.night-shift`);
-  await expect(nightChip).toContainText('OFF');
-  await expect(nightChip).toContainText('N');
+  await expect(nightChip).toContainText(setup.sourceProjectShortCode);
+  await expect(nightChip).toHaveClass(/offline-work/);
+  await expect(nightChip).not.toContainText(/\b(?:ON|OFF|D|N)\b/);
   await expect(nightChip).not.toContainText('Bez obszaru');
   await page.evaluate(async ({ workerId, planDate }) => {
     const response = await fetch('/api/planner/day', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: workerId, plan_date: planDate, entries: [] }) });
@@ -906,6 +917,7 @@ test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzypr
   await page.locator('#action-fields [name="shift"]').selectOption('Noc');
   await page.locator('#action-fields [name="note"]').fill('Nocne wsparcie projektu docelowego');
   await page.locator('#action-submit').click();
+  await page.locator('#planner-detail-toggle').check();
   const pendingSourceChip = page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"] .plan-chip.other-project.approval-pending`);
   await expect(pendingSourceChip).toContainText('?');
 
@@ -916,6 +928,7 @@ test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzypr
   await page.reload();
   await expect(page.locator('#content')).toBeVisible();
   await openView(page, 'planner');
+  await page.locator('#planner-detail-toggle').check();
   const pendingTargetChip = page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"] .plan-chip.approval-pending`);
   await expect(pendingTargetChip).toContainText('?');
   await page.locator('.planner-cross-project-requests>summary').click();
@@ -923,8 +936,8 @@ test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzypr
   await expect(incoming).toBeVisible();
   await incoming.locator('[data-planner-cross-project-action="approve"]').click();
   const approvedChip = page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"] .plan-chip.night-shift`);
-  await expect(approvedChip).toContainText('OFF');
-  await expect(approvedChip).toContainText('N');
+  await expect(approvedChip).toContainText(setup.targetProjectShortCode);
+  await expect(approvedChip).toHaveClass(/offline-work/);
   await expect(approvedChip).not.toHaveClass(/approval-pending/);
   await expect(approvedChip).toHaveAttribute('style', new RegExp(`--project-color:${setup.targetProjectColor}`, 'i'));
   await expect(incoming).toHaveCount(0);
@@ -935,12 +948,29 @@ test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzypr
   }, setup.sourceProjectId);
   await page.reload();
   await openView(page, 'planner');
+  await page.locator('#planner-detail-toggle').check();
+  await page.locator('#planner-requirements-open').click();
+  const requirementProjectSelect = page.locator('#planner-requirement-project-inline');
+  await expect(requirementProjectSelect.locator(`option[value="${setup.targetProjectId}"]`)).toContainText(setup.targetProjectShortCode);
+  await requirementProjectSelect.selectOption(String(setup.targetProjectId));
+  await expect(page.locator('#planner-requirement-project-inline')).toHaveValue(String(setup.targetProjectId));
+  await page.locator('#planner-requirements-open').click();
   const externalNightChip = page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"] .plan-chip.other-project.night-shift`);
-  await expect(externalNightChip).toContainText('OFF');
-  await expect(externalNightChip).toContainText('N');
-  await expect(externalNightChip).not.toContainText(setup.targetProjectCode);
+  await expect(externalNightChip).toContainText(setup.targetProjectShortCode);
+  await expect(externalNightChip).not.toContainText(/\b(?:ON|OFF|D|N)\b/);
   await expect(externalNightChip).toHaveAttribute('style', new RegExp(`--project-color:${setup.targetProjectColor}`, 'i'));
   expect(await externalNightChip.evaluate(element => getComputedStyle(element).backgroundImage)).toContain('repeating-linear-gradient');
+  await page.locator('.planner-scroll').evaluate(element => { element.scrollLeft = 0; });
+  await externalNightChip.click();
+  await expect(page.locator('#planner-dialog-description')).toContainText('ponownie trafią do akceptacji');
+  await page.locator('#planner-entry-add').click();
+  const transportRow = page.locator('#planner-entry-list .planner-entry-row').last();
+  await transportRow.locator('[data-plan-activity]').selectOption('transport');
+  await transportRow.locator('[data-plan-duration-hours]').fill('2');
+  await transportRow.locator('[data-plan-duration-minutes]').fill('15');
+  await transportRow.locator('[data-plan-note]').fill('Transport edytowany z projektu źródłowego');
+  await page.locator('#planner-form footer .primary').click();
+  await expect(page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"] .plan-chip.other-project.approval-pending`)).toHaveCount(2);
 
   await page.evaluate(async targetProjectId => {
     const response = await fetch('/api/select-project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project_id: targetProjectId }) });
@@ -948,10 +978,16 @@ test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzypr
   }, setup.targetProjectId);
   await page.reload();
   await openView(page, 'planner');
+  await page.locator('#planner-detail-toggle').check();
+  await page.locator('.planner-cross-project-requests>summary').click();
+  const transportApproval = page.locator('.planner-cross-project-row.incoming', { hasText: setup.workerName });
+  await expect(transportApproval).toContainText('plan i transport');
+  await transportApproval.locator('[data-planner-cross-project-action="approve"]').click();
+  await expect(page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"] .plan-chip.transport-only`)).toBeVisible();
   await page.evaluate(async ({ workerId, planDate }) => {
     const planner = await fetch(`/api/planner?from=${planDate}&to=${planDate}`).then(response => response.json());
-    const entry = planner.entries.find(item => Number(item.user_id) === Number(workerId) && item.plan_date === planDate);
-    if (entry) await fetch(`/api/planner/entries/${entry.id}`, { method: 'DELETE' });
+    const entries = planner.entries.filter(item => Number(item.user_id) === Number(workerId) && item.plan_date === planDate);
+    for (const entry of entries) await fetch(`/api/planner/entries/${entry.id}`, { method: 'DELETE' });
   }, { workerId: setup.workerId, planDate });
   await expectViewportContained(page);
 });

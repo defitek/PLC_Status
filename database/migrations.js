@@ -89,6 +89,10 @@ export function prepareDatabase(db, { seedDemo, demoLimit = 100 }) {
     ensureColumn(db, 'planner_entries', 'cross_project_request_id', 'INTEGER');
     db.exec('CREATE INDEX IF NOT EXISTS idx_planner_entries_cross_request ON planner_entries(cross_project_request_id)');
   });
+  runMigration(db, '060-planner-project-short-codes', () => {
+    ensureColumn(db, 'projects', 'planner_short_code', "TEXT NOT NULL DEFAULT ''");
+    db.exec("UPDATE projects SET planner_short_code=substr(code,1,6) WHERE trim(planner_short_code)=''");
+  });
   return defaultProjectId;
 }
 

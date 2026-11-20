@@ -1250,6 +1250,8 @@ test('Planner shows cross-project work immediately, then confirms it, and exclud
     const sourceProject = repository.availableProjects(account.id).find(project => project.id === sourceProjectId);
     assert.match(sourceProject.planner_color, /^#[0-9a-f]{6}$/);
     assert.match(targetProject.planner_color, /^#[0-9a-f]{6}$/);
+    assert.ok(sourceProject.planner_short_code.length > 0 && sourceProject.planner_short_code.length <= 6);
+    assert.ok(targetProject.planner_short_code.length > 0 && targetProject.planner_short_code.length <= 6);
     assert.notEqual(sourceProject.planner_color, targetProject.planner_color);
     const planDate = '2031-04-14';
     const rejectedDate = '2031-04-15';
@@ -1266,6 +1268,7 @@ test('Planner shows cross-project work immediately, then confirms it, and exclud
       assert.equal(transportOnly.mode_summary.range_online, 0);
       assert.equal(transportOnly.mode_summary.range_offline, 0);
     });
+    let targetGroupId;
     repository.withProject(targetProject.id, () => {
       const admin = repository.me(account.id, targetProject.id);
       repository.saveUser(workerId, { project_active: 1, planner_enabled: 1, assignable: 1 });
@@ -1305,6 +1308,33 @@ test('Planner shows cross-project work immediately, then confirms it, and exclud
       const externalEntry = planner.cross_project_entries.find(entry => entry.user_id === workerId && entry.plan_date === planDate && entry.project_id === targetProject.id);
       assert.equal(externalEntry.project_color, targetProject.planner_color);
       assert.equal(planner.time_details.details.find(item => item.user_id === workerId && item.date === planDate).actual_hours, 12);
+      repository.createPlannerCrossProjectRequests({ target_project_id: targetProject.id, items: [{
+        user_id: workerId, plan_date: rejectedDate, replace_all: 1, note: 'Edycja planu i transportu', entries: [
+          { activity_type: 'work', allow_without_area: 1, work_mode: 'offline', shift: 'Noc', count_in_manpower: 1 },
+          { activity_type: 'transport', duration_hours: 2, note: 'Transport międzyprojektowy' }
+        ]
+      }] }, admin);
+    });
+    repository.withProject(targetProject.id, () => {
+      const admin = repository.me(account.id, targetProject.id);
+      let planner = repository.planner(rejectedDate, rejectedDate, admin);
+      const pending = planner.incoming_cross_project_requests[0];
+      assert.equal(Number(pending.includes_transport), 1);
+      assert.equal(Number(pending.linked_entry_count), 2);
+      assert.equal(planner.entries.filter(item => item.user_id === workerId && item.plan_date === rejectedDate).length, 2);
+      assert.ok(planner.entries.filter(item => item.user_id === workerId && item.plan_date === rejectedDate).every(item => item.cross_project_status === 'pending'));
+      repository.reviewPlannerCrossProjectRequest(pending.id, { action: 'approve' }, admin);
+      planner = repository.planner(rejectedDate, rejectedDate, admin);
+      assert.ok(planner.entries.filter(item => item.user_id === workerId).every(item => item.cross_project_status === 'approved'));
+      targetGroupId = repository.controllerGroups().find(item => !item.parent_id).id;
+    });
+    repository.withProject(sourceProjectId, () => {
+      const admin = repository.me(account.id, sourceProjectId);
+      repository.setPlannerRequirementsBatch({ project_id: targetProject.id, items: [{ plan_date: rejectedDate, controller_group_id: targetGroupId, online_required: 3, offline_required: 2 }] }, admin);
+      const planner = repository.planner(rejectedDate, rejectedDate, admin);
+      const related = planner.requirement_projects.find(project => Number(project.id) === Number(targetProject.id));
+      assert.ok(related, 'related target project requirements are visible from the source Planner');
+      assert.equal(related.requirements.find(item => Number(item.controller_group_id) === Number(targetGroupId) && item.work_mode === 'online').required_count, 3);
     });
   } finally {
     repository.close();

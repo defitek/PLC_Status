@@ -436,8 +436,8 @@ function createRepository(db, defaultProjectId) {
     return hierarchy.groups.filter(group => group.path_names.slice(0, selected.path_names.length).join('\u0000') === selected.path_names.join('\u0000')).map(group => group.id);
   }
 
-  function hasHierarchyOverlap(groupIds) {
-    const hierarchy = hierarchyData();
+  function hasHierarchyOverlap(groupIds, projectId = activeProjectId()) {
+    const hierarchy = hierarchyData(projectId);
     const selected = hierarchy.groups.filter(group => groupIds.includes(group.id));
     return selected.some((left, index) => selected.some((right, otherIndex) => index !== otherIndex
       && right.path_names.length > left.path_names.length
@@ -1630,7 +1630,7 @@ function createRepository(db, defaultProjectId) {
     return user;
   }
 
-  function normalizePlannerEntries(requested) {
+  function normalizePlannerEntries(requested, projectId = activeProjectId()) {
     const normalized = [];
     const seenAssignments = new Set();
     const hierarchyGroups = { work: [], transport: [] };
@@ -1646,9 +1646,9 @@ function createRepository(db, defaultProjectId) {
       const shift = activityType === 'transport' ? 'Dzień' : clean(source.shift) || 'Dzień';
       const countInManpower = activityType === 'work' && Number(source.count_in_manpower) === 0 ? 0 : 1;
       const vehicleId = activityType === 'transport' ? asId(source.vehicle_id) : null;
-      if (groupId && !one('SELECT 1 FROM controller_groups WHERE id=? AND project_id=? AND active=1', groupId, activeProjectId())) throw appError('Wybrany obszar nie należy do projektu');
-      if (activityType === 'work' && !one("SELECT 1 FROM options WHERE project_id=? AND kind='shift' AND value=? AND active=1", activeProjectId(), shift)) throw appError(`Nieznana zmiana: ${shift}`);
-      if (vehicleId && !one('SELECT 1 FROM planner_vehicles WHERE id=? AND project_id=? AND active=1', vehicleId, activeProjectId())) throw appError('Wybrane auto nie należy do tego projektu');
+      if (groupId && !one('SELECT 1 FROM controller_groups WHERE id=? AND project_id=? AND active=1', groupId, projectId)) throw appError('Wybrany obszar nie należy do projektu');
+      if (activityType === 'work' && !one("SELECT 1 FROM options WHERE project_id=? AND kind='shift' AND value=? AND active=1", projectId, shift)) throw appError(`Nieznana zmiana: ${shift}`);
+      if (vehicleId && !one('SELECT 1 FROM planner_vehicles WHERE id=? AND project_id=? AND active=1', vehicleId, projectId)) throw appError('Wybrane auto nie należy do tego projektu');
       if (!groupId && activityType === 'work' && !clean(source.note) && !Number(source.allow_without_area) && !source.id) continue;
       if (groupId) {
         const key = `${activityType}:${groupId}`;
@@ -1658,7 +1658,7 @@ function createRepository(db, defaultProjectId) {
       }
       normalized.push({ groupId, shift, workMode, transportMode, activityType, durationHours, countInManpower, vehicleId, note: clean(source.note) });
     }
-    if (hasHierarchyOverlap(hierarchyGroups.work) || hasHierarchyOverlap(hierarchyGroups.transport)) throw appError('Nie można przypisać jednocześnie obszaru nadrzędnego i jego podobszaru dla tego samego rodzaju aktywności');
+    if (hasHierarchyOverlap(hierarchyGroups.work, projectId) || hasHierarchyOverlap(hierarchyGroups.transport, projectId)) throw appError('Nie można przypisać jednocześnie obszaru nadrzędnego i jego podobszaru dla tego samego rodzaju aktywności');
     return normalized;
   }
 
@@ -1709,7 +1709,7 @@ function createRepository(db, defaultProjectId) {
     const groupMap = new Map(hierarchy.groups.map(group => [group.id, group]));
     const projectUsers = plannerProjectUsers();
     const canManageRequirements = ['system_admin', 'project_admin', 'moderator'].includes(currentUser?.role);
-    const currentProject = one('SELECT id,code,name,planner_color FROM projects WHERE id=?', activeProjectId());
+    const currentProject = one('SELECT id,code,name,planner_color,planner_short_code FROM projects WHERE id=?', activeProjectId());
     const vehicles = all('SELECT * FROM planner_vehicles WHERE project_id=? AND active=1 ORDER BY sort_order,code,id', activeProjectId());
     const vehicleMap = new Map(vehicles.map(vehicle => [Number(vehicle.id), vehicle]));
     const entries = all(`SELECT pe.*,u.display_name,creator.display_name created_by_name,
@@ -1723,12 +1723,12 @@ function createRepository(db, defaultProjectId) {
       ORDER BY pe.plan_date,u.sort_order,pe.id`, activeProjectId(), range.from, range.to).map(entry => {
         const area = groupMap.get(Number(entry.controller_group_id));
         const vehicle = vehicleMap.get(Number(entry.vehicle_id));
-        return { ...entry, activity_type: entry.transport_mode === 'transport_only' ? 'transport' : 'work', transport_code: vehicle?.code || 'T', vehicle_registration: vehicle?.registration_number || '', project_code: currentProject?.code || '', project_name: currentProject?.name || '', project_color: currentProject?.planner_color || '#2563eb', is_current_project: true, area_name: area?.name || '', area_path: area?.path_label || '', area_depth: area?.depth || 0, root_area_id: area?.root_group_id || null };
+        return { ...entry, activity_type: entry.transport_mode === 'transport_only' ? 'transport' : 'work', transport_code: vehicle?.code || 'T', vehicle_registration: vehicle?.registration_number || '', project_code: currentProject?.code || '', project_short_code: currentProject?.planner_short_code || String(currentProject?.code || '').slice(0, 6), project_name: currentProject?.name || '', project_color: currentProject?.planner_color || '#2563eb', is_current_project: true, area_name: area?.name || '', area_path: area?.path_label || '', area_depth: area?.depth || 0, root_area_id: area?.root_group_id || null };
       });
     const crossProjectVisibility = canManageRequirements
       ? { sql: 'AND EXISTS(SELECT 1 FROM project_memberships current_pm WHERE current_pm.project_id=? AND current_pm.user_id=pe.user_id AND current_pm.active=1 AND current_pm.planner_enabled=1)', params: [activeProjectId()] }
       : { sql: 'AND pe.user_id=?', params: [Number(currentUser?.id || 0)] };
-    const crossProjectEntries = all(`SELECT pe.*,u.display_name,creator.display_name created_by_name,p.code project_code,p.name project_name,p.planner_color project_color,
+    const crossProjectEntries = all(`SELECT pe.*,u.display_name,creator.display_name created_by_name,p.code project_code,p.planner_short_code project_short_code,p.name project_name,p.planner_color project_color,
       COALESCE(pv.code,'T') transport_code,COALESCE(pv.registration_number,'') vehicle_registration,
       request.status cross_project_status,source.code cross_project_source_code
       FROM planner_entries pe JOIN users u ON u.id=pe.user_id
@@ -1844,6 +1844,41 @@ function createRepository(db, defaultProjectId) {
         }) : []
       };
     });
+    const relatedRequirementProjectIds = canManageRequirements ? [...new Set([activeProjectId(), ...all(`SELECT DISTINCT target_pm.project_id id
+      FROM project_memberships current_pm
+      JOIN project_memberships target_pm ON target_pm.user_id=current_pm.user_id AND target_pm.active=1 AND target_pm.planner_enabled=1
+      JOIN projects target ON target.id=target_pm.project_id AND target.active=1
+      WHERE current_pm.project_id=? AND current_pm.active=1 AND current_pm.planner_enabled=1
+      ORDER BY target_pm.project_id`, activeProjectId()).map(row => Number(row.id))])] : [activeProjectId()];
+    const requirementProjectPlaceholders = relatedRequirementProjectIds.map(() => '?').join(',');
+    const allRelatedRequirements = canManageRequirements && requirementProjectPlaceholders ? all(`SELECT pr.* FROM planner_requirements pr
+      WHERE pr.project_id IN (${requirementProjectPlaceholders}) AND pr.plan_date BETWEEN ? AND ? ORDER BY pr.project_id,pr.plan_date,pr.controller_group_id,pr.work_mode`, ...relatedRequirementProjectIds, range.from, range.to) : requirements;
+    const allRelatedEntries = canManageRequirements && requirementProjectPlaceholders ? all(`SELECT pe.* FROM planner_entries pe
+      JOIN project_memberships pm ON pm.project_id=pe.project_id AND pm.user_id=pe.user_id AND pm.active=1 AND pm.planner_enabled=1
+      WHERE pe.project_id IN (${requirementProjectPlaceholders}) AND pe.plan_date BETWEEN ? AND ? ORDER BY pe.project_id,pe.plan_date,pe.user_id,pe.id`, ...relatedRequirementProjectIds, range.from, range.to) : entries;
+    const requirementProjects = relatedRequirementProjectIds.map(projectId => {
+      const project = one('SELECT id,code,name,planner_color,planner_short_code FROM projects WHERE id=? AND active=1', projectId);
+      const projectHierarchy = hierarchyData(projectId);
+      const projectRequirements = allRelatedRequirements.filter(row => Number(row.project_id) === Number(projectId));
+      const projectEntries = allRelatedEntries.filter(row => Number(row.project_id) === Number(projectId) && row.transport_mode !== 'transport_only' && Number(row.count_in_manpower) !== 0);
+      const roots = projectHierarchy.groups.filter(group => !group.parent_id).map(group => {
+        const descendants = new Set(projectHierarchy.groups.filter(candidate => candidate.path_names.slice(0, group.path_names.length).join('\u0000') === group.path_names.join('\u0000')).map(candidate => Number(candidate.id)));
+        return {
+          id: group.id, name: group.name, path_label: group.path_label,
+          days: Array.from({ length: range.days }, (_, index) => {
+            const date = new Date(`${range.from}T12:00:00Z`); date.setUTCDate(date.getUTCDate() + index); const value = date.toISOString().slice(0, 10);
+            const related = projectEntries.filter(entry => entry.plan_date === value && (entry.controller_group_id ? descendants.has(Number(entry.controller_group_id)) : true));
+            const required = projectRequirements.filter(row => row.plan_date === value && Number(row.controller_group_id) === Number(group.id));
+            return { date: value,
+              online: new Set(related.filter(entry => entry.work_mode === 'online').map(entry => entry.user_id)).size,
+              offline: new Set(related.filter(entry => entry.work_mode === 'offline').map(entry => entry.user_id)).size,
+              online_required: required.filter(row => row.work_mode === 'online').reduce((sum, row) => sum + Number(row.required_count || 0), 0),
+              offline_required: required.filter(row => row.work_mode === 'offline').reduce((sum, row) => sum + Number(row.required_count || 0), 0) };
+          })
+        };
+      });
+      return { ...project, planner_short_code: project?.planner_short_code || String(project?.code || '').slice(0, 6), areas: projectHierarchy.groups, requirements: projectRequirements, area_day_summary: roots };
+    }).filter(project => project.id);
     let timeDetails = null;
     if (canManageRequirements) {
       const plannerUserIds = projectUsers.map(user => Number(user.id)).filter(Boolean);
@@ -1877,7 +1912,9 @@ function createRepository(db, defaultProjectId) {
     const annotations = calendarAnnotationRows().filter(item => item.end_date >= range.from && item.start_date <= range.to);
     const requestSelect = `SELECT request.*,source.code source_project_code,source.name source_project_name,
       target.code target_project_code,target.name target_project_name,u.display_name,requester.display_name requested_by_name,
-      decider.display_name decided_by_name
+      decider.display_name decided_by_name,
+      EXISTS(SELECT 1 FROM planner_entries linked WHERE linked.cross_project_request_id=request.id AND linked.transport_mode='transport_only') includes_transport,
+      (SELECT COUNT(*) FROM planner_entries linked WHERE linked.cross_project_request_id=request.id) linked_entry_count
       FROM planner_cross_project_requests request
       JOIN projects source ON source.id=request.source_project_id
       JOIN projects target ON target.id=request.target_project_id
@@ -1888,13 +1925,14 @@ function createRepository(db, defaultProjectId) {
       WHERE request.target_project_id=? AND request.status='pending' ORDER BY request.plan_date,u.sort_order,request.id`, activeProjectId()) : [];
     const outgoingCrossProjectRequests = canManageRequirements ? all(`${requestSelect}
       WHERE request.source_project_id=? AND request.status='pending' ORDER BY request.plan_date,u.sort_order,request.id`, activeProjectId()) : [];
-    const assignmentProjects = canManageRequirements ? all('SELECT id,code,name,planner_color FROM projects WHERE active=1 ORDER BY sort_order,name,id').map(project => ({
+    const assignmentProjects = canManageRequirements ? all('SELECT id,code,name,planner_color,planner_short_code FROM projects WHERE active=1 ORDER BY sort_order,name,id').map(project => ({
       ...project,
       eligible_user_ids: all('SELECT user_id FROM project_memberships WHERE project_id=? AND active=1 AND planner_enabled=1 ORDER BY user_id', project.id).map(row => Number(row.user_id)),
       areas: hierarchyData(project.id).groups.map(group => ({ id: group.id, name: group.name, path_label: group.path_label, depth: group.depth })),
-      shifts: all("SELECT value FROM options WHERE project_id=? AND kind='shift' AND active=1 ORDER BY sort_order,id", project.id).map(row => row.value)
+      shifts: all("SELECT value FROM options WHERE project_id=? AND kind='shift' AND active=1 ORDER BY sort_order,id", project.id).map(row => row.value),
+      vehicles: all('SELECT id,code,registration_number FROM planner_vehicles WHERE project_id=? AND active=1 ORDER BY sort_order,code,id', project.id)
     })) : [];
-    return { ...range, users, entries, cross_project_entries: crossProjectEntries, incoming_cross_project_requests: incomingCrossProjectRequests, outgoing_cross_project_requests: outgoingCrossProjectRequests, assignment_projects: assignmentProjects, absences, holidays, annotations, overlap_reviews: overlapReviews, time_adjustments: canManageRequirements ? timeAdjustments : [], work, summary, area_summary, area_day_summary, shift_summary, mode_summary, areas: hierarchy.groups, vehicles, requirements, time_details: timeDetails, can_manage_requirements: canManageRequirements, can_manage_time: canManageRequirements };
+    return { ...range, users, entries, cross_project_entries: crossProjectEntries, incoming_cross_project_requests: incomingCrossProjectRequests, outgoing_cross_project_requests: outgoingCrossProjectRequests, assignment_projects: assignmentProjects, requirement_projects: requirementProjects, absences, holidays, annotations, overlap_reviews: overlapReviews, time_adjustments: canManageRequirements ? timeAdjustments : [], work, summary, area_summary, area_day_summary, shift_summary, mode_summary, areas: hierarchy.groups, vehicles, requirements, time_details: timeDetails, can_manage_requirements: canManageRequirements, can_manage_time: canManageRequirements };
   }
 
   function plannerTimeCalculation(range, users, entries, absences, holidays, adjustments = [], visibleRange = range) {
@@ -2072,21 +2110,23 @@ function createRepository(db, defaultProjectId) {
         throw appError('Wybrana osoba nie jest aktywnym uczestnikiem Plannera w projekcie docelowym');
       }
       if (one('SELECT 1 FROM system_absences WHERE user_id=? AND absence_date=?', userId, planDate)) throw appError('Nie można przypisać do innego projektu osoby mającej tego dnia urlop lub wolne');
+      const explicitEntries = Array.isArray(item.entries);
       const areaIds = [...new Set((Array.isArray(item.controller_group_ids) ? item.controller_group_ids : []).map(asId).filter(Boolean))];
-      const targetHierarchy = hierarchyData(targetProjectId);
-      const selectedAreas = targetHierarchy.groups.filter(group => areaIds.includes(Number(group.id)));
-      if (selectedAreas.length !== areaIds.length) throw appError('Jeden z wybranych obszarów nie należy do projektu docelowego');
-      if (selectedAreas.some((left, index) => selectedAreas.some((right, otherIndex) => index !== otherIndex
-        && right.path_names.length > left.path_names.length
-        && right.path_names.slice(0, left.path_names.length).join('\u0000') === left.path_names.join('\u0000')))) throw appError('Nie można przypisać jednocześnie obszaru nadrzędnego i jego podobszaru');
-      const requestedShift = clean(item.shift) || 'Dzień';
-      if (!one("SELECT 1 FROM options WHERE project_id=? AND kind='shift' AND value=? AND active=1", targetProjectId, requestedShift)) throw appError(`Nieznana zmiana w projekcie docelowym: ${requestedShift}`);
+      const requestedEntries = explicitEntries ? item.entries : (areaIds.length ? areaIds : [null]).map(groupId => ({
+        activity_type: 'work', controller_group_id: groupId, allow_without_area: groupId ? 0 : 1,
+        work_mode: clean(item.work_mode) === 'offline' ? 'offline' : 'online', shift: clean(item.shift) || 'Dzień',
+        count_in_manpower: Number(item.count_in_manpower) === 0 ? 0 : 1, note: clean(item.note)
+      }));
+      const normalized = normalizePlannerEntries(requestedEntries, targetProjectId);
+      if (!normalized.length) throw appError('Plan międzyprojektowy musi zawierać co najmniej jedną aktywność');
+      const representative = normalized.find(entry => entry.activityType === 'work') || normalized[0];
       return {
         userId, planDate,
-        workMode: clean(item.work_mode) === 'offline' ? 'offline' : 'online',
-        shift: requestedShift,
-        countInManpower: Number(item.count_in_manpower) === 0 ? 0 : 1,
-        note: clean(item.note), areaIds
+        workMode: representative.workMode,
+        shift: representative.shift,
+        countInManpower: representative.countInManpower,
+        note: clean(item.note || representative.note), normalized,
+        replaceAll: explicitEntries || Number(item.replace_all) === 1
       };
     });
     const upsert = db.prepare(`INSERT INTO planner_cross_project_requests(
@@ -2096,7 +2136,7 @@ function createRepository(db, defaultProjectId) {
       status='pending',requested_by=excluded.requested_by,decided_by=NULL,decided_at=NULL,linked_entry_id=NULL,
       updated_at=CURRENT_TIMESTAMP`);
     const insertEntry = db.prepare(`INSERT INTO planner_entries(project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,count_in_manpower,vehicle_id,note,cross_project_request_id,created_by)
-      VALUES(?,?,?,?,?,?,'none',0,?,NULL,?,?,?)`);
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     db.exec('BEGIN IMMEDIATE');
     try {
       prepared.forEach(item => {
@@ -2106,8 +2146,8 @@ function createRepository(db, defaultProjectId) {
         const requestId = Number(one(`SELECT id FROM planner_cross_project_requests WHERE source_project_id=? AND target_project_id=? AND user_id=? AND plan_date=?`, activeProjectId(), targetProjectId, item.userId, item.planDate).id);
         db.prepare("UPDATE planner_cross_project_requests SET status='rejected',decided_by=?,decided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE target_project_id=? AND user_id=? AND plan_date=? AND status='pending' AND id!=?")
           .run(currentUser.id, targetProjectId, item.userId, item.planDate, requestId || 0);
-        db.prepare("DELETE FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=? AND transport_mode!='transport_only'").run(targetProjectId, item.userId, item.planDate);
-        const entryIds = (item.areaIds.length ? item.areaIds : [null]).map(groupId => Number(insertEntry.run(targetProjectId, item.userId, item.planDate, item.shift, groupId, item.workMode, item.countInManpower, item.note, requestId, currentUser.id).lastInsertRowid));
+        db.prepare(`DELETE FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=? ${item.replaceAll ? '' : "AND transport_mode!='transport_only'"}`).run(targetProjectId, item.userId, item.planDate);
+        const entryIds = item.normalized.map(entry => Number(insertEntry.run(targetProjectId, item.userId, item.planDate, entry.shift, entry.groupId, entry.workMode, entry.transportMode, entry.durationHours, entry.countInManpower, entry.vehicleId, entry.note, requestId, currentUser.id).lastInsertRowid));
         if (requestId) db.prepare('UPDATE planner_cross_project_requests SET linked_entry_id=? WHERE id=?').run(entryIds[0], requestId);
         syncPlannerOverlapReview(item.userId, item.planDate, currentUser);
       });
@@ -2224,58 +2264,72 @@ function createRepository(db, defaultProjectId) {
   }
 
   function setPlannerRequirements(input, currentUser) {
+    const projectId = plannerRequirementTargetProject(input.project_id);
     const planDate = nullableDate(input.plan_date);
     const groupId = asId(input.controller_group_id);
     if (!planDate || !groupId) throw appError('Dzień i obszar zapotrzebowania są wymagane');
-    if (!one('SELECT 1 FROM controller_groups WHERE id=? AND project_id=? AND active=1', groupId, activeProjectId())) throw appError('Wybrany obszar nie należy do projektu');
+    if (!one('SELECT 1 FROM controller_groups WHERE id=? AND project_id=? AND active=1', groupId, projectId)) throw appError('Wybrany obszar nie należy do projektu');
     const values = { online: Math.max(0, Math.min(999, Number(input.online_required) || 0)), offline: Math.max(0, Math.min(999, Number(input.offline_required) || 0)) };
     db.exec('BEGIN IMMEDIATE');
-    try { writePlannerRequirement(groupId, planDate, values, clean(input.note), currentUser); enforcePlannerRequirementHierarchy([planDate], currentUser); db.exec('COMMIT'); }
+    try { writePlannerRequirement(groupId, planDate, values, clean(input.note), currentUser, projectId); enforcePlannerRequirementHierarchy([planDate], currentUser, projectId); db.exec('COMMIT'); }
     catch (error) { db.exec('ROLLBACK'); throw error; }
     const effective = Object.fromEntries(['online', 'offline'].map(mode => [mode, Number(one(`SELECT required_count FROM planner_requirements
-      WHERE project_id=? AND controller_group_id=? AND plan_date=? AND work_mode=?`, activeProjectId(), groupId, planDate, mode)?.required_count || 0)]));
-    return { plan_date: planDate, controller_group_id: groupId, online_required: effective.online, offline_required: effective.offline };
+      WHERE project_id=? AND controller_group_id=? AND plan_date=? AND work_mode=?`, projectId, groupId, planDate, mode)?.required_count || 0)]));
+    return { project_id: projectId, plan_date: planDate, controller_group_id: groupId, online_required: effective.online, offline_required: effective.offline };
   }
 
-  function writePlannerRequirement(groupId, planDate, values, note, currentUser) {
+  function plannerRequirementTargetProject(requestedProjectId) {
+    const projectId = asId(requestedProjectId) || activeProjectId();
+    if (projectId === activeProjectId()) return projectId;
+    const related = one(`SELECT 1 FROM projects target WHERE target.id=? AND target.active=1 AND EXISTS(
+      SELECT 1 FROM project_memberships current_pm JOIN project_memberships target_pm ON target_pm.user_id=current_pm.user_id
+      WHERE current_pm.project_id=? AND current_pm.active=1 AND current_pm.planner_enabled=1
+        AND target_pm.project_id=target.id AND target_pm.active=1 AND target_pm.planner_enabled=1
+    )`, projectId, activeProjectId());
+    if (!related) throw appError('Projekt nie jest powiązany z zespołem bieżącego Plannera', 403);
+    return projectId;
+  }
+
+  function writePlannerRequirement(groupId, planDate, values, note, currentUser, projectId = activeProjectId()) {
     const upsert = db.prepare(`INSERT INTO planner_requirements(
       project_id,controller_group_id,plan_date,work_mode,required_count,manual_required_count,note,created_by
     ) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(project_id,controller_group_id,plan_date,work_mode) DO UPDATE SET
       manual_required_count=excluded.manual_required_count,note=excluded.note,created_by=excluded.created_by,updated_at=CURRENT_TIMESTAMP`);
-    for (const mode of ['online', 'offline']) upsert.run(activeProjectId(), groupId, planDate, mode, values[mode], values[mode], note, currentUser.id);
+    for (const mode of ['online', 'offline']) upsert.run(projectId, groupId, planDate, mode, values[mode], values[mode], note, currentUser.id);
   }
 
-  function enforcePlannerRequirementHierarchy(planDates, currentUser) {
-    const groups = hierarchyData().groups.slice().sort((left, right) => Number(right.depth || 0) - Number(left.depth || 0));
+  function enforcePlannerRequirementHierarchy(planDates, currentUser, projectId = activeProjectId()) {
+    const groups = hierarchyData(projectId).groups.slice().sort((left, right) => Number(right.depth || 0) - Number(left.depth || 0));
     const upsert = db.prepare(`INSERT INTO planner_requirements(project_id,controller_group_id,plan_date,work_mode,required_count,manual_required_count,note,created_by)
       VALUES(?,?,?,?,?,0,'Automatyczne minimum z sumy podobszarów',?)
       ON CONFLICT(project_id,controller_group_id,plan_date,work_mode) DO UPDATE SET
       required_count=excluded.required_count,manual_required_count=COALESCE(planner_requirements.manual_required_count,planner_requirements.required_count),updated_at=CURRENT_TIMESTAMP`);
     for (const planDate of new Set(planDates)) for (const mode of ['online', 'offline']) for (const group of groups) {
       const children = groups.filter(candidate => Number(candidate.parent_id || 0) === Number(group.id));
-      const row = one('SELECT required_count,manual_required_count FROM planner_requirements WHERE project_id=? AND controller_group_id=? AND plan_date=? AND work_mode=?', activeProjectId(), group.id, planDate, mode);
+      const row = one('SELECT required_count,manual_required_count FROM planner_requirements WHERE project_id=? AND controller_group_id=? AND plan_date=? AND work_mode=?', projectId, group.id, planDate, mode);
       const manual = Number(row?.manual_required_count ?? row?.required_count ?? 0);
-      const childrenRequired = children.reduce((sum, child) => sum + Number(one('SELECT required_count FROM planner_requirements WHERE project_id=? AND controller_group_id=? AND plan_date=? AND work_mode=?', activeProjectId(), child.id, planDate, mode)?.required_count || 0), 0);
+      const childrenRequired = children.reduce((sum, child) => sum + Number(one('SELECT required_count FROM planner_requirements WHERE project_id=? AND controller_group_id=? AND plan_date=? AND work_mode=?', projectId, child.id, planDate, mode)?.required_count || 0), 0);
       const required = Math.max(manual, childrenRequired);
-      if (required > 0 || manual > 0) upsert.run(activeProjectId(), Number(group.id), planDate, mode, required, currentUser.id);
-      else db.prepare('DELETE FROM planner_requirements WHERE project_id=? AND controller_group_id=? AND plan_date=? AND work_mode=?').run(activeProjectId(), group.id, planDate, mode);
+      if (required > 0 || manual > 0) upsert.run(projectId, Number(group.id), planDate, mode, required, currentUser.id);
+      else db.prepare('DELETE FROM planner_requirements WHERE project_id=? AND controller_group_id=? AND plan_date=? AND work_mode=?').run(projectId, group.id, planDate, mode);
     }
   }
 
   function setPlannerRequirementsBatch(input, currentUser) {
+    const projectId = plannerRequirementTargetProject(input.project_id);
     const items = Array.isArray(input.items) ? input.items.slice(0, 2000) : [];
     if (!items.length) throw appError('Brak danych zapotrzebowania do zapisania');
     db.exec('BEGIN IMMEDIATE');
     try {
       for (const item of items) {
         const planDate = nullableDate(item.plan_date); const groupId = asId(item.controller_group_id);
-        if (!planDate || !groupId || !one('SELECT 1 FROM controller_groups WHERE id=? AND project_id=? AND active=1', groupId, activeProjectId())) throw appError('Dzień i obszar zapotrzebowania są wymagane');
-        writePlannerRequirement(groupId, planDate, { online: Math.max(0, Math.min(999, Number(item.online_required) || 0)), offline: Math.max(0, Math.min(999, Number(item.offline_required) || 0)) }, clean(item.note), currentUser);
+        if (!planDate || !groupId || !one('SELECT 1 FROM controller_groups WHERE id=? AND project_id=? AND active=1', groupId, projectId)) throw appError('Dzień i obszar zapotrzebowania są wymagane');
+        writePlannerRequirement(groupId, planDate, { online: Math.max(0, Math.min(999, Number(item.online_required) || 0)), offline: Math.max(0, Math.min(999, Number(item.offline_required) || 0)) }, clean(item.note), currentUser, projectId);
       }
-      enforcePlannerRequirementHierarchy(items.map(item => nullableDate(item.plan_date)).filter(Boolean), currentUser);
+      enforcePlannerRequirementHierarchy(items.map(item => nullableDate(item.plan_date)).filter(Boolean), currentUser, projectId);
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
-    return { saved: items.length };
+    return { saved: items.length, project_id: projectId };
   }
 
   function savePlannerHoliday(id, input, currentUser) {
@@ -4214,15 +4268,19 @@ function createRepository(db, defaultProjectId) {
       const existing = id ? one('SELECT * FROM projects WHERE id=?', asId(id)) : null;
       if (id && !existing) throw appError('Nie znaleziono projektu', 404);
       const automaticColor = nextProjectColor(all('SELECT planner_color FROM projects WHERE id!=? ORDER BY sort_order,id', asId(id) || 0).map(project => project.planner_color), asId(id) || one('SELECT COALESCE(MAX(id),0)+1 value FROM projects').value);
+      const shortCode = clean(input.planner_short_code || existing?.planner_short_code || input.code).slice(0, 6);
       const values = {
         code: clean(input.code), name: clean(input.name), description: clean(input.description),
         planner_color: normalizeProjectColor(input.planner_color, existing?.planner_color || automaticColor),
+        planner_short_code: shortCode,
         active: Number(input.active ?? 1) ? 1 : 0
       };
       if (!values.code || !values.name) throw appError('Kod i nazwa projektu są wymagane');
+      if (!shortCode || clean(input.planner_short_code || existing?.planner_short_code || input.code).length > 6) throw appError('Skrót Plannera musi zawierać od 1 do 6 znaków');
+      if (one('SELECT 1 FROM projects WHERE planner_short_code=? COLLATE NOCASE AND id!=?', shortCode, asId(id) || 0)) throw appError('Ten skrót Plannera jest już używany przez inny projekt');
       if (one('SELECT 1 FROM projects WHERE planner_color=? AND id!=?', values.planner_color, asId(id) || 0)) throw appError('Ten kolor jest już przypisany do innego projektu. Wybierz inny kolor.');
       if (id) {
-        db.prepare('UPDATE projects SET code=?,name=?,description=?,planner_color=?,active=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(values.code, values.name, values.description, values.planner_color, values.active, id);
+        db.prepare('UPDATE projects SET code=?,name=?,description=?,planner_color=?,planner_short_code=?,active=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(values.code, values.name, values.description, values.planner_color, values.planner_short_code, values.active, id);
         return one('SELECT * FROM projects WHERE id=?', id);
       }
       const nextOrder = one('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM projects').value;
@@ -5685,7 +5743,7 @@ function createRepository(db, defaultProjectId) {
       const upcomingLimit = new Date(); upcomingLimit.setUTCDate(upcomingLimit.getUTCDate() + 13);
       const upcomingDate = upcomingLimit.toISOString().slice(0, 10);
       const selectedProjectId = activeProjectId();
-      const accessibleProjects = all(`SELECT p.id,p.code,p.name,p.planner_color,p.sort_order,pm.role,pm.summary_area_source
+      const accessibleProjects = all(`SELECT p.id,p.code,p.name,p.planner_color,p.planner_short_code,p.sort_order,pm.role,pm.summary_area_source
         FROM projects p JOIN project_memberships pm ON pm.project_id=p.id AND pm.user_id=?
         WHERE p.active=1 AND pm.active=1 ORDER BY p.sort_order,p.name`, currentUser.id);
       const plannedProjectIds = new Set(all(`SELECT DISTINCT pe.project_id FROM planner_entries pe JOIN projects p ON p.id=pe.project_id AND p.active=1
@@ -5694,7 +5752,7 @@ function createRepository(db, defaultProjectId) {
       plannedProjectIds.add(selectedProjectId);
       const projectsInScope = accessibleProjects.filter(project => plannedProjectIds.has(Number(project.id)));
       const aggregate = { assigned_tasks: [], created_tasks: [], related_tasks: [], general_tasks: [], points: [], notes: [], statuses: [], status_updates: [], overdue_tasks: [], overdue_points: [], assigned_areas: [], planner: [], area_upcoming: { tasks: [], points: [], statuses: [] } };
-      const annotate = (row, project) => ({ ...row, project_id: project.id, project_code: project.code, project_name: project.name, project_color: project.planner_color || '#2563eb' });
+      const annotate = (row, project) => ({ ...row, project_id: project.id, project_code: project.code, project_short_code: project.planner_short_code || String(project.code).slice(0, 6), project_name: project.name, project_color: project.planner_color || '#2563eb' });
 
       for (const project of projectsInScope) projectStorage.run(project.id, () => {
         const projectUser = { ...currentUser, role: currentUser.system_role === 'system_admin' ? 'system_admin' : project.role, current_project: project };
@@ -5745,7 +5803,7 @@ function createRepository(db, defaultProjectId) {
       const mine = {
         ...aggregate,
         area_source: 'planner',
-        projects_in_scope: projectsInScope.map(project => ({ id: project.id, code: project.code, name: project.name, planner_color: project.planner_color, selected: project.id === selectedProjectId }))
+        projects_in_scope: projectsInScope.map(project => ({ id: project.id, code: project.code, planner_short_code: project.planner_short_code || String(project.code).slice(0, 6), name: project.name, planner_color: project.planner_color, selected: project.id === selectedProjectId }))
       };
       mine.metrics = {
         tasks_total: mine.related_tasks.length,
