@@ -1255,11 +1255,13 @@ test('Planner shows cross-project work immediately, then confirms it, and exclud
     assert.notEqual(sourceProject.planner_color, targetProject.planner_color);
     const planDate = '2031-04-14';
     const rejectedDate = '2031-04-15';
-    let workerId;
+    let workerId; let managerId;
     repository.withProject(sourceProjectId, () => {
       const admin = repository.me(account.id, sourceProjectId);
       const worker = repository.saveUser(null, { username: 'cross.project.worker', display_name: 'Cross Project Worker', password: 'secret123', project_role: 'user', planner_enabled: 1 });
       workerId = worker.id;
+      const manager = repository.saveUser(null, { username: 'cross.project.manager', display_name: 'Cross Project Manager', password: 'secret123', project_role: 'moderator', planner_enabled: 1 });
+      managerId = manager.id;
       repository.savePlannerDay({ user_id: workerId, plan_date: planDate, entries: [{ activity_type: 'transport', duration_hours: 1.5 }] }, admin);
       const transportOnly = repository.planner(planDate, planDate, admin);
       assert.equal(transportOnly.summary[0].headcount, 1);
@@ -1272,9 +1274,10 @@ test('Planner shows cross-project work immediately, then confirms it, and exclud
     repository.withProject(targetProject.id, () => {
       const admin = repository.me(account.id, targetProject.id);
       repository.saveUser(workerId, { project_active: 1, planner_enabled: 1, assignable: 1 });
+      repository.saveUser(managerId, { project_role: 'user', project_active: 1, planner_enabled: 0, assignable: 1 });
     });
     repository.withProject(sourceProjectId, () => {
-      const admin = repository.me(account.id, sourceProjectId);
+      const admin = repository.me(managerId, sourceProjectId);
       repository.createPlannerCrossProjectRequests({ target_project_id: targetProject.id, items: [
         { user_id: workerId, plan_date: planDate, work_mode: 'online', shift: 'Noc', count_in_manpower: 1, note: 'Wsparcie nocnego rozruchu' },
         { user_id: workerId, plan_date: rejectedDate, work_mode: 'offline', shift: 'Dzień', count_in_manpower: 0 }
@@ -1302,12 +1305,17 @@ test('Planner shows cross-project work immediately, then confirms it, and exclud
       assert.equal(planner.time_details.details.find(item => item.user_id === workerId && item.date === planDate).actual_hours, 12, 'online work and transport from both projects must be calculated once in the global day total');
     });
     repository.withProject(sourceProjectId, () => {
-      const admin = repository.me(account.id, sourceProjectId);
+      const admin = repository.me(managerId, sourceProjectId);
       const planner = repository.planner(planDate, rejectedDate, admin);
       assert.equal(planner.outgoing_cross_project_requests.length, 0);
       const externalEntry = planner.cross_project_entries.find(entry => entry.user_id === workerId && entry.plan_date === planDate && entry.project_id === targetProject.id);
       assert.equal(externalEntry.project_color, targetProject.planner_color);
       assert.equal(planner.time_details.details.find(item => item.user_id === workerId && item.date === planDate).actual_hours, 12);
+      const transportUpdate = repository.createPlannerCrossProjectRequests({ target_project_id: targetProject.id, items: [{
+        user_id: workerId, plan_date: planDate, transport_only_update: 1, entries: [{ activity_type: 'transport', duration_hours: 2.25, note: 'Transport bez akceptacji' }]
+      }] }, admin);
+      assert.equal(transportUpdate.awaiting_approval, 0);
+      assert.equal(transportUpdate.directly_saved, 1);
       repository.createPlannerCrossProjectRequests({ target_project_id: targetProject.id, items: [{
         user_id: workerId, plan_date: rejectedDate, replace_all: 1, note: 'Edycja planu i transportu', entries: [
           { activity_type: 'work', allow_without_area: 1, work_mode: 'offline', shift: 'Noc', count_in_manpower: 1 },
@@ -1319,19 +1327,27 @@ test('Planner shows cross-project work immediately, then confirms it, and exclud
       const admin = repository.me(account.id, targetProject.id);
       let planner = repository.planner(rejectedDate, rejectedDate, admin);
       const pending = planner.incoming_cross_project_requests[0];
-      assert.equal(Number(pending.includes_transport), 1);
-      assert.equal(Number(pending.linked_entry_count), 2);
+      assert.equal(Number(pending.includes_transport), 0, 'transport never waits for approval');
+      assert.equal(Number(pending.linked_entry_count), 1);
       assert.equal(planner.entries.filter(item => item.user_id === workerId && item.plan_date === rejectedDate).length, 2);
-      assert.ok(planner.entries.filter(item => item.user_id === workerId && item.plan_date === rejectedDate).every(item => item.cross_project_status === 'pending'));
+      assert.equal(planner.entries.find(item => item.user_id === workerId && item.plan_date === rejectedDate && item.transport_mode === 'transport_only').cross_project_status, null);
+      assert.equal(planner.entries.find(item => item.user_id === workerId && item.plan_date === rejectedDate && item.transport_mode !== 'transport_only').cross_project_status, 'pending');
       repository.reviewPlannerCrossProjectRequest(pending.id, { action: 'approve' }, admin);
       planner = repository.planner(rejectedDate, rejectedDate, admin);
-      assert.ok(planner.entries.filter(item => item.user_id === workerId).every(item => item.cross_project_status === 'approved'));
+      assert.equal(planner.entries.find(item => item.user_id === workerId && item.transport_mode !== 'transport_only').cross_project_status, 'approved');
+      assert.equal(planner.entries.find(item => item.user_id === workerId && item.transport_mode === 'transport_only').cross_project_status, null);
+      repository.saveUser(managerId, { project_role: 'moderator', project_active: 1, planner_enabled: 0, assignable: 1 });
       targetGroupId = repository.controllerGroups().find(item => !item.parent_id).id;
     });
     repository.withProject(sourceProjectId, () => {
-      const admin = repository.me(account.id, sourceProjectId);
+      const admin = repository.me(managerId, sourceProjectId);
+      const direct = repository.createPlannerCrossProjectRequests({ target_project_id: targetProject.id, items: [{ user_id: workerId, plan_date: rejectedDate, replace_all: 1, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'online', shift: 'Dzień', count_in_manpower: 1 }, { activity_type: 'transport', duration_hours: 1.25 }] }] }, admin);
+      assert.equal(direct.awaiting_approval, 0, 'a manager of the target project edits it directly');
+      assert.equal(direct.directly_saved, 1);
       repository.setPlannerRequirementsBatch({ project_id: targetProject.id, items: [{ plan_date: rejectedDate, controller_group_id: targetGroupId, online_required: 3, offline_required: 2 }] }, admin);
       const planner = repository.planner(rejectedDate, rejectedDate, admin);
+      assert.equal(planner.outgoing_cross_project_requests.length, 0);
+      assert.equal(planner.assignment_projects.find(project => project.id === targetProject.id).can_manage, true);
       const related = planner.requirement_projects.find(project => Number(project.id) === Number(targetProject.id));
       assert.ok(related, 'related target project requirements are visible from the source Planner');
       assert.equal(related.requirements.find(item => Number(item.controller_group_id) === Number(targetGroupId) && item.work_mode === 'online').required_count, 3);

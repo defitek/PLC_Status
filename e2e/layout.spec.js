@@ -917,9 +917,18 @@ test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzypr
   await page.locator('#action-fields [name="shift"]').selectOption('Noc');
   await page.locator('#action-fields [name="note"]').fill('Nocne wsparcie projektu docelowego');
   await page.locator('#action-submit').click();
+  await expect(page.locator('#planner-requirements-open')).toBeVisible();
+  await expect(page.locator('#planner-config-open')).toBeVisible();
+  await expect(page.locator('#planner-hours-open')).toBeVisible();
+  const targetRequirementToggle = page.locator(`[data-requirement-project-toggle="${setup.targetProjectId}"]`).first();
+  await expect(targetRequirementToggle).toBeVisible();
+  await expect(page.locator(`[data-requirement-project="${setup.targetProjectId}"]`)).not.toHaveCount(0);
+  await targetRequirementToggle.click();
+  await expect(page.locator(`[data-requirement-project="${setup.targetProjectId}"]`)).toHaveCount(0);
+  await page.locator(`[data-requirement-project-toggle="${setup.targetProjectId}"]`).first().click();
   await page.locator('#planner-detail-toggle').check();
-  const pendingSourceChip = page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"] .plan-chip.other-project.approval-pending`);
-  await expect(pendingSourceChip).toContainText('?');
+  const directSourceChip = page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"] .plan-chip.other-project.night-shift`);
+  await expect(directSourceChip).not.toHaveClass(/approval-pending/);
 
   await page.evaluate(async targetProjectId => {
     const response = await fetch('/api/select-project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project_id: targetProjectId }) });
@@ -929,18 +938,12 @@ test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzypr
   await expect(page.locator('#content')).toBeVisible();
   await openView(page, 'planner');
   await page.locator('#planner-detail-toggle').check();
-  const pendingTargetChip = page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"] .plan-chip.approval-pending`);
-  await expect(pendingTargetChip).toContainText('?');
-  await page.locator('.planner-cross-project-requests>summary').click();
-  const incoming = page.locator('.planner-cross-project-row.incoming', { hasText: setup.workerName });
-  await expect(incoming).toBeVisible();
-  await incoming.locator('[data-planner-cross-project-action="approve"]').click();
   const approvedChip = page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"] .plan-chip.night-shift`);
   await expect(approvedChip).toContainText(setup.targetProjectShortCode);
   await expect(approvedChip).toHaveClass(/offline-work/);
   await expect(approvedChip).not.toHaveClass(/approval-pending/);
   await expect(approvedChip).toHaveAttribute('style', new RegExp(`--project-color:${setup.targetProjectColor}`, 'i'));
-  await expect(incoming).toHaveCount(0);
+  await expect(page.locator('.planner-cross-project-row.incoming', { hasText: setup.workerName })).toHaveCount(0);
 
   await page.evaluate(async sourceProjectId => {
     const response = await fetch('/api/select-project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project_id: sourceProjectId }) });
@@ -962,7 +965,7 @@ test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzypr
   expect(await externalNightChip.evaluate(element => getComputedStyle(element).backgroundImage)).toContain('repeating-linear-gradient');
   await page.locator('.planner-scroll').evaluate(element => { element.scrollLeft = 0; });
   await externalNightChip.click();
-  await expect(page.locator('#planner-dialog-description')).toContainText('ponownie trafią do akceptacji');
+  await expect(page.locator('#planner-dialog-description')).toContainText('bez dodatkowej akceptacji');
   await page.locator('#planner-entry-add').click();
   const transportRow = page.locator('#planner-entry-list .planner-entry-row').last();
   await transportRow.locator('[data-plan-activity]').selectOption('transport');
@@ -970,7 +973,7 @@ test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzypr
   await transportRow.locator('[data-plan-duration-minutes]').fill('15');
   await transportRow.locator('[data-plan-note]').fill('Transport edytowany z projektu źródłowego');
   await page.locator('#planner-form footer .primary').click();
-  await expect(page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"] .plan-chip.other-project.approval-pending`)).toHaveCount(2);
+  await expect(page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"] .plan-chip.other-project.approval-pending`)).toHaveCount(0);
 
   await page.evaluate(async targetProjectId => {
     const response = await fetch('/api/select-project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project_id: targetProjectId }) });
@@ -979,10 +982,7 @@ test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzypr
   await page.reload();
   await openView(page, 'planner');
   await page.locator('#planner-detail-toggle').check();
-  await page.locator('.planner-cross-project-requests>summary').click();
-  const transportApproval = page.locator('.planner-cross-project-row.incoming', { hasText: setup.workerName });
-  await expect(transportApproval).toContainText('plan i transport');
-  await transportApproval.locator('[data-planner-cross-project-action="approve"]').click();
+  await expect(page.locator('.planner-cross-project-row.incoming', { hasText: setup.workerName })).toHaveCount(0);
   await expect(page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"] .plan-chip.transport-only`)).toBeVisible();
   await page.evaluate(async ({ workerId, planDate }) => {
     const planner = await fetch(`/api/planner?from=${planDate}&to=${planDate}`).then(response => response.json());
