@@ -1652,3 +1652,48 @@ input:is([type=checkbox],[type=radio]) { accent-color:var(--blue); cursor:pointe
 .planner-simplified .planner-table tbody th.person-col { height:29px; min-height:29px; padding:2px 4px; }
 .planner-simplified .planner-table :is(.plan-chip,.absence-chip) { height:21px; min-height:21px; max-height:21px; margin-bottom:1px; padding-top:2px; padding-bottom:2px; }
 .planner-simplified .planner-cell-expand { min-height:15px; margin-top:1px; padding:0 5px; }
+
+/* Planner: jeden wzorzec kafelka — ramka i tło z kompaktową etykietą wewnętrzną */
+.planner-table :is(.plan-chip,.absence-chip) {
+  --planner-tile-accent:var(--project-color,var(--blue));
+  --planner-tile-contrast:var(--project-contrast,#fff);
+  gap:4px;
+  color:color-mix(in srgb,var(--planner-tile-accent) 78%,var(--text));
+  background-color:color-mix(in srgb,var(--planner-tile-accent) 16%,var(--surface));
+  border:1px solid color-mix(in srgb,var(--planner-tile-accent) 52%,var(--line));
+  border-radius:5px;
+}
+.planner-table :is(.plan-chip .mode-label,.absence-chip>b) {
+  display:block;
+  width:auto;
+  max-width:100%;
+  min-width:0;
+  padding:2px 5px;
+  overflow:hidden;
+  color:var(--planner-tile-contrast);
+  background:var(--planner-tile-accent);
+  border-radius:3px;
+  font-size:7px;
+  font-weight:850;
+  line-height:1;
+  text-align:center;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.planner-table .plan-chip.transport-only {
+  --planner-tile-accent:#0e7490;
+  --planner-tile-contrast:#fff;
+}
+.planner-table .absence-chip.vacation {
+  --planner-tile-accent:#7c3aed;
+  --planner-tile-contrast:#fff;
+}
+.planner-table .absence-chip.time_off {
+  --planner-tile-accent:#ea580c;
+  --planner-tile-contrast:#fff;
+}
+.planner-table .absence-chip { justify-content:flex-start; }
+.planner-table .absence-chip small { flex:1 1 auto; }
+.planner-simplified .planner-table :is(.plan-chip,.absence-chip) { justify-content:center; }
+.planner-simplified .planner-table .plan-chip .mode-label { width:auto; max-width:calc(100% - 6px); padding-inline:6px; }
+.planner-simplified .planner-table .absence-chip small { display:none; }

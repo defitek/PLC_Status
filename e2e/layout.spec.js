@@ -261,6 +261,17 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   expect(new Set(tileHeights).size).toBe(1);
   const fixedColors = await Promise.all([transportChip, freeCell.locator('.absence-chip.time_off'), vacationCell.locator('.absence-chip.vacation')].map(locator => locator.evaluate(element => getComputedStyle(element).backgroundColor)));
   expect(new Set(fixedColors).size).toBe(3);
+  const tileDesigns = await Promise.all([transportChip, freeCell.locator('.absence-chip.time_off'), vacationCell.locator('.absence-chip.vacation'), mergedWorkChip].map(locator => locator.evaluate(element => {
+    const label = element.querySelector(':scope > .mode-label, :scope > b');
+    const outer = getComputedStyle(element); const inner = getComputedStyle(label);
+    return { borderStyle: outer.borderStyle, borderWidth: outer.borderWidth, outerBackground: outer.backgroundColor, innerBackground: inner.backgroundColor, innerNarrower: label.getBoundingClientRect().width < element.getBoundingClientRect().width };
+  })));
+  for (const design of tileDesigns) {
+    expect(design.borderStyle).toBe('solid');
+    expect(design.borderWidth).toBe('1px');
+    expect(design.innerBackground).not.toBe(design.outerBackground);
+    expect(design.innerNarrower).toBe(true);
+  }
 
   await workCell.click();
   await page.keyboard.press('e');
