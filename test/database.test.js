@@ -1310,6 +1310,9 @@ test('Planner shows cross-project work immediately, then confirms it, and exclud
       assert.equal(planner.outgoing_cross_project_requests.length, 0);
       const externalEntry = planner.cross_project_entries.find(entry => entry.user_id === workerId && entry.plan_date === planDate && entry.project_id === targetProject.id);
       assert.equal(externalEntry.project_color, targetProject.planner_color);
+      assert.equal(planner.summary.find(item => item.plan_date === planDate).online_headcount, 1, 'global headcount includes visible work from another project');
+      assert.equal(planner.requirement_projects.find(project => Number(project.id) === Number(targetProject.id)).summary.find(item => item.plan_date === planDate).online_headcount, 1, 'project bar exposes its own visible headcount');
+      assert.equal(planner.requirement_projects.find(project => Number(project.id) === Number(sourceProjectId)).summary.find(item => item.plan_date === planDate).headcount, 1, 'source project bar includes transport headcount');
       assert.equal(planner.time_details.details.find(item => item.user_id === workerId && item.date === planDate).actual_hours, 12);
       const transportUpdate = repository.createPlannerCrossProjectRequests({ target_project_id: targetProject.id, items: [{
         user_id: workerId, plan_date: planDate, transport_only_update: 1, entries: [{ activity_type: 'transport', duration_hours: 2.25, note: 'Transport bez akceptacji' }]

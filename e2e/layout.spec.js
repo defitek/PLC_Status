@@ -264,12 +264,15 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   const tileDesigns = await Promise.all([transportChip, freeCell.locator('.absence-chip.time_off'), vacationCell.locator('.absence-chip.vacation'), mergedWorkChip].map(locator => locator.evaluate(element => {
     const label = element.querySelector(':scope > .mode-label, :scope > b');
     const outer = getComputedStyle(element); const inner = getComputedStyle(label);
-    return { borderStyle: outer.borderStyle, borderWidth: outer.borderWidth, outerBackground: outer.backgroundColor, innerBackground: inner.backgroundColor, innerNarrower: label.getBoundingClientRect().width < element.getBoundingClientRect().width };
+    const labelBox = label.getBoundingClientRect();
+    return { borderStyle: outer.borderStyle, borderWidth: outer.borderWidth, outerBackground: outer.backgroundColor, innerBackground: inner.backgroundColor, innerWidth: Math.round(labelBox.width), innerHeight: Math.round(labelBox.height), innerNarrower: labelBox.width < element.getBoundingClientRect().width };
   })));
   for (const design of tileDesigns) {
     expect(design.borderStyle).toBe('solid');
     expect(design.borderWidth).toBe('1px');
     expect(design.innerBackground).not.toBe(design.outerBackground);
+    expect(design.innerWidth).toBe(38);
+    expect(design.innerHeight).toBe(14);
     expect(design.innerNarrower).toBe(true);
   }
 
@@ -894,6 +897,7 @@ test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzypr
   await page.locator('#planner-days').selectOption('31');
   const rowCells = page.locator(`.planner-cell[data-user-id="${setup.workerId}"]`);
   await expect(rowCells).toHaveCount(31);
+  const stableTableHeight = await page.locator('.planner-table').evaluate(element => Math.round(element.getBoundingClientRect().height));
   const scroller = page.locator('.planner-scroll');
   const beforeScroll = await scroller.evaluate(element => { element.scrollLeft = 420; return element.scrollLeft; });
   await page.locator('#planner-tools-toggle').click();
@@ -904,11 +908,13 @@ test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzypr
   await rowCells.nth(4).dispatchEvent('pointerdown', { button: 0, buttons: 1, ctrlKey: true, shiftKey: true });
   await page.locator('body').dispatchEvent('pointerup', { button: 0 });
   await expect(page.locator(`.planner-cell[data-user-id="${setup.workerId}"].multi-selected`)).toHaveCount(4);
+  expect(await page.locator('.planner-table').evaluate(element => Math.round(element.getBoundingClientRect().height))).toBe(stableTableHeight);
   await page.locator('#planner-selection-clear').click();
   await rowCells.nth(6).dispatchEvent('pointerdown', { button: 0, buttons: 1, ctrlKey: true });
   await rowCells.nth(8).dispatchEvent('pointerenter', { buttons: 1, ctrlKey: true });
   await page.locator('body').dispatchEvent('pointerup', { button: 0 });
   await expect(page.locator(`.planner-cell[data-user-id="${setup.workerId}"].multi-selected`)).toHaveCount(3);
+  expect(await page.locator('.planner-table').evaluate(element => Math.round(element.getBoundingClientRect().height))).toBe(stableTableHeight);
   await page.locator('#planner-selection-clear').click();
 
   const planDate = await rowCells.first().getAttribute('data-date');
@@ -949,6 +955,12 @@ test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzypr
   await page.locator('#planner-detail-toggle').check();
   const directSourceChip = page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"] .plan-chip.other-project.night-shift`);
   await expect(directSourceChip).not.toHaveClass(/approval-pending/);
+  const targetProjectTotal = page.locator(`[data-requirement-project-bar="${setup.targetProjectId}"] [data-project-total-date="${planDate}"]`);
+  await expect(targetProjectTotal.locator(':scope > button > b')).toHaveText('1');
+  await expect(targetProjectTotal.locator('.off-tag')).toHaveText('OFF 1');
+  const globalTotal = page.locator(`.total-headcount-row [data-total-date="${planDate}"]`);
+  await expect(globalTotal.locator(':scope > b')).toHaveText('1');
+  await expect(globalTotal.locator('.off-tag')).toHaveText('OFF 1');
 
   await page.evaluate(async targetProjectId => {
     const response = await fetch('/api/select-project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project_id: targetProjectId }) });

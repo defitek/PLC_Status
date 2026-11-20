@@ -1784,12 +1784,23 @@ function createRepository(db, defaultProjectId) {
       ) GROUP BY user_id,work_date`,
       activeProjectId(), range.from, range.to, activeProjectId(), range.from, range.to,
       activeProjectId(), range.from, range.to, activeProjectId(), range.from, range.to).map(row => ({ ...row, tasks: Number(row.tasks), points: Number(row.points), statuses: Number(row.statuses), notes: Number(row.notes) }));
-    const summary = all(`SELECT pe.plan_date,COUNT(DISTINCT pe.user_id) headcount,
-      COUNT(DISTINCT CASE WHEN pe.transport_mode!='transport_only' AND pe.work_mode='online' THEN pe.user_id END) online_headcount,
-      COUNT(DISTINCT CASE WHEN pe.transport_mode!='transport_only' AND pe.work_mode='offline' THEN pe.user_id END) offline_headcount,
-      SUM(pe.transport_mode='transport_only') transport_only,SUM(pe.transport_mode='transport_work') transport_work
-      FROM planner_entries pe JOIN project_memberships pm ON pm.project_id=pe.project_id AND pm.user_id=pe.user_id AND pm.active=1
-      WHERE pe.project_id=? AND pe.plan_date BETWEEN ? AND ? AND pm.planner_enabled=1 AND pe.count_in_manpower=1 GROUP BY pe.plan_date ORDER BY pe.plan_date`, activeProjectId(), range.from, range.to);
+    const summarizePlannerEntries = source => {
+      const byDate = new Map();
+      source.filter(entry => Number(entry.count_in_manpower) !== 0).forEach(entry => {
+        if (!byDate.has(entry.plan_date)) byDate.set(entry.plan_date, []);
+        byDate.get(entry.plan_date).push(entry);
+      });
+      return [...byDate.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([planDate, dayEntries]) => ({
+        plan_date: planDate,
+        headcount: new Set(dayEntries.map(entry => Number(entry.user_id))).size,
+        online_headcount: new Set(dayEntries.filter(entry => entry.transport_mode !== 'transport_only' && entry.work_mode === 'online').map(entry => Number(entry.user_id))).size,
+        offline_headcount: new Set(dayEntries.filter(entry => entry.transport_mode !== 'transport_only' && entry.work_mode === 'offline').map(entry => Number(entry.user_id))).size,
+        transport_only: dayEntries.filter(entry => entry.transport_mode === 'transport_only').length,
+        transport_work: dayEntries.filter(entry => entry.transport_mode === 'transport_work').length
+      }));
+    };
+    const visiblePlannerEntries = [...entries, ...crossProjectEntries];
+    const summary = summarizePlannerEntries(visiblePlannerEntries);
     const requirements = canManageRequirements ? all(`SELECT pr.*,cg.name area_name FROM planner_requirements pr
       JOIN controller_groups cg ON cg.id=pr.controller_group_id
       WHERE pr.project_id=? AND pr.plan_date BETWEEN ? AND ? ORDER BY pr.plan_date,cg.sort_order,pr.work_mode`, activeProjectId(), range.from, range.to).map(row => {
@@ -1820,7 +1831,7 @@ function createRepository(db, defaultProjectId) {
     const shift_summary = all(`SELECT pe.shift,COUNT(DISTINCT pe.user_id||':'||pe.plan_date) assignments FROM planner_entries pe
       JOIN project_memberships pm ON pm.project_id=pe.project_id AND pm.user_id=pe.user_id AND pm.active=1
       WHERE pe.project_id=? AND pe.plan_date BETWEEN ? AND ? AND pe.transport_mode!='transport_only' AND pe.count_in_manpower=1 GROUP BY pe.shift ORDER BY assignments DESC`, activeProjectId(), range.from, range.to);
-    const manpowerEntries = entries.filter(entry => Number(entry.count_in_manpower) !== 0 && entry.transport_mode !== 'transport_only');
+    const manpowerEntries = visiblePlannerEntries.filter(entry => Number(entry.count_in_manpower) !== 0 && entry.transport_mode !== 'transport_only');
     const todayEntries = manpowerEntries.filter(entry => entry.plan_date === currentDate);
     const uniquePeople = list => new Set(list.map(entry => entry.user_id)).size;
     const mode_summary = {
@@ -1869,6 +1880,7 @@ function createRepository(db, defaultProjectId) {
       const projectHierarchy = hierarchyData(projectId);
       const projectRequirements = allRelatedRequirements.filter(row => Number(row.project_id) === Number(projectId));
       const projectEntries = allRelatedEntries.filter(row => Number(row.project_id) === Number(projectId) && row.transport_mode !== 'transport_only' && Number(row.count_in_manpower) !== 0);
+      const visibleProjectEntries = visiblePlannerEntries.filter(row => Number(row.project_id) === Number(projectId));
       const roots = projectHierarchy.groups.filter(group => !group.parent_id).map(group => {
         const descendants = new Set(projectHierarchy.groups.filter(candidate => candidate.path_names.slice(0, group.path_names.length).join('\u0000') === group.path_names.join('\u0000')).map(candidate => Number(candidate.id)));
         return {
@@ -1885,7 +1897,7 @@ function createRepository(db, defaultProjectId) {
           })
         };
       });
-      return { ...project, planner_short_code: project?.planner_short_code || String(project?.code || '').slice(0, 6), shared_user_count: sharedUserCount, can_manage: canManagePlannerProject(currentUser, projectId), areas: projectHierarchy.groups, requirements: projectRequirements, area_day_summary: roots };
+      return { ...project, planner_short_code: project?.planner_short_code || String(project?.code || '').slice(0, 6), shared_user_count: sharedUserCount, can_manage: canManagePlannerProject(currentUser, projectId), areas: projectHierarchy.groups, requirements: projectRequirements, area_day_summary: roots, summary: summarizePlannerEntries(visibleProjectEntries) };
     }).filter(project => project.id && (Number(project.id) === Number(activeProjectId()) || Number(project.shared_user_count) > 0));
     let timeDetails = null;
     if (canManageRequirements) {

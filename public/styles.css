@@ -1665,17 +1665,20 @@ input:is([type=checkbox],[type=radio]) { accent-color:var(--blue); cursor:pointe
 }
 .planner-table :is(.plan-chip .mode-label,.absence-chip>b) {
   display:block;
-  width:auto;
-  max-width:100%;
-  min-width:0;
-  padding:2px 5px;
+  box-sizing:border-box;
+  width:38px;
+  max-width:38px;
+  min-width:38px;
+  height:14px;
+  min-height:14px;
+  padding:1px 3px;
   overflow:hidden;
   color:var(--planner-tile-contrast);
   background:var(--planner-tile-accent);
   border-radius:3px;
   font-size:7px;
   font-weight:850;
-  line-height:1;
+  line-height:12px;
   text-align:center;
   text-overflow:ellipsis;
   white-space:nowrap;
@@ -1683,6 +1686,8 @@ input:is([type=checkbox],[type=radio]) { accent-color:var(--blue); cursor:pointe
 .planner-table .plan-chip.transport-only {
   --planner-tile-accent:#0e7490;
   --planner-tile-contrast:#fff;
+  background:color-mix(in srgb,var(--planner-tile-accent) 16%,var(--surface));
+  box-shadow:none;
 }
 .planner-table .absence-chip.vacation {
   --planner-tile-accent:#7c3aed;
@@ -1695,5 +1700,13 @@ input:is([type=checkbox],[type=radio]) { accent-color:var(--blue); cursor:pointe
 .planner-table .absence-chip { justify-content:flex-start; }
 .planner-table .absence-chip small { flex:1 1 auto; }
 .planner-simplified .planner-table :is(.plan-chip,.absence-chip) { justify-content:center; }
-.planner-simplified .planner-table .plan-chip .mode-label { width:auto; max-width:calc(100% - 6px); padding-inline:6px; }
+.planner-simplified .planner-table :is(.plan-chip .mode-label,.absence-chip>b) { width:38px; max-width:38px; min-width:38px; }
 .planner-simplified .planner-table .absence-chip small { display:none; }
+.planner-scroll { scrollbar-gutter:stable both-edges; }
+.planner-table :is(.plan-chip,.absence-chip) { contain:layout; }
+
+.planner-table tfoot .requirement-project-row .project-total-cell { width:112px; padding:2px; text-align:center; }
+.project-total-cell>button { display:grid; width:100%; min-height:23px; grid-template-columns:auto 1fr; gap:3px; align-items:center; padding:1px 3px; color:var(--text); background:transparent; border:0; border-radius:4px; }
+.project-total-cell>button:hover { background:color-mix(in srgb,var(--project-color,#2563eb) 16%,var(--surface)); }
+.project-total-cell>button>b { font-size:10px; }
+.project-total-cell>button>small { display:flex; gap:2px; justify-content:center; }
