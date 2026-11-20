@@ -85,6 +85,10 @@ export function prepareDatabase(db, { seedDemo, demoLimit = 100 }) {
   runMigration(db, '056-planner-manpower-scope', () => migratePlannerManpowerScope(db));
   runMigration(db, '057-planner-cross-project-requests', () => migratePlannerCrossProjectRequests(db));
   runMigration(db, '058-project-planner-colors', () => migrateProjectPlannerColors(db));
+  runMigration(db, '059-planner-immediate-cross-project-work', () => {
+    ensureColumn(db, 'planner_entries', 'cross_project_request_id', 'INTEGER');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_planner_entries_cross_request ON planner_entries(cross_project_request_id)');
+  });
   return defaultProjectId;
 }
 
@@ -138,6 +142,8 @@ function migratePlannerManpowerScope(db) {
   ) STRICT`);
   ensureColumn(db, 'planner_entries', 'count_in_manpower', 'INTEGER NOT NULL DEFAULT 1 CHECK(count_in_manpower IN (0,1))');
   ensureColumn(db, 'planner_entries', 'vehicle_id', 'INTEGER REFERENCES planner_vehicles(id) ON DELETE SET NULL');
+  // Utrzymuje nowy model także po odtworzeniu bardzo starej tabeli przez import/naprawę.
+  ensureColumn(db, 'planner_entries', 'cross_project_request_id', 'INTEGER');
   db.exec('CREATE INDEX IF NOT EXISTS idx_planner_vehicles_project ON planner_vehicles(project_id,sort_order,code)');
 }
 

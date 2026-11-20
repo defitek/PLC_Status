@@ -1239,7 +1239,7 @@ test('V8 supports announcements, aggregated KPI trends, unified Planner requirem
   }
 });
 
-test('Planner requires target-project approval and excludes transport from ON/OFF headcount', () => {
+test('Planner shows cross-project work immediately, then confirms it, and excludes transport from ON/OFF headcount', () => {
   const temporary = temporaryDatabase();
   const repository = openDatabase(temporary.path);
   try {
@@ -1265,6 +1265,13 @@ test('Planner requires target-project approval and excludes transport from ON/OF
       assert.equal(transportOnly.summary[0].offline_headcount, 0);
       assert.equal(transportOnly.mode_summary.range_online, 0);
       assert.equal(transportOnly.mode_summary.range_offline, 0);
+    });
+    repository.withProject(targetProject.id, () => {
+      const admin = repository.me(account.id, targetProject.id);
+      repository.saveUser(workerId, { project_active: 1, planner_enabled: 1, assignable: 1 });
+    });
+    repository.withProject(sourceProjectId, () => {
+      const admin = repository.me(account.id, sourceProjectId);
       repository.createPlannerCrossProjectRequests({ target_project_id: targetProject.id, items: [
         { user_id: workerId, plan_date: planDate, work_mode: 'online', shift: 'Noc', count_in_manpower: 1, note: 'Wsparcie nocnego rozruchu' },
         { user_id: workerId, plan_date: rejectedDate, work_mode: 'offline', shift: 'Dzień', count_in_manpower: 0 }
@@ -1275,7 +1282,8 @@ test('Planner requires target-project approval and excludes transport from ON/OF
       const admin = repository.me(account.id, targetProject.id);
       let planner = repository.planner(planDate, rejectedDate, admin);
       assert.equal(planner.incoming_cross_project_requests.length, 2);
-      assert.equal(planner.entries.some(entry => entry.user_id === workerId), false, 'pending request must not create a plan');
+      assert.equal(planner.entries.filter(entry => entry.user_id === workerId).length, 2, 'pending assignments are visible immediately');
+      assert.ok(planner.entries.filter(entry => entry.user_id === workerId).every(entry => entry.cross_project_status === 'pending'));
       const approved = planner.incoming_cross_project_requests.find(item => item.plan_date === planDate);
       const rejected = planner.incoming_cross_project_requests.find(item => item.plan_date === rejectedDate);
       repository.reviewPlannerCrossProjectRequest(approved.id, { action: 'approve' }, admin);
@@ -1286,7 +1294,7 @@ test('Planner requires target-project approval and excludes transport from ON/OF
       assert.equal(entry.shift, 'Noc');
       assert.equal(entry.controller_group_id, null);
       assert.equal(planner.entries.some(item => item.user_id === workerId && item.plan_date === rejectedDate), false);
-      assert.ok(planner.users.some(user => user.id === workerId), 'approval activates the worker in the target Planner');
+      assert.ok(planner.users.some(user => user.id === workerId), 'worker remains an active participant of the target Planner');
       assert.equal(planner.incoming_cross_project_requests.length, 0);
       assert.equal(planner.time_details.details.find(item => item.user_id === workerId && item.date === planDate).actual_hours, 12, 'online work and transport from both projects must be calculated once in the global day total');
     });

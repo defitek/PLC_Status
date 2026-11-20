@@ -552,6 +552,7 @@ CREATE TABLE IF NOT EXISTS planner_entries (
   count_in_manpower INTEGER NOT NULL DEFAULT 1 CHECK(count_in_manpower IN (0,1)),
   vehicle_id INTEGER REFERENCES planner_vehicles(id) ON DELETE SET NULL,
   note TEXT NOT NULL DEFAULT '',
+  cross_project_request_id INTEGER,
   created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP

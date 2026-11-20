@@ -2388,48 +2388,22 @@ function plannerClipboardLabel() {
 function plannerBulkToolbar() {
   const hidden = !state.plannerToolsVisible;
   const collisionHidden = plannerSelectionOverlapReviews().length ? '' : 'hidden';
-  return `<section class="planner-bulk-toolbar ${hidden ? 'hidden' : ''}" id="planner-bulk-toolbar"><span><b id="planner-selection-count">${state.plannerSelection.size}</b> dni · <b id="planner-entry-selection-count">${state.plannerEntrySelection.size}</b> aktywności</span><button type="button" class="primary" id="planner-bulk-add" title="Skrót: P">+ Praca</button><button type="button" class="mini" id="planner-bulk-transport" title="Skrót: T">+Transport</button><button type="button" class="mini" id="planner-bulk-time-off" title="Wolne z nadgodzin · skrót: W">+ Wolne</button><button type="button" class="mini" id="planner-bulk-vacation" title="Urlop płatny · skrót: U">+ Urlop</button><button type="button" class="mini" id="planner-bulk-cross-project">Przypisz do innego projektu</button><button type="button" class="mini" id="planner-bulk-copy">Kopiuj zaznaczenie</button><button type="button" class="mini" id="planner-bulk-paste" ${state.plannerClipboard ? '' : 'disabled'}>Wklej ${plannerClipboardLabel()}</button><button type="button" class="mini ${collisionHidden}" id="planner-bulk-approve">✓ Zatwierdź kolizje</button><button type="button" class="mini" id="planner-selection-clear">Wyczyść zaznaczenie</button></section>`;
+  return `<section class="planner-bulk-toolbar ${hidden ? 'hidden' : ''}" id="planner-bulk-toolbar"><span><b id="planner-selection-count">${state.plannerSelection.size}</b> dni · <b id="planner-entry-selection-count">${state.plannerEntrySelection.size}</b> aktywności</span><button type="button" class="primary" id="planner-bulk-add" title="Skrót: P">+ Praca</button><button type="button" class="mini" id="planner-bulk-transport" title="Skrót: T">+Transport</button><button type="button" class="mini" id="planner-bulk-time-off" title="Wolne z nadgodzin · skrót: W">+ Wolne</button><button type="button" class="mini" id="planner-bulk-vacation" title="Urlop płatny · skrót: U">+ Urlop</button><button type="button" class="mini" id="planner-bulk-copy">Kopiuj zaznaczenie</button><button type="button" class="mini" id="planner-bulk-paste" ${state.plannerClipboard ? '' : 'disabled'}>Wklej ${plannerClipboardLabel()}</button><button type="button" class="mini ${collisionHidden}" id="planner-bulk-approve">✓ Zatwierdź kolizje</button><button type="button" class="mini" id="planner-selection-clear">Wyczyść zaznaczenie</button></section>`;
 }
 
 function plannerCrossProjectRequestsHtml(incoming, outgoing) {
   if (!incoming.length && !outgoing.length) return '';
-  const requestRow = (item, incomingRequest) => `<article class="planner-cross-project-row ${incomingRequest ? 'incoming' : 'outgoing'}"><span><b>${escapeHtml(item.display_name)}</b><small>${displayDate(item.plan_date)} · ${escapeHtml(item.work_mode === 'offline' ? 'OFF' : 'ON')} · ${escapeHtml(item.shift === 'Noc' ? 'N' : 'D')}</small></span><span><b>${escapeHtml(incomingRequest ? item.source_project_code : item.target_project_code)}</b><small>${escapeHtml(incomingRequest ? 'Zgłoszono z projektu źródłowego' : 'Oczekuje w projekcie docelowym')}</small></span>${item.note ? `<p>${escapeHtml(item.note)}</p>` : '<p class="sub">Bez komentarza</p>'}${incomingRequest ? `<div><button type="button" class="mini primary" data-planner-cross-project-action="approve" data-request-id="${item.id}">Akceptuj</button><button type="button" class="mini danger-outline" data-planner-cross-project-action="reject" data-request-id="${item.id}">Odrzuć</button></div>` : '<span class="badge amber">Oczekuje</span>'}</article>`;
-  return `<section class="planner-cross-project-requests"><header><span><b>Przypisania międzyprojektowe</b><small>Plan w projekcie docelowym powstaje dopiero po decyzji jego managera.</small></span><strong>${incoming.length} do decyzji · ${outgoing.length} wysłanych</strong></header>${incoming.length ? `<div class="planner-cross-project-list"><h3>Do akceptacji</h3>${incoming.map(item => requestRow(item, true)).join('')}</div>` : ''}${outgoing.length ? `<div class="planner-cross-project-list outgoing"><h3>Wysłane zgłoszenia</h3>${outgoing.map(item => requestRow(item, false)).join('')}</div>` : ''}</section>`;
-}
-
-async function requestPlannerCrossProjectAssignment() {
-  const targets = selectedPlannerTargets();
-  if (!targets.length) return toast('Zaznacz co najmniej jedną osobę i dzień', true);
-  const projects = state.planner?.target_projects || [];
-  if (!projects.length) return toast('Brak innego aktywnego projektu, do którego można wysłać zgłoszenie', true);
-  const result = await uiForm({
-    title: 'Przypisz do innego projektu',
-    description: `${targets.length} ${targets.length === 1 ? 'wybrany dzień' : 'wybranych dni'} · wpis pojawi się w projekcie docelowym dopiero po akceptacji jego managera.`,
-    submitLabel: 'Wyślij do akceptacji',
-    fields: [
-      { name: 'target_project_id', label: 'Projekt docelowy', type: 'select', value: projects[0].id, options: projects.map(project => ({ value: project.id, label: `${project.code} · ${project.name}` })), full: true },
-      { name: 'work_mode', label: 'Tryb obecności', type: 'select', value: 'online', options: [{ value: 'online', label: 'ON · fabryka' }, { value: 'offline', label: 'OFF · biuro' }] },
-      { name: 'shift', label: 'Zmiana', type: 'select', value: 'Dzień', options: [{ value: 'Dzień', label: 'D · dzień' }, { value: 'Noc', label: 'N · noc' }] },
-      { name: 'count_in_manpower', label: 'Uwzględnij w manpowerze projektu docelowego', type: 'checkbox', value: true, full: true },
-      { name: 'note', label: 'Komentarz dla managera projektu docelowego', type: 'textarea', value: '', rows: 3, full: true }
-    ]
-  });
-  if (!result) return;
-  try {
-    await api('/api/planner/cross-project-requests', { method: 'POST', body: JSON.stringify({
-      target_project_id: Number(result.target_project_id),
-      items: targets.map(target => ({ user_id: target.userId, plan_date: target.date, work_mode: result.work_mode, shift: result.shift, count_in_manpower: result.count_in_manpower ? 1 : 0, note: result.note }))
-    }) });
-    toast(`Wysłano ${targets.length} ${targets.length === 1 ? 'zgłoszenie' : 'zgłoszeń'} do akceptacji`);
-    clearPlannerSelections(false); await reloadPlanner();
-  } catch (error) { toast(error.message, true); }
+  const grouped = new Map();
+  incoming.forEach(item => { const key = String(item.user_id); if (!grouped.has(key)) grouped.set(key, { ...item, days: [] }); grouped.get(key).days.push(item); });
+  const rows = [...grouped.values()].map(group => `<article class="planner-cross-project-row incoming"><span><b>${escapeHtml(group.display_name)}</b><small>${group.days.length} ${group.days.length === 1 ? 'dzień' : 'dni'} do potwierdzenia</small></span><div class="planner-approval-days">${group.days.map(item => `<span class="planner-approval-day"><b>${displayDate(item.plan_date)}</b><small>${escapeHtml(item.source_project_code)} · ${item.work_mode === 'offline' ? 'OFF' : 'ON'} · ${item.shift === 'Noc' ? 'N' : 'D'}</small><button type="button" class="mini primary" data-planner-cross-project-action="approve" data-request-id="${item.id}" title="Potwierdź ten dzień">✓</button><button type="button" class="mini danger-outline" data-planner-cross-project-action="reject" data-request-id="${item.id}" title="Odrzuć ten dzień">×</button></span>`).join('')}</div></article>`).join('');
+  return `<details class="planner-cross-project-requests"><summary><span><b>Dni do potwierdzenia</b><small>Wpisy są już widoczne w planie; potwierdź konkretne dni przypisane przez innych managerów.</small></span><strong>${incoming.length} do decyzji${outgoing.length ? ` · ${outgoing.length} oczekuje w innych projektach` : ''}</strong></summary>${incoming.length ? `<div class="planner-cross-project-list">${rows}</div>` : '<p class="sub">Brak dni wymagających Twojej decyzji.</p>'}</details>`;
 }
 
 async function reviewPlannerCrossProjectRequest(id, action) {
-  if (action === 'reject' && !await uiConfirm('Odrzuć przypisanie międzyprojektowe', 'W projekcie docelowym nie zostanie utworzony plan tej osoby.', 'Odrzuć', true)) return;
+  if (action === 'reject' && !await uiConfirm('Odrzuć przypisanie międzyprojektowe', 'Wpis utworzony przez managera innego projektu zostanie usunięty z tego dnia.', 'Odrzuć', true)) return;
   try {
     await api(`/api/planner/cross-project-requests/${id}/action`, { method: 'POST', body: JSON.stringify({ action }) });
-    toast(action === 'approve' ? 'Przypisanie zostało zaakceptowane i dodane do Plannera' : 'Przypisanie zostało odrzucone');
+    toast(action === 'approve' ? 'Dzień został potwierdzony' : 'Przypisanie zostało odrzucone');
     await reloadPlanner();
   } catch (error) { toast(error.message, true); }
 }
@@ -2478,8 +2452,7 @@ function updatePlannerBulkCount() {
   const dayCount = state.plannerSelection.size; const entryCount = state.plannerEntrySelection.size;
   if ($('#planner-selection-count')) $('#planner-selection-count').textContent = String(dayCount);
   if ($('#planner-entry-selection-count')) $('#planner-entry-selection-count').textContent = String(entryCount);
-  ['#planner-bulk-add', '#planner-bulk-transport', '#planner-bulk-time-off', '#planner-bulk-vacation', '#planner-bulk-cross-project'].forEach(selector => { const button = $(selector); if (button) button.disabled = !dayCount; });
-  if ($('#planner-bulk-cross-project')) $('#planner-bulk-cross-project').disabled = !dayCount || !(state.planner?.target_projects || []).length;
+  ['#planner-bulk-add', '#planner-bulk-transport', '#planner-bulk-time-off', '#planner-bulk-vacation'].forEach(selector => { const button = $(selector); if (button) button.disabled = !dayCount; });
   if ($('#planner-bulk-approve')) $('#planner-bulk-approve').classList.toggle('hidden', !plannerSelectionOverlapReviews().length);
   if ($('#planner-bulk-copy')) $('#planner-bulk-copy').disabled = !dayCount && !entryCount;
   if ($('#planner-bulk-paste')) { $('#planner-bulk-paste').disabled = !dayCount || !state.plannerClipboard; $('#planner-bulk-paste').textContent = `Wklej ${plannerClipboardLabel()}`; }
@@ -2541,16 +2514,49 @@ async function savePlannerBulkRequests(requests, message) {
 
 async function addWorkToPlannerSelection() {
   const targets = selectedPlannerTargets(); if (!targets.length) return;
-  const result = await uiForm({ title: `Dodaj pracę do ${targets.length} dni`, description: 'Wybierz kilka obszarów jednocześnie albo pozostaw listę pustą, aby dodać osobę bez konkretnego obszaru.', submitLabel: 'Dodaj do zaznaczenia', fields: [
-    { name: 'controller_group_ids', label: 'Obszary pracy', type: 'user-multiselect', options: hierarchyGroupOptions(), emptyLabel: 'Bez konkretnego obszaru', full: true },
+  const selectedUserIds = [...new Set(targets.map(target => Number(target.userId)))];
+  const currentProjectId = Number(state.me.current_project?.id || 0);
+  const projects = (state.planner?.assignment_projects || []).filter(project => selectedUserIds.every(userId => (project.eligible_user_ids || []).map(Number).includes(userId)));
+  if (!projects.length) return toast('Wybrane osoby nie mają wspólnego aktywnego projektu', true);
+  const initialProject = projects.find(project => Number(project.id) === currentProjectId) || projects[0];
+  const projectAreaOptions = project => (project.areas || []).map(area => ({ value: area.id, label: area.path_label || area.name }));
+  const formPromise = uiForm({ title: `Dodaj pracę do ${targets.length} dni`, description: 'Wybierz projekt, w którym pracownik ma być zaplanowany. Wpis w innym projekcie pojawi się od razu, a jego manager tylko potwierdzi wybrane dni.', submitLabel: 'Dodaj do zaznaczenia', fields: [
+    { name: 'target_project_id', label: 'Projekt', type: 'select', value: initialProject.id, options: projects.map(project => ({ value: project.id, label: `${project.code} · ${project.name}` })), full: true },
+    { name: 'controller_group_ids', label: 'Obszary pracy', type: 'user-multiselect', options: projectAreaOptions(initialProject), emptyLabel: 'Bez konkretnego obszaru', full: true },
     { name: 'work_mode', label: 'Tryb', type: 'select', value: 'online', options: [{ value: 'online', label: 'Online · fabryka' }, { value: 'offline', label: 'Offline · biuro' }] },
-    { name: 'shift', label: 'Zmiana', type: 'select', value: options('shift')[0] || 'Dzień', options: options('shift') },
+    { name: 'shift', label: 'Zmiana', type: 'select', value: initialProject.shifts?.[0] || 'Dzień', options: initialProject.shifts?.length ? initialProject.shifts : ['Dzień', 'Noc'] },
     { name: 'count_in_manpower', label: 'Uwzględniaj osobę w kalkulacji manpoweru', type: 'checkbox', value: 1, hint: 'Z obszarami: +1 tylko w wybranych obszarach. Bez obszaru: +1 we wszystkich obszarach.', full: true },
     { name: 'note', label: 'Notatka', full: true }
   ] });
+  const projectSelect = $('#action-fields [name="target_project_id"]');
+  projectSelect?.addEventListener('change', () => {
+    const project = projects.find(item => Number(item.id) === Number(projectSelect.value)) || initialProject;
+    const details = $('#action-fields [data-ui-multiselect="controller_group_ids"]');
+    if (details) {
+      const search = details.querySelector('.multi-choice-search');
+      details.querySelector('.mentions').innerHTML = `${search ? '<input class="multi-choice-search" type="search" placeholder="Szukaj obszaru…">' : ''}${projectAreaOptions(project).map(option => `<label class="mention"><input name="controller_group_ids" type="checkbox" value="${option.value}">${escapeHtml(option.label)}</label>`).join('')}`;
+      details.querySelector('summary').textContent = 'Bez konkretnego obszaru';
+    }
+    const shift = $('#action-fields [name="shift"]');
+    if (shift) { const shifts = project.shifts?.length ? project.shifts : ['Dzień', 'Noc']; shift.innerHTML = shifts.map(value => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join(''); }
+  });
+  const result = await formPromise;
   if (!result) return;
   const areaIds = [...new Set((result.controller_group_ids || []).map(Number).filter(Boolean))];
   const entriesToAdd = (areaIds.length ? areaIds : [null]).map(controllerGroupId => ({ controller_group_id: controllerGroupId, activity_type: 'work', work_mode: result.work_mode, shift: result.shift, transport_mode: 'none', count_in_manpower: result.count_in_manpower ? 1 : 0, allow_without_area: controllerGroupId ? 0 : 1, note: result.note }));
+  const targetProjectId = Number(result.target_project_id);
+  if (targetProjectId !== currentProjectId) {
+    try {
+      const response = await api('/api/planner/cross-project-requests', { method: 'POST', body: JSON.stringify({
+        target_project_id: targetProjectId,
+        items: targets.map(target => ({ user_id: target.userId, plan_date: target.date, controller_group_ids: areaIds, work_mode: result.work_mode, shift: result.shift, count_in_manpower: result.count_in_manpower ? 1 : 0, note: result.note }))
+      }) });
+      clearPlannerSelections(false);
+      toast(response.awaiting_approval ? `Plan zapisany · ${response.awaiting_approval} ${response.awaiting_approval === 1 ? 'dzień oczekuje' : 'dni oczekuje'} na potwierdzenie` : 'Plan został zapisany w wybranym projekcie');
+      await reloadPlanner();
+    } catch (error) { toast(error.message, true); }
+    return;
+  }
   const usable = targets.filter(target => !plannerDaySnapshot(target.userId, target.date).absence_type);
   const mixed = usable.some(target => plannerDaySnapshot(target.userId, target.date).entries.some(item => item.transport_mode !== 'transport_only' && item.work_mode !== result.work_mode));
   if (mixed && !await uiConfirm('Jednoczesny plan ONLINE i OFFLINE', 'Co najmniej jeden zaznaczony dzień będzie zawierał oba tryby pracy.', 'Zapisz oba tryby', true)) return;
@@ -2566,7 +2572,7 @@ async function addTransportToPlannerSelection() {
   const targets = selectedPlannerTargets();
   if (!targets.length) return toast('Zaznacz co najmniej jeden dzień dla transportu', true);
   const defaultDuration = plannerTransportParts(plannerDefaultTransportMinutes() / 60);
-  const result = await uiForm({ title: `Transport · ${targets.length} ${targets.length === 1 ? 'dzień' : 'dni'}`, description: 'Transport jest oznaczany kodem T albo kodem wybranego auta (np. T1) i w kalkulacji czasu liczy się jako praca OFF.', submitLabel: '+Transport', fields: [
+  const result = await uiForm({ title: `Transport · ${targets.length} ${targets.length === 1 ? 'dzień' : 'dni'}`, description: 'Transport jest wspólną aktywnością pracownika widoczną pomiędzy projektami. Oznaczenie T lub kod auta (np. T1) nie zwiększa obsady ON/OFF.', submitLabel: '+Transport', fields: [
     { name: 'vehicle_id', label: 'Auto / transport', type: 'select', value: '', options: plannerVehicleOptions(), full: true },
     { name: 'duration_hours', label: 'Godziny', type: 'number', value: defaultDuration.hours, min: 0, step: 1, required: true },
     { name: 'duration_minutes', label: 'Minuty', type: 'number', value: defaultDuration.minutes, min: 0, max: 59, step: 1, required: true },
@@ -2681,7 +2687,6 @@ function bindPlannerBulkToolbar() {
   $('#planner-bulk-transport')?.addEventListener('click', addTransportToPlannerSelection);
   $('#planner-bulk-time-off')?.addEventListener('click', () => addAbsenceToPlannerSelection('time_off'));
   $('#planner-bulk-vacation')?.addEventListener('click', () => addAbsenceToPlannerSelection('vacation'));
-  $('#planner-bulk-cross-project')?.addEventListener('click', requestPlannerCrossProjectAssignment);
   $('#planner-bulk-copy')?.addEventListener('click', copyPlannerSelection);
   $('#planner-bulk-paste')?.addEventListener('click', pastePlannerSelection);
   $('#planner-bulk-approve')?.addEventListener('click', approvePlannerSelectionOverlaps);
@@ -2754,14 +2759,15 @@ function plannerCell(user, date, entries, work, absence, timeDetail, holiday, sh
     const collision = showOverlap ? `<span class="planner-overlap-actions ${overlap.status}" title="Nakładanie się projektów: ${escapeHtml(overlap.other_project_codes || 'inny projekt')}">${overlap.status === 'approved' ? '<b aria-label="Kolizja zatwierdzona">✓</b>' : overlap.status === 'rejected' ? '<b aria-label="Kolizja odrzucona">×</b>' : canCoordinate() ? `<button type="button" data-overlap-action="approve" data-user-id="${user.id}" data-date="${date}" aria-label="Zatwierdź kolizję">✓</button><button type="button" data-overlap-action="reject" data-user-id="${user.id}" data-date="${date}" aria-label="Odrzuć plan">×</button>` : '<b>⚠</b>'}</span>` : '';
     const duration = transport ? formatPlannerTransportDuration(entry.duration_hours) : '';
     const transportCode = entry.transport_code || 'T';
+    const approvalPending = !transport && entry.cross_project_status === 'pending';
     const contextLabel = transport ? '' : entry.display_area_label || entry.area_path || entry.area_name || '';
     const night = !transport && entry.shift === 'Noc';
     const projectColor = safeProjectColor(entry.project_color || state.me.current_project?.planner_color);
     const title = transport
       ? `${transportCode}${entry.vehicle_registration ? ` · ${entry.vehicle_registration}` : ''} · transport poza kalkulacją ON/OFF${duration ? ` · ${duration}` : ''}`
-      : [entry.project_name || entry.project_code, contextLabel, entry.work_mode === 'offline' ? 'OFF' : 'ON', night ? 'Noc' : 'Dzień', Number(entry.count_in_manpower) === 0 ? 'Poza kalkulacją manpoweru' : '', showOverlap ? `Nakładanie się projektów: ${overlap.other_project_codes || 'inny projekt'}` : ''].filter(Boolean).join(' · ');
+      : [entry.project_name || entry.project_code, contextLabel, entry.work_mode === 'offline' ? 'OFF' : 'ON', night ? 'Noc' : 'Dzień', approvalPending ? `Oczekuje na potwierdzenie managera projektu${entry.cross_project_source_code ? ` · wpis z ${entry.cross_project_source_code}` : ''}` : '', Number(entry.count_in_manpower) === 0 ? 'Poza kalkulacją manpoweru' : '', showOverlap ? `Nakładanie się projektów: ${overlap.other_project_codes || 'inny projekt'}` : ''].filter(Boolean).join(' · ');
     const extra = entryIndex >= visibleEntryLimit;
-    return `<span class="plan-chip ${transport ? 'transport-only' : `project-work ${entry.work_mode}`} ${night ? 'night-shift' : ''} ${Number(entry.count_in_manpower) === 0 ? 'excluded-from-manpower' : ''} ${current ? '' : 'other-project'} ${selectedEntry ? 'entry-selected' : ''} ${showOverlap ? `has-overlap ${overlap.status}` : ''}" style="${transport ? '' : projectColorStyle(projectColor)}" ${extra ? 'data-planner-extra' : ''} ${extra && !expanded ? 'hidden' : ''} title="${escapeHtml(title)}" data-entry-id="${entryIds[0] || entry.id}" data-entry-ids="${entryIds.join(',')}" data-current-project="${current ? 1 : 0}" data-project-id="${entry.project_id || state.me.current_project?.id}" draggable="${editable && current ? 'true' : 'false'}"><b class="mode-label">${transport ? escapeHtml(transportCode) : entry.work_mode === 'offline' ? 'OFF' : 'ON'}</b>${contextLabel ? `<span>${escapeHtml(contextLabel)}</span>` : '<span></span>'}${entry.note ? `<span class="plan-note" data-note="${escapeHtml(entry.note)}" title="${escapeHtml(entry.note)}" tabindex="0" aria-label="Notatka: ${escapeHtml(entry.note)}">i</span>` : ''}${collision}${transport ? '' : `<small class="shift-label">${night ? 'N' : 'D'}</small>`}</span>`;
+    return `<span class="plan-chip ${transport ? 'transport-only' : `project-work ${entry.work_mode}`} ${night ? 'night-shift' : ''} ${approvalPending ? 'approval-pending' : ''} ${Number(entry.count_in_manpower) === 0 ? 'excluded-from-manpower' : ''} ${current ? '' : 'other-project'} ${selectedEntry ? 'entry-selected' : ''} ${showOverlap ? `has-overlap ${overlap.status}` : ''}" style="${transport ? '' : projectColorStyle(projectColor)}" ${extra ? 'data-planner-extra' : ''} ${extra && !expanded ? 'hidden' : ''} title="${escapeHtml(title)}" data-entry-id="${entryIds[0] || entry.id}" data-entry-ids="${entryIds.join(',')}" data-current-project="${current ? 1 : 0}" data-project-id="${entry.project_id || state.me.current_project?.id}" draggable="${editable && current ? 'true' : 'false'}"><b class="mode-label">${transport ? escapeHtml(transportCode) : entry.work_mode === 'offline' ? 'OFF' : 'ON'}</b>${contextLabel ? `<span>${escapeHtml(contextLabel)}</span>` : '<span></span>'}${entry.note ? `<span class="plan-note" data-note="${escapeHtml(entry.note)}" title="${escapeHtml(entry.note)}" tabindex="0" aria-label="Notatka: ${escapeHtml(entry.note)}">i</span>` : ''}${approvalPending ? '<b class="planner-approval-mark" aria-label="Oczekuje na potwierdzenie">?</b>' : ''}${collision}${transport ? '' : `<small class="shift-label">${night ? 'N' : 'D'}</small>`}</span>`;
   }).join('');
   const workload = work && (work.tasks || work.points || work.statuses || work.notes) ? `<span class="workload" title="Zadania / otwarte punkty / status / notatki">${work.tasks}/${work.points}/${work.statuses}/${work.notes}</span>` : '';
   const absenceChip = absence ? `<span class="absence-chip ${absence.absence_type}" draggable="${editable ? 'true' : 'false'}" title="${escapeHtml(absence.note || (absence.absence_type === 'vacation' ? 'Urlop' : 'Wolne'))}"><b>${absence.absence_type === 'vacation' ? 'URLOP' : 'WOLNE'}</b>${absence.note ? `<small>${escapeHtml(absence.note)}</small>` : ''}</span>` : '';

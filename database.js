@@ -1712,10 +1712,13 @@ function createRepository(db, defaultProjectId) {
     const currentProject = one('SELECT id,code,name,planner_color FROM projects WHERE id=?', activeProjectId());
     const vehicles = all('SELECT * FROM planner_vehicles WHERE project_id=? AND active=1 ORDER BY sort_order,code,id', activeProjectId());
     const vehicleMap = new Map(vehicles.map(vehicle => [Number(vehicle.id), vehicle]));
-    const entries = all(`SELECT pe.*,u.display_name,creator.display_name created_by_name
+    const entries = all(`SELECT pe.*,u.display_name,creator.display_name created_by_name,
+      request.status cross_project_status,source.code cross_project_source_code
       FROM planner_entries pe JOIN users u ON u.id=pe.user_id
       JOIN project_memberships pm ON pm.project_id=pe.project_id AND pm.user_id=pe.user_id AND pm.active=1
       LEFT JOIN users creator ON creator.id=pe.created_by
+      LEFT JOIN planner_cross_project_requests request ON request.id=pe.cross_project_request_id
+      LEFT JOIN projects source ON source.id=request.source_project_id
       WHERE pe.project_id=? AND pe.plan_date BETWEEN ? AND ? AND pm.planner_enabled=1
       ORDER BY pe.plan_date,u.sort_order,pe.id`, activeProjectId(), range.from, range.to).map(entry => {
         const area = groupMap.get(Number(entry.controller_group_id));
@@ -1726,12 +1729,15 @@ function createRepository(db, defaultProjectId) {
       ? { sql: 'AND EXISTS(SELECT 1 FROM project_memberships current_pm WHERE current_pm.project_id=? AND current_pm.user_id=pe.user_id AND current_pm.active=1 AND current_pm.planner_enabled=1)', params: [activeProjectId()] }
       : { sql: 'AND pe.user_id=?', params: [Number(currentUser?.id || 0)] };
     const crossProjectEntries = all(`SELECT pe.*,u.display_name,creator.display_name created_by_name,p.code project_code,p.name project_name,p.planner_color project_color,
-      COALESCE(pv.code,'T') transport_code,COALESCE(pv.registration_number,'') vehicle_registration
+      COALESCE(pv.code,'T') transport_code,COALESCE(pv.registration_number,'') vehicle_registration,
+      request.status cross_project_status,source.code cross_project_source_code
       FROM planner_entries pe JOIN users u ON u.id=pe.user_id
       JOIN projects p ON p.id=pe.project_id AND p.active=1
       JOIN project_memberships pm ON pm.project_id=pe.project_id AND pm.user_id=pe.user_id AND pm.active=1
       LEFT JOIN users creator ON creator.id=pe.created_by
       LEFT JOIN planner_vehicles pv ON pv.id=pe.vehicle_id AND pv.project_id=pe.project_id
+      LEFT JOIN planner_cross_project_requests request ON request.id=pe.cross_project_request_id
+      LEFT JOIN projects source ON source.id=request.source_project_id
       WHERE pe.project_id!=? AND pe.plan_date BETWEEN ? AND ? AND pm.planner_enabled=1
       ${crossProjectVisibility.sql}
       ORDER BY pe.plan_date,u.sort_order,p.sort_order,pe.id`, activeProjectId(), range.from, range.to, ...crossProjectVisibility.params).map(entry => {
@@ -1882,8 +1888,13 @@ function createRepository(db, defaultProjectId) {
       WHERE request.target_project_id=? AND request.status='pending' ORDER BY request.plan_date,u.sort_order,request.id`, activeProjectId()) : [];
     const outgoingCrossProjectRequests = canManageRequirements ? all(`${requestSelect}
       WHERE request.source_project_id=? AND request.status='pending' ORDER BY request.plan_date,u.sort_order,request.id`, activeProjectId()) : [];
-    const targetProjects = canManageRequirements ? all('SELECT id,code,name,planner_color FROM projects WHERE active=1 AND id!=? ORDER BY sort_order,name,id', activeProjectId()) : [];
-    return { ...range, users, entries, cross_project_entries: crossProjectEntries, incoming_cross_project_requests: incomingCrossProjectRequests, outgoing_cross_project_requests: outgoingCrossProjectRequests, target_projects: targetProjects, absences, holidays, annotations, overlap_reviews: overlapReviews, time_adjustments: canManageRequirements ? timeAdjustments : [], work, summary, area_summary, area_day_summary, shift_summary, mode_summary, areas: hierarchy.groups, vehicles, requirements, time_details: timeDetails, can_manage_requirements: canManageRequirements, can_manage_time: canManageRequirements };
+    const assignmentProjects = canManageRequirements ? all('SELECT id,code,name,planner_color FROM projects WHERE active=1 ORDER BY sort_order,name,id').map(project => ({
+      ...project,
+      eligible_user_ids: all('SELECT user_id FROM project_memberships WHERE project_id=? AND active=1 AND planner_enabled=1 ORDER BY user_id', project.id).map(row => Number(row.user_id)),
+      areas: hierarchyData(project.id).groups.map(group => ({ id: group.id, name: group.name, path_label: group.path_label, depth: group.depth })),
+      shifts: all("SELECT value FROM options WHERE project_id=? AND kind='shift' AND active=1 ORDER BY sort_order,id", project.id).map(row => row.value)
+    })) : [];
+    return { ...range, users, entries, cross_project_entries: crossProjectEntries, incoming_cross_project_requests: incomingCrossProjectRequests, outgoing_cross_project_requests: outgoingCrossProjectRequests, assignment_projects: assignmentProjects, absences, holidays, annotations, overlap_reviews: overlapReviews, time_adjustments: canManageRequirements ? timeAdjustments : [], work, summary, area_summary, area_day_summary, shift_summary, mode_summary, areas: hierarchy.groups, vehicles, requirements, time_details: timeDetails, can_manage_requirements: canManageRequirements, can_manage_time: canManageRequirements };
   }
 
   function plannerTimeCalculation(range, users, entries, absences, holidays, adjustments = [], visibleRange = range) {
@@ -2056,33 +2067,53 @@ function createRepository(db, defaultProjectId) {
       const userId = asId(item.user_id); const planDate = nullableDate(item.plan_date);
       if (!userId || !planDate) throw appError('Każde zgłoszenie musi zawierać osobę i dzień');
       validatePlannerUserDate(userId, planDate);
+      if (!one(`SELECT 1 FROM project_memberships pm JOIN users u ON u.id=pm.user_id AND u.active=1
+        WHERE pm.project_id=? AND pm.user_id=? AND pm.active=1 AND pm.planner_enabled=1`, targetProjectId, userId)) {
+        throw appError('Wybrana osoba nie jest aktywnym uczestnikiem Plannera w projekcie docelowym');
+      }
       if (one('SELECT 1 FROM system_absences WHERE user_id=? AND absence_date=?', userId, planDate)) throw appError('Nie można przypisać do innego projektu osoby mającej tego dnia urlop lub wolne');
+      const areaIds = [...new Set((Array.isArray(item.controller_group_ids) ? item.controller_group_ids : []).map(asId).filter(Boolean))];
+      const targetHierarchy = hierarchyData(targetProjectId);
+      const selectedAreas = targetHierarchy.groups.filter(group => areaIds.includes(Number(group.id)));
+      if (selectedAreas.length !== areaIds.length) throw appError('Jeden z wybranych obszarów nie należy do projektu docelowego');
+      if (selectedAreas.some((left, index) => selectedAreas.some((right, otherIndex) => index !== otherIndex
+        && right.path_names.length > left.path_names.length
+        && right.path_names.slice(0, left.path_names.length).join('\u0000') === left.path_names.join('\u0000')))) throw appError('Nie można przypisać jednocześnie obszaru nadrzędnego i jego podobszaru');
+      const requestedShift = clean(item.shift) || 'Dzień';
+      if (!one("SELECT 1 FROM options WHERE project_id=? AND kind='shift' AND value=? AND active=1", targetProjectId, requestedShift)) throw appError(`Nieznana zmiana w projekcie docelowym: ${requestedShift}`);
       return {
         userId, planDate,
         workMode: clean(item.work_mode) === 'offline' ? 'offline' : 'online',
-        shift: clean(item.shift) === 'Noc' ? 'Noc' : 'Dzień',
+        shift: requestedShift,
         countInManpower: Number(item.count_in_manpower) === 0 ? 0 : 1,
-        note: clean(item.note)
+        note: clean(item.note), areaIds
       };
     });
     const upsert = db.prepare(`INSERT INTO planner_cross_project_requests(
       source_project_id,target_project_id,user_id,plan_date,work_mode,shift,count_in_manpower,note,status,requested_by
     ) VALUES(?,?,?,?,?,?,?,?,'pending',?) ON CONFLICT(source_project_id,target_project_id,user_id,plan_date) DO UPDATE SET
-      work_mode=CASE WHEN planner_cross_project_requests.status='approved' THEN planner_cross_project_requests.work_mode ELSE excluded.work_mode END,
-      shift=CASE WHEN planner_cross_project_requests.status='approved' THEN planner_cross_project_requests.shift ELSE excluded.shift END,
-      count_in_manpower=CASE WHEN planner_cross_project_requests.status='approved' THEN planner_cross_project_requests.count_in_manpower ELSE excluded.count_in_manpower END,
-      note=CASE WHEN planner_cross_project_requests.status='approved' THEN planner_cross_project_requests.note ELSE excluded.note END,
-      status=CASE WHEN planner_cross_project_requests.status='approved' THEN 'approved' ELSE 'pending' END,
-      requested_by=CASE WHEN planner_cross_project_requests.status='approved' THEN planner_cross_project_requests.requested_by ELSE excluded.requested_by END,
-      decided_by=CASE WHEN planner_cross_project_requests.status='approved' THEN planner_cross_project_requests.decided_by ELSE NULL END,
-      decided_at=CASE WHEN planner_cross_project_requests.status='approved' THEN planner_cross_project_requests.decided_at ELSE NULL END,
+      work_mode=excluded.work_mode,shift=excluded.shift,count_in_manpower=excluded.count_in_manpower,note=excluded.note,
+      status='pending',requested_by=excluded.requested_by,decided_by=NULL,decided_at=NULL,linked_entry_id=NULL,
       updated_at=CURRENT_TIMESTAMP`);
+    const insertEntry = db.prepare(`INSERT INTO planner_entries(project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,count_in_manpower,vehicle_id,note,cross_project_request_id,created_by)
+      VALUES(?,?,?,?,?,?,'none',0,?,NULL,?,?,?)`);
     db.exec('BEGIN IMMEDIATE');
     try {
-      prepared.forEach(item => upsert.run(activeProjectId(), targetProjectId, item.userId, item.planDate, item.workMode, item.shift, item.countInManpower, item.note, currentUser.id));
+      prepared.forEach(item => {
+        // Każda zmiana z poziomu innego projektu jest od razu widoczna, ale
+        // wymaga osobnego potwierdzenia prowadzącego projekt docelowy.
+        upsert.run(activeProjectId(), targetProjectId, item.userId, item.planDate, item.workMode, item.shift, item.countInManpower, item.note, currentUser.id);
+        const requestId = Number(one(`SELECT id FROM planner_cross_project_requests WHERE source_project_id=? AND target_project_id=? AND user_id=? AND plan_date=?`, activeProjectId(), targetProjectId, item.userId, item.planDate).id);
+        db.prepare("UPDATE planner_cross_project_requests SET status='rejected',decided_by=?,decided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE target_project_id=? AND user_id=? AND plan_date=? AND status='pending' AND id!=?")
+          .run(currentUser.id, targetProjectId, item.userId, item.planDate, requestId || 0);
+        db.prepare("DELETE FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=? AND transport_mode!='transport_only'").run(targetProjectId, item.userId, item.planDate);
+        const entryIds = (item.areaIds.length ? item.areaIds : [null]).map(groupId => Number(insertEntry.run(targetProjectId, item.userId, item.planDate, item.shift, groupId, item.workMode, item.countInManpower, item.note, requestId, currentUser.id).lastInsertRowid));
+        if (requestId) db.prepare('UPDATE planner_cross_project_requests SET linked_entry_id=? WHERE id=?').run(entryIds[0], requestId);
+        syncPlannerOverlapReview(item.userId, item.planDate, currentUser);
+      });
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
-    return { requested: prepared.length, target_project_id: targetProjectId };
+    return { assigned: prepared.length, awaiting_approval: prepared.length, target_project_id: targetProjectId };
   }
 
   function reviewPlannerCrossProjectRequest(id, input, currentUser) {
@@ -2096,21 +2127,24 @@ function createRepository(db, defaultProjectId) {
     const action = clean(input.action);
     if (!['approve', 'reject'].includes(action)) throw appError('Nieznana decyzja dla zgłoszenia');
     if (action === 'reject') {
-      db.prepare("UPDATE planner_cross_project_requests SET status='rejected',decided_by=?,decided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?")
-        .run(currentUser.id, request.id);
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        db.prepare('DELETE FROM planner_entries WHERE cross_project_request_id=?').run(request.id);
+        db.prepare("UPDATE planner_cross_project_requests SET status='rejected',decided_by=?,decided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(currentUser.id, request.id);
+        syncPlannerOverlapReview(request.user_id, request.plan_date, currentUser);
+        db.exec('COMMIT');
+      } catch (error) { db.exec('ROLLBACK'); throw error; }
       return { id: request.id, status: 'rejected' };
     }
     if (one('SELECT 1 FROM system_absences WHERE user_id=? AND absence_date=?', request.user_id, request.plan_date)) throw appError('Nie można zaakceptować przypisania: osoba ma tego dnia urlop lub wolne');
     if (!one('SELECT 1 FROM users WHERE id=? AND active=1', request.user_id)) throw appError('Użytkownik nie jest już aktywny', 409);
     db.exec('BEGIN IMMEDIATE');
     try {
-      db.prepare(`INSERT INTO project_memberships(project_id,user_id,role,active,planner_enabled,assignable)
-        VALUES(?,?,'user',1,1,1) ON CONFLICT(project_id,user_id) DO UPDATE SET active=1,planner_enabled=1`).run(activeProjectId(), request.user_id);
-      let entry = one(`SELECT * FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=?
-        AND transport_mode!='transport_only' AND work_mode=? ORDER BY (controller_group_id IS NULL) DESC,id LIMIT 1`, activeProjectId(), request.user_id, request.plan_date, request.work_mode);
+      let entry = one('SELECT * FROM planner_entries WHERE cross_project_request_id=? ORDER BY id LIMIT 1', request.id);
+      // Zgodność z wpisami utworzonymi przez starszą wersję, w której plan powstawał dopiero po akceptacji.
       if (!entry) {
-        const result = db.prepare(`INSERT INTO planner_entries(project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,count_in_manpower,vehicle_id,note,created_by)
-          VALUES(?,?,?, ?,NULL,?,'none',0,?,NULL,?,?)`).run(activeProjectId(), request.user_id, request.plan_date, request.shift, request.work_mode, request.count_in_manpower, request.note, currentUser.id);
+        const result = db.prepare(`INSERT INTO planner_entries(project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,count_in_manpower,vehicle_id,note,cross_project_request_id,created_by)
+          VALUES(?,?,?, ?,NULL,?,'none',0,?,NULL,?,?,?)`).run(activeProjectId(), request.user_id, request.plan_date, request.shift, request.work_mode, request.count_in_manpower, request.note, request.id, currentUser.id);
         entry = one('SELECT * FROM planner_entries WHERE id=?', Number(result.lastInsertRowid));
       }
       db.prepare("UPDATE planner_cross_project_requests SET status='approved',decided_by=?,linked_entry_id=?,decided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?")

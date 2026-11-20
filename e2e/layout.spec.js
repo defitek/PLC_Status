@@ -855,6 +855,9 @@ test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzypr
       username: `planner.cross.${suffix}`, display_name: `Pracownik międzyprojektowy ${suffix}`, password: 'test-password-123',
       project_role: 'user', project_active: 1, planner_enabled: 1, assignable: 1, active: 1
     }) });
+    await request('/api/select-project', { method: 'POST', body: JSON.stringify({ project_id: target.id }) });
+    await request(`/api/users/${worker.id}`, { method: 'PATCH', body: JSON.stringify({ project_role: 'user', project_active: 1, planner_enabled: 1, assignable: 1 }) });
+    await request('/api/select-project', { method: 'POST', body: JSON.stringify({ project_id: me.current_project.id }) });
     return { sourceProjectId: me.current_project.id, targetProjectId: target.id, targetProjectCode: target.code, targetProjectColor: target.planner_color, workerId: worker.id, workerName: worker.display_name };
   }, `${Date.now()}-${Math.floor(Math.random() * 10000)}`);
   await openView(page, 'planner');
@@ -897,13 +900,14 @@ test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzypr
   const requestCell = page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"]`);
   await requestCell.dispatchEvent('pointerdown', { button: 0, buttons: 1 });
   await page.locator('body').dispatchEvent('pointerup', { button: 0 });
-  await page.locator('#planner-bulk-cross-project').click();
+  await page.locator('#planner-bulk-add').click();
   await page.locator('#action-fields [name="target_project_id"]').selectOption(String(setup.targetProjectId));
   await page.locator('#action-fields [name="work_mode"]').selectOption('offline');
   await page.locator('#action-fields [name="shift"]').selectOption('Noc');
   await page.locator('#action-fields [name="note"]').fill('Nocne wsparcie projektu docelowego');
   await page.locator('#action-submit').click();
-  await expect(page.locator('.planner-cross-project-row.outgoing', { hasText: setup.workerName })).toBeVisible();
+  const pendingSourceChip = page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"] .plan-chip.other-project.approval-pending`);
+  await expect(pendingSourceChip).toContainText('?');
 
   await page.evaluate(async targetProjectId => {
     const response = await fetch('/api/select-project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project_id: targetProjectId }) });
@@ -912,12 +916,16 @@ test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzypr
   await page.reload();
   await expect(page.locator('#content')).toBeVisible();
   await openView(page, 'planner');
+  const pendingTargetChip = page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"] .plan-chip.approval-pending`);
+  await expect(pendingTargetChip).toContainText('?');
+  await page.locator('.planner-cross-project-requests>summary').click();
   const incoming = page.locator('.planner-cross-project-row.incoming', { hasText: setup.workerName });
   await expect(incoming).toBeVisible();
   await incoming.locator('[data-planner-cross-project-action="approve"]').click();
   const approvedChip = page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"] .plan-chip.night-shift`);
   await expect(approvedChip).toContainText('OFF');
   await expect(approvedChip).toContainText('N');
+  await expect(approvedChip).not.toHaveClass(/approval-pending/);
   await expect(approvedChip).toHaveAttribute('style', new RegExp(`--project-color:${setup.targetProjectColor}`, 'i'));
   await expect(incoming).toHaveCount(0);
 
