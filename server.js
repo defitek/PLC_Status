@@ -407,6 +407,7 @@ async function handleProjectApi(request, response, url, user) {
   if (plannerRawId) {
     requireRole(user, 'moderator');
     if (method === 'GET') return json(response, 200, repository.plannerRawData(Number(plannerRawId[1]), url.searchParams.get('from'), url.searchParams.get('to'), user));
+    if (method === 'PATCH') return json(response, 200, repository.updatePlannerRawPlan(Number(plannerRawId[1]), await readJson(request), user));
     if (method === 'DELETE') return json(response, 200, repository.deletePlannerRawPlan(Number(plannerRawId[1]), user));
   }
   if (method === 'PUT' && path === '/api/planner/day') { requireRole(user, 'moderator'); return json(response, 200, repository.savePlannerDay(await readJson(request), user)); }

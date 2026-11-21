@@ -2101,26 +2101,53 @@ test('Planner RAW plans stay private, compare changes and publish with personal 
     const worker = repository.saveUser(null, {
       username: 'raw.worker', display_name: 'RAW Worker', password: 'secret123', project_role: 'user', planner_enabled: 1, assignable: 1
     });
-    const planDate = '2027-02-15';
+    const planDate = '2027-02-15'; const absenceDate = '2027-02-16'; const extendedDate = '2027-02-17';
     repository.savePlannerDay({ user_id: worker.id, plan_date: planDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'online', shift: 'Dzień', note: 'Produkcja' }] }, admin);
-    const raw = repository.createPlannerRawPlan({ name: 'Wariant A', from_date: planDate, to_date: planDate }, admin);
-    assert.equal(raw.entry_count, 1);
+    repository.savePlannerDay({ user_id: worker.id, plan_date: absenceDate, absence_type: 'vacation', absence_note: 'Urlop snapshot' }, admin);
+    const foreignProject = repository.saveProject(null, { code: 'RAW2', name: 'RAW drugi projekt', active: 1 });
+    repository.withProject(foreignProject.id, () => {
+      const foreignAdmin = repository.me(admin.id, foreignProject.id);
+      repository.saveUser(worker.id, { project_active: 1, planner_enabled: 1, assignable: 1, project_role: 'user' });
+      repository.savePlannerDay({ user_id: worker.id, plan_date: planDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'offline', shift: 'Noc', note: 'Drugi projekt snapshot' }] }, foreignAdmin);
+    });
+    const raw = repository.createPlannerRawPlan({ name: 'Wariant A', from_date: planDate, to_date: absenceDate }, admin);
+    assert.equal(raw.entry_count, 2);
+
+    repository.savePlannerDay({ user_id: worker.id, plan_date: planDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'online', shift: 'Dzień', note: 'Późniejsza produkcja' }] }, admin);
+    repository.savePlannerDay({ user_id: worker.id, plan_date: absenceDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'online', shift: 'Dzień', note: 'Produkcja zamiast urlopu' }] }, admin);
+    repository.withProject(foreignProject.id, () => repository.savePlannerDay({ user_id: worker.id, plan_date: planDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'offline', shift: 'Noc', note: 'Późniejsza zmiana obcego projektu' }] }, repository.me(admin.id, foreignProject.id)));
+    let snapshot = repository.plannerRawData(raw.id, planDate, absenceDate, admin);
+    assert.equal(snapshot.entries.find(item => item.user_id === worker.id)?.note, 'Produkcja');
+    assert.equal(snapshot.cross_project_entries.find(item => item.project_id === foreignProject.id)?.note, 'Drugi projekt snapshot');
+    assert.equal(snapshot.absences.find(item => item.user_id === worker.id)?.note, 'Urlop snapshot');
+
     repository.savePlannerRawDay(raw.id, { user_id: worker.id, plan_date: planDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'offline', shift: 'Noc', note: 'Wariant prywatny' }] }, admin);
-    const comparison = repository.plannerRawData(raw.id, planDate, planDate, admin);
-    assert.equal(comparison.raw_changes.length, 1);
-    assert.match(comparison.raw_changes[0].before, /Produkcja/);
-    assert.match(comparison.raw_changes[0].after, /Wariant prywatny/);
-    assert.equal(repository.planner(planDate, planDate, admin).entries.find(item => item.user_id === worker.id).note, 'Produkcja', 'RAW must not mutate production before publication');
+    repository.savePlannerRawDay(raw.id, { target_project_id: foreignProject.id, user_id: worker.id, plan_date: planDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'online', shift: 'Dzień', note: 'Obcy projekt RAW' }] }, admin);
+    repository.savePlannerRawDay(raw.id, { user_id: worker.id, plan_date: absenceDate, entries: [], absence_type: 'time_off', absence_note: 'Wolne RAW' }, admin);
+    repository.savePlannerDay({ user_id: worker.id, plan_date: extendedDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'online', shift: 'Dzień', note: 'Snapshot rozszerzenia' }] }, admin);
+    const resized = repository.updatePlannerRawPlan(raw.id, { name: 'Wariant A', from_date: planDate, to_date: extendedDate }, admin);
+    assert.equal(resized.to_date, extendedDate);
+    repository.savePlannerDay({ user_id: worker.id, plan_date: extendedDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'online', shift: 'Dzień', note: 'Po rozszerzeniu produkcji' }] }, admin);
+    const comparison = repository.plannerRawData(raw.id, planDate, extendedDate, admin);
+    assert.ok(comparison.raw_changes.length >= 4);
+    assert.equal(comparison.entries.find(item => item.plan_date === extendedDate)?.note, 'Snapshot rozszerzenia');
+    assert.equal(repository.planner(planDate, planDate, admin).entries.find(item => item.user_id === worker.id).note, 'Późniejsza produkcja', 'RAW must not mutate production before publication');
 
     const published = repository.publishPlannerRawPlan(raw.id, { notify_users: 1 }, admin);
     assert.equal(published.notified_users, 1);
     assert.equal(repository.planner(planDate, planDate, admin).entries.find(item => item.user_id === worker.id).note, 'Wariant prywatny');
+    assert.equal(repository.planner(absenceDate, absenceDate, admin).absences.find(item => item.user_id === worker.id)?.note, 'Wolne RAW');
+    assert.equal(repository.planner(extendedDate, extendedDate, admin).entries.find(item => item.user_id === worker.id).note, 'Snapshot rozszerzenia');
+    repository.withProject(foreignProject.id, () => assert.equal(repository.planner(planDate, planDate, repository.me(admin.id, foreignProject.id)).entries.find(item => item.user_id === worker.id).note, 'Obcy projekt RAW'));
     assert.ok(repository.notifications(repository.me(worker.id)).some(item => item.title === 'Zmiana planu pracy: Wariant A'));
 
-    for (let index = 2; index <= 5; index += 1) repository.createPlannerRawPlan({ name: `Wariant ${index}`, from_date: planDate, to_date: planDate }, admin);
+    for (let index = 2; index <= 5; index += 1) repository.createPlannerRawPlan({ name: `Wariant ${index}`, from_date: planDate, to_date: extendedDate }, admin);
     assert.equal(repository.plannerRawPlans(admin).length, 5);
-    assert.throws(() => repository.createPlannerRawPlan({ name: 'Wariant 6', from_date: planDate, to_date: planDate }, admin), /maksymalnie 5/);
-    assert.ok(repository.projectBackup().tables.planner_raw_plans.some(item => item.id === raw.id));
+    assert.throws(() => repository.createPlannerRawPlan({ name: 'Wariant 6', from_date: planDate, to_date: extendedDate }, admin), /maksymalnie 5/);
+    const backup = repository.projectBackup();
+    assert.ok(backup.tables.planner_raw_plans.some(item => item.id === raw.id));
+    assert.ok(backup.tables.planner_raw_projects.some(item => item.raw_plan_id === raw.id && item.project_id === foreignProject.id));
+    assert.ok(backup.tables.planner_raw_absences.some(item => item.raw_plan_id === raw.id));
   } finally {
     repository.close();
     rmSync(temporary.directory, { recursive: true, force: true });
@@ -2151,6 +2178,35 @@ test('Planner limits a person to three projects and keeps vacation exclusive glo
       const projectAdmin = repository.me(admin.id, projectId);
       assert.equal(repository.planner(planDate, planDate, projectAdmin).entries.some(entry => entry.user_id === worker.id), false);
       assert.equal(repository.planner(planDate, planDate, projectAdmin).absences.find(item => item.user_id === worker.id)?.note, 'Wyłączny urlop');
+    });
+  } finally {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
+test('publishing RAW sends unmanaged project changes to manager approval', () => {
+  const temporary = temporaryDatabase();
+  const repository = openDatabase(temporary.path);
+  try {
+    const account = repository.authenticate('admin'); const admin = repository.me(account.id);
+    const moderatorRecord = repository.saveUser(null, { username: 'raw.moderator', display_name: 'RAW Moderator', password: 'secret123', project_role: 'moderator', planner_enabled: 1 });
+    const worker = repository.saveUser(null, { username: 'raw.approval.worker', display_name: 'RAW Approval Worker', password: 'secret123', project_role: 'user', planner_enabled: 1 });
+    const target = repository.saveProject(null, { code: 'RAPP', name: 'RAW approval target', active: 1 });
+    repository.withProject(target.id, () => {
+      repository.saveUser(moderatorRecord.id, { project_active: 1, planner_enabled: 1, project_role: 'user' });
+      repository.saveUser(worker.id, { project_active: 1, planner_enabled: 1, project_role: 'user' });
+      repository.savePlannerDay({ user_id: worker.id, plan_date: '2027-04-05', entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'online', shift: 'Dzień', note: 'Plan docelowy przed RAW' }] }, repository.me(admin.id, target.id));
+    });
+    const moderator = repository.me(moderatorRecord.id, 1);
+    const raw = repository.createPlannerRawPlan({ name: 'RAW do akceptacji', from_date: '2027-04-05', to_date: '2027-04-05' }, moderator);
+    repository.savePlannerRawDay(raw.id, { target_project_id: target.id, user_id: worker.id, plan_date: '2027-04-05', entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'offline', shift: 'Noc', note: 'Zmiana oczekująca' }] }, moderator);
+    const published = repository.publishPlannerRawPlan(raw.id, { notify_users: 0 }, moderator);
+    assert.equal(published.awaiting_approval, 1);
+    repository.withProject(target.id, () => {
+      const targetAdmin = repository.me(admin.id, target.id); const targetPlanner = repository.planner('2027-04-05', '2027-04-05', targetAdmin);
+      assert.equal(targetPlanner.entries.find(item => item.user_id === worker.id)?.note, 'Zmiana oczekująca');
+      assert.ok(targetPlanner.incoming_cross_project_requests.some(item => item.user_id === worker.id && item.status === 'pending'));
     });
   } finally {
     repository.close();

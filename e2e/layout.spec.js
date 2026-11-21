@@ -182,6 +182,10 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   const cell = page.locator('.planner-cell[data-editable="1"]:not(.planned):not(.absent)').first();
   const userId = await cell.getAttribute('data-user-id');
   const date = await cell.getAttribute('data-date');
+  await cell.dblclick();
+  await expect(page.locator('#action-title')).toContainText('Dodaj pracę');
+  await expect(page.locator('#action-fields [name="target_project_id"]')).toHaveValue(/\d+/);
+  await page.locator('#action-cancel').click();
   await cell.click();
   await page.keyboard.press('t');
   await expect(page.locator('#action-title')).toHaveText(/Transport/);
@@ -212,6 +216,9 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   await expect(transportRow.locator('[data-plan-duration-hours]')).toHaveValue('7');
   await expect(transportRow.locator('[data-plan-duration-minutes]')).toHaveValue('17');
   await expect(transportRow.locator('[data-plan-vehicle]')).toHaveValue(/\d+/);
+  expect(await transportRow.evaluate(row => row.firstElementChild?.matches('[data-plan-activity]'))).toBe(true);
+  if ((page.viewportSize()?.width || 0) > 700) expect(await transportRow.locator('[data-plan-duration-hours]').evaluate(input => input.getBoundingClientRect().width)).toBeLessThan(75);
+  expect(await page.locator('#planner-entry-list').evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
   await page.locator('#planner-dialog-close').click();
 
   const freeCell = page.locator('.planner-cell[data-editable="1"]').nth(1);
@@ -284,6 +291,9 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   await page.keyboard.press('e');
   const groupedWorkRow = page.locator('#planner-entry-list .planner-entry-row:not(.transport-entry)').filter({ has: page.locator(`[data-plan-note][value="${workNote}"]`) });
   await expect(groupedWorkRow).toHaveCount(1);
+  expect(await groupedWorkRow.evaluate(row => row.firstElementChild?.matches('[data-plan-activity]'))).toBe(true);
+  await expect(groupedWorkRow.locator('.planner-manpower-toggle')).toContainText('Manpower');
+  await expect(groupedWorkRow.locator('.planner-manpower-toggle')).toHaveAttribute('title', /wliczany do Manpoweru/);
   await expect(groupedWorkRow.locator('[data-plan-area]:checked')).toHaveCount(2);
   await groupedWorkRow.locator('[data-plan-manpower]').uncheck();
   await page.locator('#planner-form .dialog-actions .primary').click();
@@ -332,7 +342,7 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   await page.keyboard.press('Delete');
   await expect(page.locator('#action-title')).toHaveText('Wyczyść cały dzień');
   await expect(page.locator('#action-description')).toContainText('2 wybranych dni');
-  await page.locator('#action-submit').click();
+  await page.keyboard.press('Enter');
   await expect(vacationCell.locator('.absence-chip')).toHaveCount(0);
   await expect(workCell.locator('.plan-chip[data-current-project="1"]')).toHaveCount(0);
 });
@@ -903,6 +913,11 @@ test('Planner RAW porównuje prywatny wariant i publikuje go dopiero na żądani
   await expect(page.locator('.planner-raw-banner')).toContainText(name);
   const rawPlanId = Number(await page.locator('#planner-raw-select').inputValue());
   expect(rawPlanId).toBeGreaterThan(0);
+  const extendedDate = new Date(`${date}T12:00:00Z`); extendedDate.setUTCDate(extendedDate.getUTCDate() + 6); const extendedDateValue = extendedDate.toISOString().slice(0, 10);
+  await page.locator('#planner-raw-range').click();
+  await page.locator('#action-fields [name="to_date"]').fill(extendedDateValue);
+  await page.locator('#action-submit').click();
+  await expect(page.locator('.planner-raw-banner')).toContainText(name);
 
   await page.evaluate(async ({ rawPlanId, userId, date }) => {
     const response = await fetch(`/api/planner/raw-plans/${rawPlanId}/day`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: userId, plan_date: date, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'offline', shift: 'Noc', note: 'Prywatna zmiana RAW E2E' }] }) });

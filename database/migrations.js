@@ -111,6 +111,33 @@ export function prepareDatabase(db, { seedDemo, demoLimit = 100 }) {
     CREATE INDEX IF NOT EXISTS idx_planner_raw_owner ON planner_raw_plans(project_id,owner_user_id,updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_planner_raw_entries_date ON planner_raw_entries(raw_plan_id,plan_date,user_id)`);
   });
+  runMigration(db, '062-planner-raw-snapshots', () => {
+    db.exec(`CREATE TABLE IF NOT EXISTS planner_raw_users (
+      raw_plan_id INTEGER NOT NULL REFERENCES planner_raw_plans(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      PRIMARY KEY(raw_plan_id,user_id)) STRICT;
+    CREATE TABLE IF NOT EXISTS planner_raw_projects (
+      raw_plan_id INTEGER NOT NULL REFERENCES planner_raw_plans(id) ON DELETE CASCADE,
+      project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      PRIMARY KEY(raw_plan_id,project_id)) STRICT;
+    CREATE TABLE IF NOT EXISTS planner_raw_absences (
+      id INTEGER PRIMARY KEY,raw_plan_id INTEGER NOT NULL REFERENCES planner_raw_plans(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,absence_date TEXT NOT NULL,
+      absence_type TEXT NOT NULL CHECK(absence_type IN ('time_off','vacation')),note TEXT NOT NULL DEFAULT '',
+      UNIQUE(raw_plan_id,user_id,absence_date)) STRICT;
+    CREATE INDEX IF NOT EXISTS idx_planner_raw_absences_date ON planner_raw_absences(raw_plan_id,absence_date,user_id);
+    INSERT OR IGNORE INTO planner_raw_users(raw_plan_id,user_id)
+      SELECT plan.id,membership.user_id FROM planner_raw_plans plan
+      JOIN project_memberships membership ON membership.project_id=plan.project_id AND membership.active=1 AND membership.planner_enabled=1;
+    INSERT OR IGNORE INTO planner_raw_projects(raw_plan_id,project_id)
+      SELECT id,project_id FROM planner_raw_plans;
+    INSERT OR IGNORE INTO planner_raw_projects(raw_plan_id,project_id)
+      SELECT raw_plan_id,project_id FROM planner_raw_entries;
+    INSERT OR IGNORE INTO planner_raw_absences(raw_plan_id,user_id,absence_date,absence_type,note)
+      SELECT plan.id,absence.user_id,absence.absence_date,absence.absence_type,absence.note
+      FROM planner_raw_plans plan JOIN planner_raw_users scope ON scope.raw_plan_id=plan.id
+      JOIN system_absences absence ON absence.user_id=scope.user_id AND absence.absence_date BETWEEN plan.from_date AND plan.to_date`);
+  });
   return defaultProjectId;
 }
 

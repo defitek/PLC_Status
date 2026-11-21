@@ -590,6 +590,11 @@ function bindShell() {
     state.actionResolve = null;
     resolve(null);
   });
+  $('#action-dialog').addEventListener('keydown', event => {
+    if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.target.closest('textarea,button')) return;
+    if ($('#action-fields').querySelector('input,select,textarea')) return;
+    event.preventDefault(); $('#action-form').requestSubmit($('#action-submit'));
+  });
   $('#action-form').addEventListener('submit', event => {
     event.preventDefault();
     const form = new FormData(event.currentTarget); const result = Object.fromEntries(form);
@@ -877,7 +882,8 @@ function uiForm({ title, description = '', fields = [], submitLabel = 'Zastosuj'
     state.actionResolve = resolve;
     dialog.dataset.dirty = '';
     if (!dialog.open) dialog.showModal();
-    $('#action-fields input, #action-fields textarea, #action-fields select')?.focus();
+    const firstField = $('#action-fields input, #action-fields textarea, #action-fields select');
+    (firstField || $('#action-submit')).focus();
   });
 }
 
@@ -2218,7 +2224,7 @@ function canCoordinate() { return ['moderator', 'project_admin', 'system_admin']
 
 function plannerRawControls() {
   const active = Number(state.plannerRawPlanId || 0);
-  return `<span class="planner-raw-controls ${active ? 'active' : ''}"><label>Plan <select id="planner-raw-select"><option value="">Produkcyjny</option>${(state.plannerRawPlans || []).map(plan => `<option value="${plan.id}" ${Number(plan.id) === active ? 'selected' : ''}>RAW · ${escapeHtml(plan.name)}${plan.changes_count ? ` (${plan.changes_count})` : ''}</option>`).join('')}</select></label><button type="button" class="mini" id="planner-raw-new" ${state.plannerRawPlans.length >= 5 ? 'disabled' : ''}>+ RAW</button>${active ? '<button type="button" class="mini" id="planner-raw-compare">Porównaj</button><button type="button" class="mini primary" id="planner-raw-publish">Opublikuj RAW</button><button type="button" class="mini danger-text" id="planner-raw-delete">Usuń RAW</button>' : ''}</span>`;
+  return `<span class="planner-raw-controls ${active ? 'active' : ''}"><label>Plan <select id="planner-raw-select"><option value="">Produkcyjny</option>${(state.plannerRawPlans || []).map(plan => `<option value="${plan.id}" ${Number(plan.id) === active ? 'selected' : ''}>RAW · ${escapeHtml(plan.name)}${plan.changes_count ? ` (${plan.changes_count})` : ''}</option>`).join('')}</select></label><button type="button" class="mini" id="planner-raw-new" ${state.plannerRawPlans.length >= 5 ? 'disabled' : ''}>+ RAW</button>${active ? '<button type="button" class="mini" id="planner-raw-range">Zakres RAW</button><button type="button" class="mini" id="planner-raw-compare">Porównaj</button><button type="button" class="mini primary" id="planner-raw-publish">Opublikuj RAW</button><button type="button" class="mini danger-text" id="planner-raw-delete">Usuń RAW</button>' : ''}</span>`;
 }
 
 async function createPlannerRawPlan() {
@@ -2232,9 +2238,24 @@ async function createPlannerRawPlan() {
   catch (error) { toast(error.message, true); }
 }
 
+async function editPlannerRawRange() {
+  const plan = state.planner?.raw_plan; if (!plan) return;
+  const result = await uiForm({ title: `Zakres RAW · ${plan.name}`, description: 'Dni pozostające w zakresie zachowają prywatne zmiany. Nowo dodane dni otrzymają snapshot planu produkcyjnego z chwili rozszerzenia.', submitLabel: 'Zapisz zakres', fields: [
+    { name: 'name', label: 'Nazwa planu', value: plan.name, required: true, full: true },
+    { name: 'from_date', label: 'Od', type: 'date', value: plan.from_date, required: true },
+    { name: 'to_date', label: 'Do', type: 'date', value: plan.to_date, required: true }
+  ] });
+  if (!result) return;
+  try {
+    const updated = await api(`/api/planner/raw-plans/${plan.id}`, { method: 'PATCH', body: JSON.stringify(result) });
+    state.plannerFrom = updated.from_date; state.plannerDays = Math.min(365, Math.max(7, Math.round((new Date(`${updated.to_date}T12:00:00Z`) - new Date(`${updated.from_date}T12:00:00Z`)) / 86400000) + 1));
+    state.plannerRawPlans = await api('/api/planner/raw-plans'); await reloadPlanner(); toast('Zakres planu RAW został zaktualizowany');
+  } catch (error) { toast(error.message, true); }
+}
+
 async function comparePlannerRawPlan() {
   const changes = state.planner?.raw_changes || [];
-  await uiForm({ title: `Porównanie RAW · ${state.planner?.raw_plan?.name || ''}`, description: changes.length ? `${changes.length} zmian względem planu produkcyjnego.` : 'Plan RAW jest identyczny z produkcyjnym.', submitLabel: 'Zamknij', fields: changes.length ? [{ name: 'changes', label: 'Zmiany pracowników', type: 'textarea', rows: Math.min(16, Math.max(5, changes.length * 2)), value: changes.map(change => `${change.display_name} · ${displayDate(change.plan_date)}\n${change.before} → ${change.after}`).join('\n\n'), full: true }] : [] });
+  await uiForm({ title: `Porównanie RAW · ${state.planner?.raw_plan?.name || ''}`, description: changes.length ? `${changes.length} zmian względem planu produkcyjnego.` : 'Plan RAW jest identyczny z produkcyjnym.', submitLabel: 'Zamknij', fields: changes.length ? [{ name: 'changes', label: 'Zmiany pracowników', type: 'textarea', rows: Math.min(16, Math.max(5, changes.length * 2)), value: changes.map(change => `${change.display_name} · ${displayDate(change.plan_date)} · ${change.project_label || 'Plan'}\n${change.before} → ${change.after}`).join('\n\n'), full: true }] : [] });
 }
 
 async function publishPlannerRawPlan() {
@@ -2310,6 +2331,7 @@ function renderPlanner() {
     await reloadPlanner();
   });
   $('#planner-raw-new')?.addEventListener('click', createPlannerRawPlan);
+  $('#planner-raw-range')?.addEventListener('click', editPlannerRawRange);
   $('#planner-raw-compare')?.addEventListener('click', comparePlannerRawPlan);
   $('#planner-raw-publish')?.addEventListener('click', publishPlannerRawPlan);
   $('#planner-raw-delete')?.addEventListener('click', deletePlannerRawPlan);
@@ -2342,7 +2364,18 @@ function renderPlanner() {
       });
       cell.addEventListener('pointerenter', event => { if (selectingRectangle && (event.buttons & 1) && cell.dataset.editable === '1') selectPlannerRectangle(rectangleStart, plannerCellGridPosition(cell), rectangleBaseSelection); });
       cell.addEventListener('click', event => { if (cell.dataset.editable === '1' && !event.target.closest('[data-overlap-action]')) event.preventDefault(); });
-      cell.addEventListener('dblclick', event => { if (cell.dataset.editable === '1' && !event.target.closest('[data-overlap-action]')) { event.preventDefault(); openPlannerCell(Number(cell.dataset.userId), cell.dataset.date); } });
+      cell.addEventListener('dblclick', event => {
+        if (cell.dataset.editable !== '1' || event.target.closest('[data-overlap-action]')) return;
+        event.preventDefault();
+        if (!cell.classList.contains('planned') && !cell.classList.contains('absent')) {
+          clearPlannerSelections(false);
+          state.plannerSelection.add(plannerSelectionKey(cell.dataset.userId, cell.dataset.date));
+          cell.classList.add('multi-selected'); updatePlannerBulkCount();
+          addWorkToPlannerSelection();
+          return;
+        }
+        openPlannerCell(Number(cell.dataset.userId), cell.dataset.date);
+      });
       cell.addEventListener('contextmenu', event => {
         const chip = event.target.closest('.plan-chip');
         showPlannerContext(event, Number(cell.dataset.userId), cell.dataset.date, plannerChipEntryIds(chip), Number(chip?.dataset.projectId || state.me.current_project?.id));
@@ -2587,10 +2620,10 @@ function plannerWorkSignature(entries) {
 }
 
 async function saveForeignPlannerDay(projectId, userId, date, entries, originalEntries = plannerProjectDayEntries(projectId, userId, date)) {
-  if (state.plannerRawPlanId) throw new Error('W trybie RAW nie można modyfikować kafelków innego projektu');
   const project = plannerProjectConfig(projectId);
   if (!project) throw new Error('Projekt kafelka nie jest dostępny dla tej osoby');
   const normalized = uniquePlannerEntries(entries);
+  if (state.plannerRawPlanId) return api(`/api/planner/raw-plans/${state.plannerRawPlanId}/day`, { method: 'PUT', body: JSON.stringify({ target_project_id: Number(projectId), user_id: Number(userId), plan_date: date, entries: normalized }) });
   const transportOnlyUpdate = !project.can_manage && plannerWorkSignature(normalized) === plannerWorkSignature(originalEntries);
   const submitted = transportOnlyUpdate ? normalized.filter(entry => entry.activity_type === 'transport') : normalized;
   return api('/api/planner/cross-project-requests', { method: 'POST', body: JSON.stringify({
@@ -2603,7 +2636,7 @@ async function savePlannerProjectDay(projectId, userId, date, entries, originalE
   if (Number(projectId) !== Number(state.me.current_project?.id || 0)) return saveForeignPlannerDay(projectId, userId, date, entries, originalEntries);
   const day = plannerDaySnapshot(userId, date);
   const endpoint = state.plannerRawPlanId ? `/api/planner/raw-plans/${state.plannerRawPlanId}/day` : '/api/planner/day';
-  return api(endpoint, { method: 'PUT', body: JSON.stringify(plannerDayRequest({ userId, date }, entries, day)) });
+  return api(endpoint, { method: 'PUT', body: JSON.stringify({ ...plannerDayRequest({ userId, date }, entries, day), target_project_id: Number(projectId) }) });
 }
 
 function plannerDayRequest(target, entries, day = plannerDaySnapshot(target.userId, target.date)) {
@@ -2654,7 +2687,16 @@ async function addWorkToPlannerSelection() {
   const areaIds = [...new Set((result.controller_group_ids || []).map(Number).filter(Boolean))];
   const entriesToAdd = (areaIds.length ? areaIds : [null]).map(controllerGroupId => ({ controller_group_id: controllerGroupId, activity_type: 'work', work_mode: result.work_mode, shift: result.shift, transport_mode: 'none', count_in_manpower: result.count_in_manpower ? 1 : 0, allow_without_area: controllerGroupId ? 0 : 1, note: result.note }));
   const targetProjectId = Number(result.target_project_id);
-  if (state.plannerRawPlanId && targetProjectId !== currentProjectId) return toast('Plan RAW może modyfikować wyłącznie projekt, w którym został utworzony', true);
+  if (state.plannerRawPlanId && targetProjectId !== currentProjectId) {
+    try {
+      for (const target of targets) {
+        const original = plannerProjectDayEntries(targetProjectId, target.userId, target.date);
+        await savePlannerProjectDay(targetProjectId, target.userId, target.date, [...original, ...entriesToAdd], original);
+      }
+      clearPlannerSelections(false); toast('Dodano pracę do prywatnego planu RAW'); await reloadPlanner();
+    } catch (error) { toast(error.message, true); }
+    return;
+  }
   if (targetProjectId !== currentProjectId) {
     try {
       const response = await api('/api/planner/cross-project-requests', { method: 'POST', body: JSON.stringify({
@@ -2698,7 +2740,6 @@ async function addTransportToPlannerSelection() {
 }
 
 async function addAbsenceToPlannerSelection(absenceType) {
-  if (state.plannerRawPlanId) return toast('Urlop i wolne są danymi produkcyjnymi i nie są zmieniane w prywatnym planie RAW', true);
   const targets = selectedPlannerTargets();
   if (!targets.length) return toast('Zaznacz co najmniej jeden dzień', true);
   const vacation = absenceType === 'vacation';
@@ -2722,7 +2763,7 @@ function selectedPlannerDayTargets() {
 }
 
 function emptyPlannerDayRequest(target) {
-  return { user_id: target.userId, plan_date: target.date, entries: [], absence_type: '', absence_note: '', actual_hours_adjustment: 0, overtime_raw_adjustment: 0, overtime_weighted_adjustment: 0, work_start_time: '', work_end_time: '', overtime_raw_balance_override: null, overtime_weighted_balance_override: null, adjustment_note: '' };
+  return { user_id: target.userId, plan_date: target.date, entries: [], absence_type: '', absence_note: '', clear_all_projects: 1, actual_hours_adjustment: 0, overtime_raw_adjustment: 0, overtime_weighted_adjustment: 0, work_start_time: '', work_end_time: '', overtime_raw_balance_override: null, overtime_weighted_balance_override: null, adjustment_note: '' };
 }
 
 async function clearSelectedPlannerDays() {
@@ -3096,7 +3137,7 @@ function plannerEntryRow(entry = {}) {
   const modeControl = activity === 'transport'
     ? plannerTransportDurationFields(entry.duration_hours)
     : `<select data-plan-mode aria-label="Tryb pracy">${selectOptions([{ value: 'online', label: 'Online · fabryka' }, { value: 'offline', label: 'Offline · biuro' }], entry.work_mode || 'online', null)}</select>`;
-  return `<div class="planner-entry-row ${transport ? 'transport-entry' : ''}" data-plan-entry-id="${entry.id || ''}"><div class="planner-area-picker" ${transport ? 'hidden' : ''}>${plannerAreaPicker(selectedAreas, projectId)}</div><select data-plan-activity>${selectOptions([{ value: 'work', label: 'Praca' }, { value: 'transport', label: 'Transport · T' }], activity, null)}</select><select data-plan-vehicle ${transport ? '' : 'hidden disabled'} aria-label="Auto lub transport">${selectOptions(plannerVehicleOptions(projectId), entry.vehicle_id || '', null)}</select><select data-plan-shift ${transport ? 'hidden disabled' : ''}>${selectOptions(project?.shifts?.length ? project.shifts : options('shift'), entry.shift || 'Dzień', null)}</select><span class="planner-entry-mode">${modeControl}</span><label class="planner-manpower-toggle" ${transport ? 'hidden' : ''} title="Zaznaczone: +1 w wybranych obszarach; bez obszaru: +1 we wszystkich obszarach"><input type="checkbox" data-plan-manpower ${Number(entry.count_in_manpower) === 0 ? '' : 'checked'}><span>Uwzględnij w manpowerze</span></label><input data-plan-note value="${escapeHtml(entry.note || '')}" placeholder="Komentarz (opcjonalnie)"><button type="button" class="mini remove-plan-entry" aria-label="Usuń aktywność">×</button></div>`;
+  return `<div class="planner-entry-row ${transport ? 'transport-entry' : ''}" data-plan-entry-id="${entry.id || ''}"><select data-plan-activity aria-label="Rodzaj aktywności">${selectOptions([{ value: 'work', label: 'Praca' }, { value: 'transport', label: 'Transport · T' }], activity, null)}</select><div class="planner-area-picker" ${transport ? 'hidden' : ''}>${plannerAreaPicker(selectedAreas, projectId)}</div><select data-plan-vehicle ${transport ? '' : 'hidden disabled'} aria-label="Auto lub transport">${selectOptions(plannerVehicleOptions(projectId), entry.vehicle_id || '', null)}</select><select data-plan-shift ${transport ? 'hidden disabled' : ''}>${selectOptions(project?.shifts?.length ? project.shifts : options('shift'), entry.shift || 'Dzień', null)}</select><span class="planner-entry-mode">${modeControl}</span><label class="planner-manpower-toggle" ${transport ? 'hidden' : ''} title="Zaznaczenie pola oznacza, że pracownik będzie wliczany do Manpoweru danego dnia"><input type="checkbox" data-plan-manpower ${Number(entry.count_in_manpower) === 0 ? '' : 'checked'}><span>Manpower</span></label><input data-plan-note value="${escapeHtml(entry.note || '')}" placeholder="Komentarz (opcjonalnie)"><button type="button" class="mini remove-plan-entry" aria-label="Usuń aktywność">×</button></div>`;
 }
 
 function plannerTransportDurationFields(durationHours = null) {
@@ -3162,8 +3203,8 @@ function openPlannerCell(userId, date, targetProjectId = Number(state.me.current
   $('#planner-raw-balance').placeholder = `Aktualnie: ${Number(timeDetail.overtime_raw_cumulative || 0).toFixed(1)} h`;
   $('#planner-weighted-balance').placeholder = `Aktualnie: ${Number(timeDetail.overtime_weighted_cumulative || 0).toFixed(1)} h`;
   $('#planner-adjustment-note').value = timeDetail.adjustment_note || '';
-  $('.planner-day-kind').hidden = foreignProject || Boolean(state.plannerRawPlanId);
-  $('.planner-adjustments').hidden = foreignProject;
+  $('.planner-day-kind').hidden = foreignProject && !state.plannerRawPlanId;
+  $('.planner-adjustments').hidden = foreignProject || Boolean(state.plannerRawPlanId);
   bindPlannerEntryRows();
   updatePlannerDayKind();
   $('#planner-dialog').showModal();
@@ -3193,6 +3234,10 @@ async function savePlannerCell(event) {
   if (!state.plannerCell.foreignProject && !await confirmMixedPlannerModes(state.plannerCell.userId, state.plannerCell.date, entries)) return;
   const previous = plannerDaySnapshot(state.plannerCell.userId, state.plannerCell.date);
   try {
+    if (state.plannerRawPlanId) {
+      await api(`/api/planner/raw-plans/${state.plannerRawPlanId}/day`, { method: 'PUT', body: JSON.stringify({ target_project_id: state.plannerCell.targetProjectId, user_id: state.plannerCell.userId, plan_date: state.plannerCell.date, entries, absence_type: absenceType, absence_note: $('#planner-absence-note').value }) });
+      $('#planner-dialog').close(); toast('Prywatny plan RAW został zaktualizowany'); await reloadPlanner(); return;
+    }
     if (state.plannerCell.foreignProject) {
       const workChanged = plannerWorkSignature(entries) !== plannerWorkSignature(state.plannerCell.originalEntries || []);
       const transportOnlyUpdate = !state.plannerCell.canManageTarget && !workChanged;
@@ -3202,8 +3247,7 @@ async function savePlannerCell(event) {
       toast(result.awaiting_approval ? 'Plan pracy zaktualizowano i przekazano do akceptacji; transport zapisano bezpośrednio' : transportOnlyUpdate ? 'Transport zaktualizowano bezpośrednio' : 'Plan projektu zaktualizowano bez dodatkowej akceptacji');
       await reloadPlanner(); return;
     }
-    const endpoint = state.plannerRawPlanId ? `/api/planner/raw-plans/${state.plannerRawPlanId}/day` : '/api/planner/day';
-    await api(endpoint, { method: 'PUT', body: JSON.stringify({ user_id: state.plannerCell.userId, plan_date: state.plannerCell.date, entries, absence_type: absenceType, absence_note: $('#planner-absence-note').value, actual_hours_adjustment: previous.actual_hours_adjustment, overtime_raw_adjustment: previous.overtime_raw_adjustment, overtime_weighted_adjustment: previous.overtime_weighted_adjustment, work_start_time: $('#planner-work-start').value, work_end_time: $('#planner-work-end').value, overtime_raw_balance_override: $('#planner-raw-balance').value === '' ? null : Number($('#planner-raw-balance').value), overtime_weighted_balance_override: $('#planner-weighted-balance').value === '' ? null : Number($('#planner-weighted-balance').value), adjustment_note: $('#planner-adjustment-note').value }) });
+    await api('/api/planner/day', { method: 'PUT', body: JSON.stringify({ user_id: state.plannerCell.userId, plan_date: state.plannerCell.date, entries, absence_type: absenceType, absence_note: $('#planner-absence-note').value, actual_hours_adjustment: previous.actual_hours_adjustment, overtime_raw_adjustment: previous.overtime_raw_adjustment, overtime_weighted_adjustment: previous.overtime_weighted_adjustment, work_start_time: $('#planner-work-start').value, work_end_time: $('#planner-work-end').value, overtime_raw_balance_override: $('#planner-raw-balance').value === '' ? null : Number($('#planner-raw-balance').value), overtime_weighted_balance_override: $('#planner-weighted-balance').value === '' ? null : Number($('#planner-weighted-balance').value), adjustment_note: $('#planner-adjustment-note').value }) });
     $('#planner-dialog').close(); toast('Plan dnia i korekty czasu zostały zapisane'); await reloadPlanner();
   } catch (error) { toast(error.message, true); }
 }

@@ -1804,3 +1804,34 @@ input:is([type=checkbox],[type=radio]) { accent-color:var(--blue); cursor:pointe
 .planner-raw-controls select { min-width:116px; max-width:190px; height:27px; padding:3px 24px 3px 6px; }
 .planner-raw-banner { display:flex; gap:10px; align-items:center; justify-content:space-between; padding:6px 9px; color:var(--amber); background:var(--amber-soft); border:1px solid color-mix(in srgb,var(--amber) 55%,var(--line)); border-radius:7px; }
 .planner-raw-banner span { color:var(--text); font-size:9px; }
+
+/* Planner: zwarty, spójny edytor aktywności */
+#planner-entry-list { overflow-x:hidden; }
+.planner-entry-row {
+  grid-template-columns:88px minmax(130px,1.2fr) 82px 100px 76px minmax(110px,.85fr) 32px;
+  gap:5px;
+}
+.planner-entry-row>[data-plan-activity] { grid-column:1; }
+.planner-entry-row>.planner-area-picker { grid-column:2; }
+.planner-entry-row>[data-plan-shift] { grid-column:3; }
+.planner-entry-row>.planner-entry-mode { grid-column:4; }
+.planner-entry-row>.planner-manpower-toggle { grid-column:5; }
+.planner-entry-row>[data-plan-note] { grid-column:6; }
+.planner-entry-row>.remove-plan-entry { grid-column:7; }
+.planner-entry-row.transport-entry { grid-template-columns:88px 120px 150px minmax(120px,1fr) 32px; }
+.planner-entry-row.transport-entry>[data-plan-activity] { grid-column:1; }
+.planner-entry-row.transport-entry>[data-plan-vehicle] { grid-column:2; }
+.planner-entry-row.transport-entry>.planner-entry-mode { grid-column:3; }
+.planner-entry-row.transport-entry>[data-plan-note] { grid-column:4; }
+.planner-entry-row.transport-entry>.remove-plan-entry { grid-column:5; }
+.planner-entry-row :is(input,select,summary) { padding:6px 7px; }
+.planner-manpower-toggle { justify-content:center; padding:4px 6px; }
+.planner-transport-duration { grid-template-columns:repeat(2,minmax(0,1fr)); gap:5px; }
+.planner-transport-duration label { grid-template-columns:1fr; gap:1px; text-align:center; }
+.planner-transport-duration input { min-width:0; padding:5px 3px; text-align:center; }
+
+@media(max-width:700px) {
+  .planner-entry-row,.planner-entry-row.transport-entry { grid-template-columns:1fr 32px; }
+  .planner-entry-row>*:not(.remove-plan-entry),.planner-entry-row.transport-entry>*:not(.remove-plan-entry) { grid-column:1; }
+  .planner-entry-row>.remove-plan-entry,.planner-entry-row.transport-entry>.remove-plan-entry { grid-column:2; grid-row:1/8; }
+}
