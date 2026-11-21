@@ -2092,6 +2092,72 @@ test('communication workflow supports watch, mute, snooze, mentions, digest, tim
   }
 });
 
+test('Planner RAW plans stay private, compare changes and publish with personal notifications', () => {
+  const temporary = temporaryDatabase();
+  const repository = openDatabase(temporary.path);
+  try {
+    const account = repository.authenticate('admin');
+    const admin = repository.me(account.id);
+    const worker = repository.saveUser(null, {
+      username: 'raw.worker', display_name: 'RAW Worker', password: 'secret123', project_role: 'user', planner_enabled: 1, assignable: 1
+    });
+    const planDate = '2027-02-15';
+    repository.savePlannerDay({ user_id: worker.id, plan_date: planDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'online', shift: 'Dzień', note: 'Produkcja' }] }, admin);
+    const raw = repository.createPlannerRawPlan({ name: 'Wariant A', from_date: planDate, to_date: planDate }, admin);
+    assert.equal(raw.entry_count, 1);
+    repository.savePlannerRawDay(raw.id, { user_id: worker.id, plan_date: planDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'offline', shift: 'Noc', note: 'Wariant prywatny' }] }, admin);
+    const comparison = repository.plannerRawData(raw.id, planDate, planDate, admin);
+    assert.equal(comparison.raw_changes.length, 1);
+    assert.match(comparison.raw_changes[0].before, /Produkcja/);
+    assert.match(comparison.raw_changes[0].after, /Wariant prywatny/);
+    assert.equal(repository.planner(planDate, planDate, admin).entries.find(item => item.user_id === worker.id).note, 'Produkcja', 'RAW must not mutate production before publication');
+
+    const published = repository.publishPlannerRawPlan(raw.id, { notify_users: 1 }, admin);
+    assert.equal(published.notified_users, 1);
+    assert.equal(repository.planner(planDate, planDate, admin).entries.find(item => item.user_id === worker.id).note, 'Wariant prywatny');
+    assert.ok(repository.notifications(repository.me(worker.id)).some(item => item.title === 'Zmiana planu pracy: Wariant A'));
+
+    for (let index = 2; index <= 5; index += 1) repository.createPlannerRawPlan({ name: `Wariant ${index}`, from_date: planDate, to_date: planDate }, admin);
+    assert.equal(repository.plannerRawPlans(admin).length, 5);
+    assert.throws(() => repository.createPlannerRawPlan({ name: 'Wariant 6', from_date: planDate, to_date: planDate }, admin), /maksymalnie 5/);
+    assert.ok(repository.projectBackup().tables.planner_raw_plans.some(item => item.id === raw.id));
+  } finally {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
+test('Planner limits a person to three projects and keeps vacation exclusive globally', () => {
+  const temporary = temporaryDatabase();
+  const repository = openDatabase(temporary.path);
+  try {
+    const account = repository.authenticate('admin'); const admin = repository.me(account.id);
+    const worker = repository.saveUser(null, { username: 'three.projects', display_name: 'Three Projects', password: 'secret123', project_role: 'user', planner_enabled: 1 });
+    const planDate = '2027-03-08';
+    repository.savePlannerDay({ user_id: worker.id, plan_date: planDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'online', shift: 'Dzień' }] }, admin);
+    const assignedProjects = [1];
+    for (let index = 2; index <= 4; index += 1) {
+      const project = repository.saveProject(null, { code: `LIM${index}`, name: `Limit ${index}`, active: 1 });
+      repository.withProject(project.id, () => {
+        const projectAdmin = repository.me(admin.id, project.id);
+        repository.saveUser(worker.id, { project_active: 1, planner_enabled: 1, assignable: 1, project_role: 'user' });
+        const save = () => repository.savePlannerDay({ user_id: worker.id, plan_date: planDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'offline', shift: 'Noc' }] }, projectAdmin);
+        if (index < 4) { save(); assignedProjects.push(project.id); }
+        else assert.throws(save, /maksymalnie do 3 projektów/);
+      });
+    }
+    repository.withProject(1, () => repository.savePlannerDay({ user_id: worker.id, plan_date: planDate, absence_type: 'vacation', absence_note: 'Wyłączny urlop' }, admin));
+    for (const projectId of assignedProjects) repository.withProject(projectId, () => {
+      const projectAdmin = repository.me(admin.id, projectId);
+      assert.equal(repository.planner(planDate, planDate, projectAdmin).entries.some(entry => entry.user_id === worker.id), false);
+      assert.equal(repository.planner(planDate, planDate, projectAdmin).absences.find(item => item.user_id === worker.id)?.note, 'Wyłączny urlop');
+    });
+  } finally {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
 test('task images are project-scoped, size-limited, audited and included in backups', () => {
   const temporary = temporaryDatabase();
   const repository = openDatabase(temporary.path);

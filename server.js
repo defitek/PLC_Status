@@ -397,6 +397,18 @@ async function handleProjectApi(request, response, url, user) {
     if (method === 'PATCH') return json(response, 200, repository.saveMonthlyEmployeeReview(monthlyReviewId, await readJson(request), user));
   }
   if (method === 'GET' && path === '/api/planner') return json(response, 200, repository.planner(url.searchParams.get('from'), url.searchParams.get('to'), user));
+  if (method === 'GET' && path === '/api/planner/raw-plans') { requireRole(user, 'moderator'); return json(response, 200, repository.plannerRawPlans(user)); }
+  if (method === 'POST' && path === '/api/planner/raw-plans') { requireRole(user, 'moderator'); return json(response, 201, repository.createPlannerRawPlan(await readJson(request), user)); }
+  const plannerRawDay = path.match(/^\/api\/planner\/raw-plans\/(\d+)\/day$/);
+  if (plannerRawDay && method === 'PUT') { requireRole(user, 'moderator'); return json(response, 200, repository.savePlannerRawDay(Number(plannerRawDay[1]), await readJson(request), user)); }
+  const plannerRawPublish = path.match(/^\/api\/planner\/raw-plans\/(\d+)\/publish$/);
+  if (plannerRawPublish && method === 'POST') { requireRole(user, 'moderator'); return json(response, 200, repository.publishPlannerRawPlan(Number(plannerRawPublish[1]), await readJson(request), user)); }
+  const plannerRawId = path.match(/^\/api\/planner\/raw-plans\/(\d+)$/);
+  if (plannerRawId) {
+    requireRole(user, 'moderator');
+    if (method === 'GET') return json(response, 200, repository.plannerRawData(Number(plannerRawId[1]), url.searchParams.get('from'), url.searchParams.get('to'), user));
+    if (method === 'DELETE') return json(response, 200, repository.deletePlannerRawPlan(Number(plannerRawId[1]), user));
+  }
   if (method === 'PUT' && path === '/api/planner/day') { requireRole(user, 'moderator'); return json(response, 200, repository.savePlannerDay(await readJson(request), user)); }
   if (method === 'POST' && path === '/api/planner/cross-project-requests') { requireRole(user, 'moderator'); return json(response, 201, repository.createPlannerCrossProjectRequests(await readJson(request), user)); }
   const plannerCrossProjectRequestAction = path.match(/^\/api\/planner\/cross-project-requests\/(\d+)\/action$/);

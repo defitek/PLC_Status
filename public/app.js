@@ -19,7 +19,7 @@ const state = {
   dialog: null, dialogStack: [], dialogInitial: '', dirtyCloseAttempt: new WeakSet(), goalDraftLinks: [], goalPickerCollections: null, linkDraft: [], statusMode: 'list', taskMode: 'board', taskShowCompleted: false, pointMode: 'list', pointSection: 'points', trendPeriod: 'week',
   functionGroupController: '', functionPointGroup: null, functionPointDraft: [],
   notesFrom: '', notesTo: '', notesWeek: '', draggingTask: false, plannerFrom: '', plannerDays: 14, plannerShowHours: false, plannerShowAreas: false, plannerDetailedView: false, plannerToolsVisible: false,
-  plannerCell: null, plannerClipboard: null, plannerDragEntry: null, plannerDragDay: null, plannerDragging: false, plannerSelection: new Set(), plannerEntrySelection: new Set(), plannerExpandedCells: new Set(), plannerSelectionAnchor: null, plannerScrollLeft: 0, plannerScrollTop: 0, plannerSelectionAbort: null, calendarFrom: '', calendarTo: '', calendarMode: 'week', calendarTypes: ['task', 'point', 'status', 'goal', 'note', 'annotation'], calendarPriorities: [...PRIORITY_VALUES], calendarOnlyMine: false, calendarCategory: '', calendarPlanner: null, calendarPlanningVisible: false, calendarRequirementEdit: false,
+  plannerCell: null, plannerClipboard: null, plannerDragEntry: null, plannerDragDay: null, plannerDragging: false, plannerSelection: new Set(), plannerEntrySelection: new Set(), plannerExpandedCells: new Set(), plannerSelectionAnchor: null, plannerScrollLeft: 0, plannerScrollTop: 0, plannerSelectionAbort: null, plannerRawPlans: [], plannerRawPlanId: null, calendarFrom: '', calendarTo: '', calendarMode: 'week', calendarTypes: ['task', 'point', 'status', 'goal', 'note', 'annotation'], calendarPriorities: [...PRIORITY_VALUES], calendarOnlyMine: false, calendarCategory: '', calendarPlanner: null, calendarPlanningVisible: false, calendarRequirementEdit: false,
   plannerRequirementEdit: false, requirementProjectId: null, requirementLevel: 'areas', requirementFrom: '', requirementDays: 14, requirementData: null, requirementDraft: new Map(), requirementBaseline: new Map(), requirementDirty: new Set(), requirementSelection: null, requirementCollapsedGroups: new Set(), plannerCollapsedRequirementProjects: new Set(), requirementGridAbort: null, requirementPointerSelecting: false, requirementFill: null,
   kpiModules: ['status', 'tasks', 'points', 'goals'], globalTrendMode: 'combined', overviewDetailed: false, detailedKpiMode: 'combined', detailedKpiPeriod: 'week', linkPickerAllowed: [], linkPickerDraft: [], linkPickerCollections: null, actionResolve: null, actionDialogGeneration: 0, actionClosingGeneration: 0, configPanel: null, configScroll: 0, hierarchySelection: null, dailySummaryOpening: false,
   selectionContext: null, selectionDraft: [], selectionCollections: null, duplicateSource: null, checklistTask: null,
@@ -938,7 +938,7 @@ async function loadData(silent = false) {
   if (state.view === 'points') requests.externalDependencies = api('/api/external-dependencies');
   if (state.view === 'goals') { requests.goals = api('/api/goals' + query); addWorkCollections(); }
   if (state.view === 'notes') addWorkCollections(true, true);
-  if (state.view === 'planner') requests.planner = api('/api/planner' + plannerQuery);
+  if (state.view === 'planner') { requests.planner = api('/api/planner' + plannerQuery); if (canCoordinate()) requests.plannerRawPlans = api('/api/planner/raw-plans'); }
   if (state.view === 'calendar') { requests.calendar = api('/api/calendar?' + calendarParams); requests.calendarPlanner = api(`/api/planner?from=${state.calendarFrom}&to=${state.calendarTo}`); }
   if (state.view === 'history') requests.history = api('/api/history?limit=200');
   if (state.view === 'operations' && canCoordinate()) {
@@ -953,6 +953,10 @@ async function loadData(silent = false) {
     if (key === 'operationsPayload') mergeOperationsData(values[index]);
     else state[key] = values[index];
   });
+  if (state.view === 'planner' && state.plannerRawPlanId) {
+    if (!state.plannerRawPlans.some(plan => Number(plan.id) === Number(state.plannerRawPlanId))) state.plannerRawPlanId = null;
+    else state.planner = await api(`/api/planner/raw-plans/${state.plannerRawPlanId}${plannerQuery}`);
+  }
   state.dependencyOptions = { status: state.status, task: state.tasks, point: state.points };
   state.taskDependencyOptions = state.tasks;
   state.dependencyOptionsAll = state.controller === 'all';
@@ -1098,6 +1102,11 @@ async function openNotification(item) {
       updateNotificationUi();
     }
   } catch (error) { toast(error.message, true); }
+  if (item.kind === 'automation' && String(item.title || '').startsWith('Zmiana planu pracy:')) {
+    await setView('planner');
+    toast(item.message || 'Plan pracy został zaktualizowany');
+    return;
+  }
   if (item.entity_type === 'handover') {
     state.controller = 'all'; fillScopeSelect($('#controller'), 'all');
     await setView('notes');
@@ -2207,6 +2216,45 @@ async function openAutomationEditor(existing = null) {
 
 function canCoordinate() { return ['moderator', 'project_admin', 'system_admin'].includes(state.me.role); }
 
+function plannerRawControls() {
+  const active = Number(state.plannerRawPlanId || 0);
+  return `<span class="planner-raw-controls ${active ? 'active' : ''}"><label>Plan <select id="planner-raw-select"><option value="">Produkcyjny</option>${(state.plannerRawPlans || []).map(plan => `<option value="${plan.id}" ${Number(plan.id) === active ? 'selected' : ''}>RAW · ${escapeHtml(plan.name)}${plan.changes_count ? ` (${plan.changes_count})` : ''}</option>`).join('')}</select></label><button type="button" class="mini" id="planner-raw-new" ${state.plannerRawPlans.length >= 5 ? 'disabled' : ''}>+ RAW</button>${active ? '<button type="button" class="mini" id="planner-raw-compare">Porównaj</button><button type="button" class="mini primary" id="planner-raw-publish">Opublikuj RAW</button><button type="button" class="mini danger-text" id="planner-raw-delete">Usuń RAW</button>' : ''}</span>`;
+}
+
+async function createPlannerRawPlan() {
+  const result = await uiForm({ title: 'Nowy prywatny plan RAW', description: 'Powstanie prywatna kopia planu produkcyjnego w wybranym zakresie. Tylko Ty zobaczysz ją przed publikacją.', submitLabel: 'Utwórz RAW', fields: [
+    { name: 'name', label: 'Nazwa planu', required: true, full: true },
+    { name: 'from_date', label: 'Od', type: 'date', value: state.plannerFrom, required: true },
+    { name: 'to_date', label: 'Do', type: 'date', value: addDays(state.plannerFrom, state.plannerDays - 1), required: true }
+  ] });
+  if (!result) return;
+  try { const plan = await api('/api/planner/raw-plans', { method: 'POST', body: JSON.stringify(result) }); state.plannerRawPlanId = Number(plan.id); state.plannerRawPlans = await api('/api/planner/raw-plans'); await reloadPlanner(); toast('Utworzono prywatny plan RAW'); }
+  catch (error) { toast(error.message, true); }
+}
+
+async function comparePlannerRawPlan() {
+  const changes = state.planner?.raw_changes || [];
+  await uiForm({ title: `Porównanie RAW · ${state.planner?.raw_plan?.name || ''}`, description: changes.length ? `${changes.length} zmian względem planu produkcyjnego.` : 'Plan RAW jest identyczny z produkcyjnym.', submitLabel: 'Zamknij', fields: changes.length ? [{ name: 'changes', label: 'Zmiany pracowników', type: 'textarea', rows: Math.min(16, Math.max(5, changes.length * 2)), value: changes.map(change => `${change.display_name} · ${displayDate(change.plan_date)}\n${change.before} → ${change.after}`).join('\n\n'), full: true }] : [] });
+}
+
+async function publishPlannerRawPlan() {
+  const changes = state.planner?.raw_changes || [];
+  if (!changes.length) return toast('Plan RAW nie zawiera zmian do opublikowania');
+  const result = await uiForm({ title: `Opublikuj RAW · ${state.planner.raw_plan.name}`, description: `Plan produkcyjny zostanie zastąpiony w zakresie ${displayDate(state.planner.raw_plan.from_date)} – ${displayDate(state.planner.raw_plan.to_date)}. Zmiany dotyczą ${new Set(changes.map(change => change.user_id)).size} osób.`, submitLabel: 'Opublikuj plan', danger: true, fields: [
+    { name: 'notify_users', label: 'Poinformuj pracowników o zmianach dotyczących ich osoby', type: 'checkbox', value: 1, full: true }
+  ] });
+  if (!result) return;
+  try { const published = await api(`/api/planner/raw-plans/${state.plannerRawPlanId}/publish`, { method: 'POST', body: JSON.stringify({ notify_users: result.notify_users ? 1 : 0 }) }); state.plannerRawPlans = await api('/api/planner/raw-plans'); await reloadPlanner(); toast(`Plan RAW opublikowano${published.notified_users ? ` · powiadomiono ${published.notified_users} osób` : ''}`); }
+  catch (error) { toast(error.message, true); }
+}
+
+async function deletePlannerRawPlan() {
+  const plan = state.planner?.raw_plan; if (!plan) return;
+  if (!await uiConfirm('Usuń plan RAW', `Prywatny plan „${plan.name}” zostanie trwale usunięty. Plan produkcyjny nie zmieni się.`, 'Usuń RAW', true)) return;
+  try { await api(`/api/planner/raw-plans/${plan.id}`, { method: 'DELETE' }); state.plannerRawPlanId = null; state.plannerRawPlans = await api('/api/planner/raw-plans'); await reloadPlanner(); toast('Usunięto plan RAW'); }
+  catch (error) { toast(error.message, true); }
+}
+
 function plannerProjectLegend(data) {
   const projects = new Map();
   for (const entry of [...(data.entries || []), ...(data.cross_project_entries || [])]) {
@@ -2233,7 +2281,7 @@ function renderPlanner() {
   const summaryMap = new Map((data.summary || []).map(item => [item.plan_date, item]));
   const mode = data.mode_summary || {};
   const detailed = state.plannerDetailedView;
-  $('#content').innerHTML = `<section class="planner-command compact"><div class="planner-controls"><button class="mini planner-shift" data-days="-${state.plannerDays}">←</button><button class="mini" id="planner-today">Dzisiaj</button><button class="mini planner-shift" data-days="${state.plannerDays}">→</button><label>Zakres <select id="planner-days"><option value="7">7 dni</option><option value="14">14 dni</option><option value="28">28 dni</option><option value="31">31 dni</option><option value="90">Kwartał</option><option value="365">Rok</option></select></label><label class="planner-detail-toggle"><input type="checkbox" id="planner-detail-toggle" ${detailed ? 'checked' : ''}> Pokaż szczegóły</label>${detailed ? `<span class="planner-detail-options"><button type="button" class="mini ${state.plannerShowHours ? 'active-toggle' : ''}" id="planner-show-hours" aria-pressed="${state.plannerShowHours}">Pokaż godziny</button><button type="button" class="mini ${state.plannerShowAreas ? 'active-toggle' : ''}" id="planner-show-areas" aria-pressed="${state.plannerShowAreas}">Pokaż przypisanie obszarów</button></span>` : ''}${['project_admin', 'system_admin'].includes(state.me.role) ? '<button class="mini" id="planner-participants">Uczestnicy Plannera</button>' : ''}${data.can_manage_requirements ? `<button class="mini requirement-button ${state.plannerRequirementEdit ? 'active-toggle' : ''}" id="planner-requirements-open" aria-pressed="${state.plannerRequirementEdit}">Zapotrzebowanie${state.requirementDirty.size ? ` · ${state.requirementDirty.size}` : ''}</button><button class="mini" id="planner-config-open">Konfiguracja</button>` : ''}${data.can_manage_time ? '<button class="mini" id="planner-hours-open">Czas pracy i nadgodziny</button>' : ''}${canCoordinate() ? `<button class="mini planner-tools-toggle ${state.plannerToolsVisible ? 'active-toggle' : ''}" id="planner-tools-toggle" aria-expanded="${state.plannerToolsVisible}">${state.plannerToolsVisible ? 'Ukryj narzędzia' : 'Pokaż narzędzia'}</button>` : ''}<span>${displayDate(days[0])} – ${displayDate(days.at(-1))}</span></div><div class="planner-summary mode-summary"><span><b>${data.summary?.find(item => item.plan_date === today())?.headcount || 0}</b> osób dzisiaj</span>${detailed ? `<span class="online"><b>${mode.today_online || 0}</b> ON · fabryka<small>${mode.online_planned_days || 0} zaplanowanych dni</small></span><span class="offline"><b>${mode.today_offline || 0}</b> OFF · biuro<small>${mode.offline_planned_days || 0} zaplanowanych dni</small></span>` : ''}<span><b>${data.users.length}</b> uczestników</span>${detailed && state.plannerShowHours && data.can_manage_time ? `<span><b>${(data.time_details?.users || []).reduce((sum, item) => sum + item.actual_hours + item.credited_hours, 0).toFixed(1)}</b> h w zakresie</span>` : ''}${detailed ? (data.shift_summary || []).map(item => `<span><b>${item.assignments}</b> ${escapeHtml(item.shift)}</span>`).join('') : ''}</div></section>
+  $('#content').innerHTML = `<section class="planner-command compact ${data.raw_plan ? 'raw-mode' : ''}"><div class="planner-controls"><button class="mini planner-shift" data-days="-${state.plannerDays}">←</button><button class="mini" id="planner-today">Dzisiaj</button><button class="mini planner-shift" data-days="${state.plannerDays}">→</button><label>Zakres <select id="planner-days"><option value="7">7 dni</option><option value="14">14 dni</option><option value="28">28 dni</option><option value="31">31 dni</option><option value="90">Kwartał</option><option value="365">Rok</option></select></label><label class="planner-detail-toggle"><input type="checkbox" id="planner-detail-toggle" ${detailed ? 'checked' : ''}> Pokaż szczegóły</label>${detailed ? `<span class="planner-detail-options"><button type="button" class="mini ${state.plannerShowHours ? 'active-toggle' : ''}" id="planner-show-hours" aria-pressed="${state.plannerShowHours}">Pokaż godziny</button><button type="button" class="mini ${state.plannerShowAreas ? 'active-toggle' : ''}" id="planner-show-areas" aria-pressed="${state.plannerShowAreas}">Pokaż przypisanie obszarów</button></span>` : ''}${['project_admin', 'system_admin'].includes(state.me.role) ? '<button class="mini" id="planner-participants">Uczestnicy Plannera</button>' : ''}${data.can_manage_requirements ? `<button class="mini requirement-button ${state.plannerRequirementEdit ? 'active-toggle' : ''}" id="planner-requirements-open" aria-pressed="${state.plannerRequirementEdit}">Zapotrzebowanie${state.requirementDirty.size ? ` · ${state.requirementDirty.size}` : ''}</button><button class="mini" id="planner-config-open">Konfiguracja</button>` : ''}${data.can_manage_time ? '<button class="mini" id="planner-hours-open">Czas pracy i nadgodziny</button>' : ''}${canCoordinate() ? `<button class="mini planner-tools-toggle ${state.plannerToolsVisible ? 'active-toggle' : ''}" id="planner-tools-toggle" aria-expanded="${state.plannerToolsVisible}">${state.plannerToolsVisible ? 'Ukryj narzędzia' : 'Pokaż narzędzia'}</button>${plannerRawControls()}` : ''}<span>${displayDate(days[0])} – ${displayDate(days.at(-1))}</span></div>${data.raw_plan ? `<div class="planner-raw-banner"><b>PRYWATNY RAW · ${escapeHtml(data.raw_plan.name)}</b><span>Zmiany: ${data.raw_changes?.length || 0} · plan produkcyjny pozostaje bez zmian do publikacji</span></div>` : ''}<div class="planner-summary mode-summary"><span><b>${data.summary?.find(item => item.plan_date === today())?.headcount || 0}</b> osób dzisiaj</span>${detailed ? `<span class="online"><b>${mode.today_online || 0}</b> ON · fabryka<small>${mode.online_planned_days || 0} zaplanowanych dni</small></span><span class="offline"><b>${mode.today_offline || 0}</b> OFF · biuro<small>${mode.offline_planned_days || 0} zaplanowanych dni</small></span>` : ''}<span><b>${data.users.length}</b> uczestników</span>${detailed && state.plannerShowHours && data.can_manage_time ? `<span><b>${(data.time_details?.users || []).reduce((sum, item) => sum + item.actual_hours + item.credited_hours, 0).toFixed(1)}</b> h w zakresie</span>` : ''}${detailed ? (data.shift_summary || []).map(item => `<span><b>${item.assignments}</b> ${escapeHtml(item.shift)}</span>`).join('') : ''}</div></section>
   ${canCoordinate() ? plannerBulkToolbar() : ''}
   ${canCoordinate() && detailed ? plannerCrossProjectRequestsHtml(data.incoming_cross_project_requests || [], data.outgoing_cross_project_requests || []) : ''}
   ${plannerUnifiedSection(data.users || [], days, entryMap, workMap, summaryMap, data.area_day_summary || [], data.can_manage_requirements, absenceMap, timeMap, holidayMap, detailed && state.plannerShowHours && data.can_manage_time, overlapMap, detailed ? data.annotations || [] : [], detailed)}
@@ -2251,6 +2299,20 @@ function renderPlanner() {
   $('#planner-config-open')?.addEventListener('click', () => openConfigPanel('planner'));
   $('#planner-hours-open')?.addEventListener('click', openPlannerHours);
   $('#planner-tools-toggle')?.addEventListener('click', () => { state.plannerToolsVisible = !state.plannerToolsVisible; renderPlanner(); });
+  $('#planner-raw-select')?.addEventListener('change', async event => {
+    state.plannerRawPlanId = Number(event.target.value) || null;
+    const plan = state.plannerRawPlans.find(item => Number(item.id) === Number(state.plannerRawPlanId));
+    if (plan) {
+      state.plannerFrom = plan.from_date;
+      state.plannerDays = Math.min(365, Math.max(7, Math.round((new Date(`${plan.to_date}T12:00:00Z`) - new Date(`${plan.from_date}T12:00:00Z`)) / 86400000) + 1));
+      state.plannerScrollLeft = 0; state.plannerScrollTop = 0;
+    }
+    await reloadPlanner();
+  });
+  $('#planner-raw-new')?.addEventListener('click', createPlannerRawPlan);
+  $('#planner-raw-compare')?.addEventListener('click', comparePlannerRawPlan);
+  $('#planner-raw-publish')?.addEventListener('click', publishPlannerRawPlan);
+  $('#planner-raw-delete')?.addEventListener('click', deletePlannerRawPlan);
   $$('[data-planner-cross-project-action]').forEach(button => button.addEventListener('click', () => reviewPlannerCrossProjectRequest(Number(button.dataset.requestId), button.dataset.plannerCrossProjectAction)));
   $$('[data-requirement-project-toggle]').forEach(button => button.addEventListener('click', () => {
     const projectId = Number(button.dataset.requirementProjectToggle);
@@ -2525,6 +2587,7 @@ function plannerWorkSignature(entries) {
 }
 
 async function saveForeignPlannerDay(projectId, userId, date, entries, originalEntries = plannerProjectDayEntries(projectId, userId, date)) {
+  if (state.plannerRawPlanId) throw new Error('W trybie RAW nie można modyfikować kafelków innego projektu');
   const project = plannerProjectConfig(projectId);
   if (!project) throw new Error('Projekt kafelka nie jest dostępny dla tej osoby');
   const normalized = uniquePlannerEntries(entries);
@@ -2539,7 +2602,8 @@ async function saveForeignPlannerDay(projectId, userId, date, entries, originalE
 async function savePlannerProjectDay(projectId, userId, date, entries, originalEntries = plannerProjectDayEntries(projectId, userId, date)) {
   if (Number(projectId) !== Number(state.me.current_project?.id || 0)) return saveForeignPlannerDay(projectId, userId, date, entries, originalEntries);
   const day = plannerDaySnapshot(userId, date);
-  return api('/api/planner/day', { method: 'PUT', body: JSON.stringify(plannerDayRequest({ userId, date }, entries, day)) });
+  const endpoint = state.plannerRawPlanId ? `/api/planner/raw-plans/${state.plannerRawPlanId}/day` : '/api/planner/day';
+  return api(endpoint, { method: 'PUT', body: JSON.stringify(plannerDayRequest({ userId, date }, entries, day)) });
 }
 
 function plannerDayRequest(target, entries, day = plannerDaySnapshot(target.userId, target.date)) {
@@ -2549,7 +2613,8 @@ function plannerDayRequest(target, entries, day = plannerDaySnapshot(target.user
 async function savePlannerBulkRequests(requests, message) {
   if (!requests.length) return toast('Brak dni, do których można zastosować tę operację', true);
   try {
-    for (let index = 0; index < requests.length; index += 12) await Promise.all(requests.slice(index, index + 12).map(body => api('/api/planner/day', { method: 'PUT', body: JSON.stringify(body) })));
+    const endpoint = state.plannerRawPlanId ? `/api/planner/raw-plans/${state.plannerRawPlanId}/day` : '/api/planner/day';
+    for (let index = 0; index < requests.length; index += 12) await Promise.all(requests.slice(index, index + 12).map(body => api(endpoint, { method: 'PUT', body: JSON.stringify(body) })));
     state.plannerSelection.clear(); state.plannerEntrySelection.clear();
     toast(`${message} · ${requests.length} ${requests.length === 1 ? 'dzień' : 'dni'}`);
     await reloadPlanner();
@@ -2589,6 +2654,7 @@ async function addWorkToPlannerSelection() {
   const areaIds = [...new Set((result.controller_group_ids || []).map(Number).filter(Boolean))];
   const entriesToAdd = (areaIds.length ? areaIds : [null]).map(controllerGroupId => ({ controller_group_id: controllerGroupId, activity_type: 'work', work_mode: result.work_mode, shift: result.shift, transport_mode: 'none', count_in_manpower: result.count_in_manpower ? 1 : 0, allow_without_area: controllerGroupId ? 0 : 1, note: result.note }));
   const targetProjectId = Number(result.target_project_id);
+  if (state.plannerRawPlanId && targetProjectId !== currentProjectId) return toast('Plan RAW może modyfikować wyłącznie projekt, w którym został utworzony', true);
   if (targetProjectId !== currentProjectId) {
     try {
       const response = await api('/api/planner/cross-project-requests', { method: 'POST', body: JSON.stringify({
@@ -2632,6 +2698,7 @@ async function addTransportToPlannerSelection() {
 }
 
 async function addAbsenceToPlannerSelection(absenceType) {
+  if (state.plannerRawPlanId) return toast('Urlop i wolne są danymi produkcyjnymi i nie są zmieniane w prywatnym planie RAW', true);
   const targets = selectedPlannerTargets();
   if (!targets.length) return toast('Zaznacz co najmniej jeden dzień', true);
   const vacation = absenceType === 'vacation';
@@ -2833,6 +2900,29 @@ function plannerProjectTotalCell(summary = {}, date = '', projectId, collapsed =
   return `<td class="project-total-cell ${date === today() ? 'today' : ''}" data-project-total-date="${date}"><button type="button" data-requirement-project-toggle="${projectId}" aria-expanded="${!collapsed}" title="Obsada projektu · ${displayDate(date)}"><b>${summary.headcount || 0}</b><small><i class="on-tag">ON ${summary.online_headcount || 0}</i><i class="off-tag">OFF ${summary.offline_headcount || 0}</i></small></button></td>`;
 }
 
+function plannerCombinedChip(user, date, entries, editable) {
+  if (!entries.length) return '';
+  const projects = entries.filter(entry => entry.activity_type !== 'transport' && entry.transport_mode !== 'transport_only').slice(0, 3);
+  const transports = entries.filter(entry => entry.activity_type === 'transport' || entry.transport_mode === 'transport_only');
+  const previousDate = addDays(date, -1);
+  const previousHadProject = allPlannerEntries().some(entry => Number(entry.user_id) === Number(user.id) && entry.plan_date === previousDate && entry.activity_type !== 'transport' && entry.transport_mode !== 'transport_only')
+    || (date === state.planner?.from && (state.planner?.previous_project_user_ids || []).map(Number).includes(Number(user.id)));
+  const transportSegments = transports.slice(0, 1).map(entry => ({ type: 'transport', entry, label: entry.transport_code || 'T' }));
+  const projectSegments = projects.map(entry => ({ type: 'project', entry, label: entry.project_short_code || entry.project_code || state.me.current_project?.planner_short_code || state.me.current_project?.code || 'PRJ' }));
+  const segments = previousHadProject ? [...transportSegments, ...projectSegments] : [...projectSegments, ...transportSegments];
+  const entryIds = entries.flatMap(entry => entry.merged_entry_ids || [entry.id]).map(Number).filter(Boolean);
+  const selected = entryIds.length && entryIds.every(id => state.plannerEntrySelection.has(id));
+  const notes = [...new Set(entries.flatMap(entry => entry.display_notes || [entry.note]).filter(Boolean))];
+  const pending = entries.some(entry => entry.cross_project_status === 'pending');
+  const offline = projects.some(entry => (entry.merged_entries?.length ? entry.merged_entries : [entry]).some(item => item.work_mode === 'offline'));
+  const night = projects.some(entry => (entry.merged_entries?.length ? entry.merged_entries : [entry]).some(item => item.shift === 'Noc'));
+  const title = segments.map(segment => segment.type === 'transport'
+    ? `${segment.label} · transport`
+    : `${segment.entry.project_name || segment.entry.project_code || segment.label}`).join(' / ');
+  const first = entries[0];
+  return `<span class="plan-chip combined-plan-chip ${projects.length ? 'project-work' : 'transport-only'} ${offline ? 'offline-work' : ''} ${night ? 'night-shift' : ''} ${selected ? 'entry-selected' : ''} ${pending ? 'approval-pending' : ''}" title="${escapeHtml([title, ...notes].filter(Boolean).join(' · '))}" data-entry-id="${entryIds[0] || ''}" data-entry-ids="${entryIds.join(',')}" data-current-project="${entries.every(entry => entry.is_current_project !== false) ? 1 : 0}" data-project-id="${first.project_id || state.me.current_project?.id}" draggable="${editable ? 'true' : 'false'}"><span class="combined-plan-track">${segments.map((segment, index) => `${index ? '<i aria-hidden="true">/</i>' : ''}<b class="combined-plan-segment ${segment.type}" style="${segment.type === 'project' ? projectColorStyle(segment.entry.project_color || state.me.current_project?.planner_color) : ''}">${escapeHtml(segment.label)}</b>`).join('')}</span>${notes.length ? `<span class="plan-note" data-note="${escapeHtml(notes.join('\n'))}" title="${escapeHtml(notes.join(' · '))}" tabindex="0" aria-label="Notatka: ${escapeHtml(notes.join(' · '))}">i</span>` : ''}${pending ? '<b class="planner-approval-mark" aria-label="Oczekuje na potwierdzenie">?</b>' : ''}</span>`;
+}
+
 function plannerCell(user, date, entries, work, absence, timeDetail, holiday, showTime, overlap, detailed = true) {
   const weekend = [0, 6].includes(new Date(`${date}T12:00:00Z`).getUTCDay());
   const editable = canCoordinate() && (Number(user.planner_enabled) || date === today());
@@ -2844,7 +2934,7 @@ function plannerCell(user, date, entries, work, absence, timeDetail, holiday, sh
   });
   const visibleEntryLimit = Math.max(0, 3 - Number(Boolean(absence)));
   let overlapPlaced = false;
-  const chips = sortedEntries.map((entry, entryIndex) => {
+  const detailedChips = sortedEntries.map((entry, entryIndex) => {
     const transport = entry.activity_type === 'transport' || entry.transport_mode === 'transport_only';
     const current = entry.is_current_project !== false;
     const entryIds = (entry.merged_entry_ids || [entry.id]).map(Number).filter(Boolean);
@@ -2865,12 +2955,13 @@ function plannerCell(user, date, entries, work, absence, timeDetail, holiday, sh
       ? `${transportCode}${entry.vehicle_registration ? ` · ${entry.vehicle_registration}` : ''} · transport poza kalkulacją ON/OFF${duration ? ` · ${duration}` : ''}`
       : [entry.project_name || entry.project_code, contextLabel, entry.work_mode === 'offline' ? 'OFF' : 'ON', night ? 'Noc' : 'Dzień', approvalPending ? `Oczekuje na potwierdzenie managera projektu${entry.cross_project_source_code ? ` · wpis z ${entry.cross_project_source_code}` : ''}` : '', Number(entry.count_in_manpower) === 0 ? 'Poza kalkulacją manpoweru' : '', showOverlap ? `Nakładanie się projektów: ${overlap.other_project_codes || 'inny projekt'}` : ''].filter(Boolean).join(' · ');
     const extra = entryIndex >= visibleEntryLimit;
-    return `<span class="plan-chip ${transport ? 'transport-only' : 'project-work'} ${offline ? 'offline-work' : 'online-work'} ${night ? 'night-shift' : ''} ${approvalPending ? 'approval-pending' : ''} ${Number(entry.count_in_manpower) === 0 ? 'excluded-from-manpower' : ''} ${current ? '' : 'other-project'} ${selectedEntry ? 'entry-selected' : ''} ${showOverlap ? `has-overlap ${overlap.status}` : ''}" style="${transport ? '' : projectColorStyle(projectColor)}" ${extra ? 'data-planner-extra' : ''} ${extra && !expanded ? 'hidden' : ''} title="${escapeHtml(title)}" data-entry-id="${entryIds[0] || entry.id}" data-entry-ids="${entryIds.join(',')}" data-current-project="${current ? 1 : 0}" data-project-id="${entry.project_id || state.me.current_project?.id}" draggable="${editable ? 'true' : 'false'}"><b class="mode-label">${transport ? escapeHtml(transportCode) : escapeHtml(projectShortCode)}</b>${contextLabel ? `<span>${escapeHtml(contextLabel)}</span>` : '<span></span>'}${detailed && entry.note ? `<span class="plan-note" data-note="${escapeHtml(entry.note)}" title="${escapeHtml(entry.note)}" tabindex="0" aria-label="Notatka: ${escapeHtml(entry.note)}">i</span>` : ''}${approvalPending ? '<b class="planner-approval-mark" aria-label="Oczekuje na potwierdzenie">?</b>' : ''}${collision}</span>`;
+    return `<span class="plan-chip ${transport ? 'transport-only' : 'project-work'} ${contextLabel ? 'shows-areas' : ''} ${offline ? 'offline-work' : 'online-work'} ${night ? 'night-shift' : ''} ${approvalPending ? 'approval-pending' : ''} ${Number(entry.count_in_manpower) === 0 ? 'excluded-from-manpower' : ''} ${current ? '' : 'other-project'} ${selectedEntry ? 'entry-selected' : ''} ${showOverlap ? `has-overlap ${overlap.status}` : ''}" style="${transport ? '' : projectColorStyle(projectColor)}" ${extra ? 'data-planner-extra' : ''} ${extra && !expanded ? 'hidden' : ''} title="${escapeHtml(title)}" data-entry-id="${entryIds[0] || entry.id}" data-entry-ids="${entryIds.join(',')}" data-current-project="${current ? 1 : 0}" data-project-id="${entry.project_id || state.me.current_project?.id}" draggable="${editable ? 'true' : 'false'}"><b class="mode-label ${contextLabel ? 'area-mode-label' : ''}">${escapeHtml(contextLabel || (transport ? transportCode : projectShortCode))}</b>${contextLabel ? '' : '<span></span>'}${entry.note ? `<span class="plan-note" data-note="${escapeHtml(entry.note)}" title="${escapeHtml(entry.note)}" tabindex="0" aria-label="Notatka: ${escapeHtml(entry.note)}">i</span>` : ''}${approvalPending ? '<b class="planner-approval-mark" aria-label="Oczekuje na potwierdzenie">?</b>' : ''}${collision}</span>`;
   }).join('');
+  const chips = detailed ? detailedChips : plannerCombinedChip(user, date, sortedEntries, editable);
   const workload = detailed && work && (work.tasks || work.points || work.statuses || work.notes) ? `<span class="workload" title="Zadania / otwarte punkty / status / notatki">${work.tasks}/${work.points}/${work.statuses}/${work.notes}</span>` : '';
-  const absenceChip = absence ? `<span class="absence-chip ${absence.absence_type}" draggable="${editable ? 'true' : 'false'}" title="${escapeHtml(absence.note || (absence.absence_type === 'vacation' ? 'Urlop' : 'Wolne'))}"><b>${absence.absence_type === 'vacation' ? 'URLOP' : 'WOLNE'}</b>${absence.note ? `<small>${escapeHtml(absence.note)}</small>` : ''}</span>` : '';
-  const tileCount = sortedEntries.length + Number(Boolean(absence));
-  const expandButton = tileCount > 3 ? `<button type="button" class="planner-cell-expand" data-planner-expand="${escapeHtml(cellKey)}" aria-expanded="${expanded}">${expanded ? 'Zwiń' : `+${tileCount - 3}`}</button>` : '';
+  const absenceChip = absence ? `<span class="absence-chip ${absence.absence_type}" draggable="${editable ? 'true' : 'false'}" title="${escapeHtml(absence.note || (absence.absence_type === 'vacation' ? 'Urlop' : 'Wolne'))}"><b>${absence.absence_type === 'vacation' ? 'URLOP' : 'WOLNE'}</b>${absence.note ? `<small>${escapeHtml(absence.note)}</small><span class="plan-note" data-note="${escapeHtml(absence.note)}" title="${escapeHtml(absence.note)}" tabindex="0" aria-label="Notatka: ${escapeHtml(absence.note)}">i</span>` : ''}</span>` : '';
+  const tileCount = detailed ? sortedEntries.length + Number(Boolean(absence)) : Number(Boolean(chips)) + Number(Boolean(absence));
+  const expandButton = detailed && tileCount > 3 ? `<button type="button" class="planner-cell-expand" data-planner-expand="${escapeHtml(cellKey)}" aria-expanded="${expanded}">${expanded ? 'Zwiń' : `+${tileCount - 3}`}</button>` : '';
   const hours = showTime && timeDetail ? `<span class="planner-hours-chip" title="Dzisiaj: ${Number(timeDetail.actual_hours + timeDetail.credited_hours).toFixed(1)} h · narastająco bez mnożnika: ${Number(timeDetail.overtime_raw_cumulative || 0).toFixed(1)} h · z mnożnikiem: ${Number(timeDetail.overtime_weighted_cumulative || 0).toFixed(1)} h"><b>${Number(timeDetail.actual_hours + timeDetail.credited_hours).toFixed(1)}h</b><i>Σ ${Number(timeDetail.overtime_raw_cumulative || 0).toFixed(1)} / ${Number(timeDetail.overtime_weighted_cumulative || 0).toFixed(1)}</i></span>` : '';
   const selected = state.plannerSelection.has(cellKey);
   return `<td class="planner-cell ${weekend ? 'weekend' : ''} ${holiday ? 'holiday' : ''} ${absence ? 'absent' : ''} ${date === today() ? 'today' : ''} ${entries.length ? 'planned' : ''} ${detailed && overlap ? `overlap-${overlap.status}` : ''} ${selected ? 'multi-selected' : ''} ${expanded ? 'entries-expanded' : ''} ${editable ? '' : 'read-only'}" data-user-id="${user.id}" data-date="${date}" data-editable="${editable ? 1 : 0}" title="${holiday ? `${escapeHtml(holiday.name)} · ` : ''}${editable ? 'Lewy przycisk: zaznacz · prawy przycisk: edytuj i kopiuj · przeciągnij aktywność' : 'Plan tylko do odczytu'}">${absenceChip}${chips}${expandButton}${workload}${hours}${!absenceChip && !chips && editable ? '<i>+</i>' : ''}</td>`;
@@ -2891,7 +2982,16 @@ async function dropPlannerEntry(event, cell) {
   const rawDay = event.dataTransfer.getData('text/planner-day');
   if (rawDay || state.plannerDragDay) {
     const source = rawDay ? JSON.parse(rawDay) : state.plannerDragDay;
-    try { const copy = event.ctrlKey || event.altKey; await api('/api/planner/move-day', { method: 'POST', body: JSON.stringify({ source_user_id: source.userId, source_date: source.date, target_user_id: Number(cell.dataset.userId), target_date: cell.dataset.date, copy }) }); toast(copy ? 'Skopiowano cały dzień' : 'Przeniesiono cały dzień'); await reloadPlanner(); } catch (error) { toast(error.message, true); }
+    try {
+      const copy = event.ctrlKey || event.altKey; const targetUserId = Number(cell.dataset.userId); const targetDate = cell.dataset.date;
+      if (state.plannerRawPlanId) {
+        const sourceEntries = plannerProjectDayEntries(state.me.current_project?.id, source.userId, source.date);
+        const targetEntries = plannerProjectDayEntries(state.me.current_project?.id, targetUserId, targetDate);
+        await savePlannerProjectDay(state.me.current_project?.id, targetUserId, targetDate, [...targetEntries, ...sourceEntries]);
+        if (!copy) await savePlannerProjectDay(state.me.current_project?.id, source.userId, source.date, []);
+      } else await api('/api/planner/move-day', { method: 'POST', body: JSON.stringify({ source_user_id: source.userId, source_date: source.date, target_user_id: targetUserId, target_date: targetDate, copy }) });
+      toast(copy ? 'Skopiowano cały dzień' : 'Przeniesiono cały dzień'); await reloadPlanner();
+    } catch (error) { toast(error.message, true); }
     return;
   }
   const entryId = Number(event.dataTransfer.getData('text/planner-entry') || state.plannerDragEntry);
@@ -2933,7 +3033,9 @@ async function dropPlannerEntry(event, cell) {
 
 async function reloadPlanner() {
   try {
-    state.planner = await api(`/api/planner?from=${state.plannerFrom}&to=${addDays(state.plannerFrom, state.plannerDays - 1)}`);
+    const query = `?from=${state.plannerFrom}&to=${addDays(state.plannerFrom, state.plannerDays - 1)}`;
+    if (canCoordinate()) state.plannerRawPlans = await api('/api/planner/raw-plans');
+    state.planner = await api(state.plannerRawPlanId ? `/api/planner/raw-plans/${state.plannerRawPlanId}${query}` : `/api/planner${query}`);
     if (state.plannerRequirementEdit) {
       state.requirementFrom = state.plannerFrom; state.requirementDays = state.plannerDays; state.requirementData = state.planner;
       mergePlannerRequirementData(state.requirementData);
@@ -3060,7 +3162,7 @@ function openPlannerCell(userId, date, targetProjectId = Number(state.me.current
   $('#planner-raw-balance').placeholder = `Aktualnie: ${Number(timeDetail.overtime_raw_cumulative || 0).toFixed(1)} h`;
   $('#planner-weighted-balance').placeholder = `Aktualnie: ${Number(timeDetail.overtime_weighted_cumulative || 0).toFixed(1)} h`;
   $('#planner-adjustment-note').value = timeDetail.adjustment_note || '';
-  $('.planner-day-kind').hidden = foreignProject;
+  $('.planner-day-kind').hidden = foreignProject || Boolean(state.plannerRawPlanId);
   $('.planner-adjustments').hidden = foreignProject;
   bindPlannerEntryRows();
   updatePlannerDayKind();
@@ -3100,7 +3202,8 @@ async function savePlannerCell(event) {
       toast(result.awaiting_approval ? 'Plan pracy zaktualizowano i przekazano do akceptacji; transport zapisano bezpośrednio' : transportOnlyUpdate ? 'Transport zaktualizowano bezpośrednio' : 'Plan projektu zaktualizowano bez dodatkowej akceptacji');
       await reloadPlanner(); return;
     }
-    await api('/api/planner/day', { method: 'PUT', body: JSON.stringify({ user_id: state.plannerCell.userId, plan_date: state.plannerCell.date, entries, absence_type: absenceType, absence_note: $('#planner-absence-note').value, actual_hours_adjustment: previous.actual_hours_adjustment, overtime_raw_adjustment: previous.overtime_raw_adjustment, overtime_weighted_adjustment: previous.overtime_weighted_adjustment, work_start_time: $('#planner-work-start').value, work_end_time: $('#planner-work-end').value, overtime_raw_balance_override: $('#planner-raw-balance').value === '' ? null : Number($('#planner-raw-balance').value), overtime_weighted_balance_override: $('#planner-weighted-balance').value === '' ? null : Number($('#planner-weighted-balance').value), adjustment_note: $('#planner-adjustment-note').value }) });
+    const endpoint = state.plannerRawPlanId ? `/api/planner/raw-plans/${state.plannerRawPlanId}/day` : '/api/planner/day';
+    await api(endpoint, { method: 'PUT', body: JSON.stringify({ user_id: state.plannerCell.userId, plan_date: state.plannerCell.date, entries, absence_type: absenceType, absence_note: $('#planner-absence-note').value, actual_hours_adjustment: previous.actual_hours_adjustment, overtime_raw_adjustment: previous.overtime_raw_adjustment, overtime_weighted_adjustment: previous.overtime_weighted_adjustment, work_start_time: $('#planner-work-start').value, work_end_time: $('#planner-work-end').value, overtime_raw_balance_override: $('#planner-raw-balance').value === '' ? null : Number($('#planner-raw-balance').value), overtime_weighted_balance_override: $('#planner-weighted-balance').value === '' ? null : Number($('#planner-weighted-balance').value), adjustment_note: $('#planner-adjustment-note').value }) });
     $('#planner-dialog').close(); toast('Plan dnia i korekty czasu zostały zapisane'); await reloadPlanner();
   } catch (error) { toast(error.message, true); }
 }

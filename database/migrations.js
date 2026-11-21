@@ -93,6 +93,24 @@ export function prepareDatabase(db, { seedDemo, demoLimit = 100 }) {
     ensureColumn(db, 'projects', 'planner_short_code', "TEXT NOT NULL DEFAULT ''");
     db.exec("UPDATE projects SET planner_short_code=substr(code,1,6) WHERE trim(planner_short_code)=''");
   });
+  runMigration(db, '061-planner-raw-plans', () => {
+    db.exec(`CREATE TABLE IF NOT EXISTS planner_raw_plans (
+      id INTEGER PRIMARY KEY,project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,name TEXT NOT NULL,
+      from_date TEXT NOT NULL,to_date TEXT NOT NULL,published_at TEXT,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,UNIQUE(project_id,owner_user_id,name)) STRICT;
+    CREATE TABLE IF NOT EXISTS planner_raw_entries (
+      id INTEGER PRIMARY KEY,raw_plan_id INTEGER NOT NULL REFERENCES planner_raw_plans(id) ON DELETE CASCADE,
+      project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      plan_date TEXT NOT NULL,shift TEXT NOT NULL DEFAULT 'Dzień',controller_group_id INTEGER REFERENCES controller_groups(id) ON DELETE CASCADE,
+      work_mode TEXT NOT NULL DEFAULT 'online' CHECK(work_mode IN ('online','offline')),
+      transport_mode TEXT NOT NULL DEFAULT 'none' CHECK(transport_mode IN ('none','transport_work','transport_only')),
+      duration_hours REAL NOT NULL DEFAULT 0 CHECK(duration_hours >= 0),count_in_manpower INTEGER NOT NULL DEFAULT 1 CHECK(count_in_manpower IN (0,1)),
+      vehicle_id INTEGER REFERENCES planner_vehicles(id) ON DELETE SET NULL,note TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP) STRICT;
+    CREATE INDEX IF NOT EXISTS idx_planner_raw_owner ON planner_raw_plans(project_id,owner_user_id,updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_planner_raw_entries_date ON planner_raw_entries(raw_plan_id,plan_date,user_id)`);
+  });
   return defaultProjectId;
 }
 
