@@ -427,7 +427,7 @@ async function handleProjectApi(request, response, url, user) {
   const announcementId = numericId(path, '/api/announcements');
   if (announcementId !== null) {
     if (method === 'PATCH') requireRole(user, 'moderator');
-    if (method === 'DELETE') requireRole(user, 'project_admin');
+    if (method === 'DELETE') requireRole(user, 'moderator');
     if (method === 'PATCH') return json(response, 200, repository.saveAnnouncement(announcementId, await readJson(request), user));
     if (method === 'DELETE') { repository.deleteAnnouncement(announcementId); response.writeHead(204); return response.end(); }
   }
@@ -516,14 +516,27 @@ async function handleProjectApi(request, response, url, user) {
     if (recordId !== null) {
       if (method === 'PATCH') return json(response, 200, resource.save(recordId, await readJson(request)));
       if (method === 'DELETE') {
-        if (resource.deleteRole === 'project_admin') requireRole(user, 'project_admin');
-        if (resource.deleteRole === 'owner' && user.role === 'moderator') throw Object.assign(new Error('Manager projektu nie może usuwać elementów'), { statusCode: 403 });
         resource.remove(recordId); response.writeHead(204); return response.end();
       }
     }
   }
 
   if (path === '/api/users' && method === 'POST') { requireRole(user, 'system_admin'); return json(response, 201, repository.saveUser(null, await readJson(request))); }
+  if (path === '/api/project-users' && method === 'PUT') {
+    requireRole(user, 'project_admin');
+    const input = await readJson(request);
+    const changes = Array.isArray(input.changes) ? input.changes : [];
+    const users = repository.users();
+    for (const change of changes) {
+      const target = users.find(item => Number(item.id) === Number(change.user_id));
+      if (!target) throw Object.assign(new Error('Nie znaleziono użytkownika'), { statusCode: 404 });
+      if (user.role !== 'system_admin' && (target.system_role === 'system_admin' || target.project_role === 'project_admin')) throw Object.assign(new Error('Lider projektu nie może zmieniać uprawnień administratora systemu ani innego Lidera projektu'), { statusCode: 403 });
+      if (user.role !== 'system_admin' && !['user', 'moderator'].includes(change.project_role)) throw Object.assign(new Error('Lider projektu może nadawać role Managera projektu i Użytkownika'), { statusCode: 403 });
+    }
+    const result = repository.saveProjectUsers({ changes });
+    logSecurityEvent(request, 'project_memberships_changed', 'success', repository.securityAccount(user.id), { actor_user_id: user.id, project_id: user.current_project?.id, changed_user_ids: changes.map(change => Number(change.user_id)) });
+    return json(response, 200, result);
+  }
   const userPasswordMatch = path.match(/^\/api\/users\/(\d+)\/password$/);
   if (userPasswordMatch && method === 'PUT') {
     requireRole(user, 'system_admin');
@@ -539,10 +552,9 @@ async function handleProjectApi(request, response, url, user) {
     if (method === 'PATCH') {
       const input = await readJson(request);
       const target = repository.users().find(item => item.id === id);
-      const protectedProjectFields = new Set(['planner_enabled', 'assignable', 'can_manage_external_dependencies']);
-      if (user.role !== 'system_admin' && (target?.system_role === 'system_admin' || target?.project_role === 'project_admin') && Object.keys(input).some(key => !protectedProjectFields.has(key))) throw Object.assign(new Error('Dla administratora możesz tutaj zmienić wyłącznie ustawienia udziału w modułach projektu'), { statusCode: 403 });
-      const safe = user.role === 'system_admin' ? input : (target?.system_role === 'system_admin' || target?.project_role === 'project_admin') ? { planner_enabled: input.planner_enabled, assignable: input.assignable, can_manage_external_dependencies: input.can_manage_external_dependencies } : { project_role: input.project_role, project_active: input.project_active, planner_enabled: input.planner_enabled, assignable: input.assignable, can_manage_external_dependencies: input.can_manage_external_dependencies };
-      if (user.role !== 'system_admin' && Object.hasOwn(safe, 'project_role') && !['user', 'moderator'].includes(safe.project_role)) throw Object.assign(new Error('Administrator projektu może przydzielać wyłącznie role managera projektu i użytkownika'), { statusCode: 403 });
+      if (user.role !== 'system_admin' && (target?.system_role === 'system_admin' || target?.project_role === 'project_admin')) throw Object.assign(new Error('Lider projektu nie może zmieniać ustawień administratora systemu ani innego Lidera projektu'), { statusCode: 403 });
+      const safe = user.role === 'system_admin' ? input : { project_role: input.project_role, project_active: input.project_active, planner_enabled: input.planner_enabled, assignable: input.assignable, can_manage_external_dependencies: input.can_manage_external_dependencies };
+      if (user.role !== 'system_admin' && Object.hasOwn(safe, 'project_role') && !['user', 'moderator'].includes(safe.project_role)) throw Object.assign(new Error('Lider projektu może przydzielać wyłącznie role Managera projektu i Użytkownika'), { statusCode: 403 });
       const result = repository.saveUser(id, safe);
       if (Object.hasOwn(safe, 'password') || Number(safe.active) === 0) await revokeUserSessions(id);
       if (['project_role', 'project_active', 'active', 'system_role'].some(field => Object.hasOwn(safe, field))) logSecurityEvent(request, 'account_access_changed', 'success', repository.securityAccount(id), { actor_user_id: user.id, project_id: user.current_project?.id });
@@ -551,7 +563,12 @@ async function handleProjectApi(request, response, url, user) {
     if (method === 'DELETE') { requireRole(user, 'system_admin'); if (id === user.id) throw Object.assign(new Error('Nie możesz usunąć własnego konta'), { statusCode: 400 }); const deletedAccount = repository.securityAccount(id); logSecurityEvent(request, 'account_deleted', 'success', null, { actor_user_id: user.id, username: deletedAccount?.username || '' }); await revokeUserSessions(id); repository.deleteUser(id); response.writeHead(204, securityHeaders); return response.end(); }
   }
   const userPlannerMatch = path.match(/^\/api\/users\/(\d+)\/planner$/);
-  if (userPlannerMatch && method === 'PUT') { requireRole(user, 'project_admin'); return json(response, 200, repository.setPlannerEnabled(Number(userPlannerMatch[1]), await readJson(request))); }
+  if (userPlannerMatch && method === 'PUT') {
+    requireRole(user, 'project_admin');
+    const target = repository.users().find(item => item.id === Number(userPlannerMatch[1]));
+    if (user.role !== 'system_admin' && (target?.system_role === 'system_admin' || target?.project_role === 'project_admin')) throw Object.assign(new Error('Lider projektu nie może zmieniać widoczności administratora systemu ani innego Lidera projektu'), { statusCode: 403 });
+    return json(response, 200, repository.setPlannerEnabled(Number(userPlannerMatch[1]), await readJson(request)));
+  }
 
   if (path === '/api/controller-groups' && method === 'POST') { requireRole(user, 'project_admin'); return json(response, 201, repository.saveControllerGroup(null, await readJson(request))); }
   id = numericId(path, '/api/controller-groups');
@@ -560,30 +577,30 @@ async function handleProjectApi(request, response, url, user) {
   id = numericId(path, '/api/controllers');
   if (id !== null) { requireRole(user, 'project_admin'); if (method === 'PATCH') return json(response, 200, repository.saveController(id, await readJson(request))); if (method === 'DELETE') { repository.deleteController(id); response.writeHead(204); return response.end(); } }
 
-  if (path === '/api/function-groups' && method === 'POST') { requireRole(user, 'project_admin'); return json(response, 201, repository.saveFunctionGroup(null, await readJson(request), user)); }
-  if (path === '/api/function-groups/bulk' && method === 'POST') { requireRole(user, 'project_admin'); return json(response, 201, repository.bulkFunctionGroups(await readJson(request))); }
+  if (path === '/api/function-groups' && method === 'POST') { requireRole(user, 'moderator'); return json(response, 201, repository.saveFunctionGroup(null, await readJson(request), user)); }
+  if (path === '/api/function-groups/bulk' && method === 'POST') { requireRole(user, 'moderator'); return json(response, 201, repository.bulkFunctionGroups(await readJson(request))); }
   let match = path.match(/^\/api\/function-groups\/(\d+)\/checks$/);
-  if (match && method === 'PUT') { requireRole(user, 'project_admin'); return json(response, 200, repository.saveFunctionGroupChecks(Number(match[1]), await readJson(request), user)); }
+  if (match && method === 'PUT') { requireRole(user, 'moderator'); return json(response, 200, repository.saveFunctionGroupChecks(Number(match[1]), await readJson(request), user)); }
   match = path.match(/^\/api\/function-groups\/(\d+)\/elements\/bulk$/);
-  if (match && method === 'POST') { requireRole(user, 'project_admin'); return json(response, 201, repository.bulkFunctionGroupElements(Number(match[1]), await readJson(request))); }
+  if (match && method === 'POST') { requireRole(user, 'moderator'); return json(response, 201, repository.bulkFunctionGroupElements(Number(match[1]), await readJson(request))); }
   match = path.match(/^\/api\/function-groups\/(\d+)\/elements(?:\/(\d+))?$/);
   if (match) {
-    requireRole(user, 'project_admin'); const groupId = Number(match[1]); const elementId = match[2] ? Number(match[2]) : null;
+    requireRole(user, 'moderator'); const groupId = Number(match[1]); const elementId = match[2] ? Number(match[2]) : null;
     if (method === 'POST' && !elementId) return json(response, 201, repository.saveFunctionGroupElement(groupId, null, await readJson(request)));
     if (method === 'PATCH' && elementId) return json(response, 200, repository.saveFunctionGroupElement(groupId, elementId, await readJson(request)));
     if (method === 'DELETE' && elementId) { repository.deleteFunctionGroupElement(groupId, elementId); response.writeHead(204); return response.end(); }
   }
   match = path.match(/^\/api\/function-groups\/(\d+)\/subcategories\/bulk$/);
-  if (match && method === 'POST') { requireRole(user, 'project_admin'); return json(response, 201, repository.bulkFunctionGroupSubcategories(Number(match[1]), await readJson(request))); }
+  if (match && method === 'POST') { requireRole(user, 'moderator'); return json(response, 201, repository.bulkFunctionGroupSubcategories(Number(match[1]), await readJson(request))); }
   match = path.match(/^\/api\/function-groups\/(\d+)\/subcategories(?:\/(\d+))?$/);
   if (match) {
-    requireRole(user, 'project_admin'); const groupId = Number(match[1]); const subcategoryId = match[2] ? Number(match[2]) : null;
+    requireRole(user, 'moderator'); const groupId = Number(match[1]); const subcategoryId = match[2] ? Number(match[2]) : null;
     if (method === 'POST' && !subcategoryId) return json(response, 201, repository.saveFunctionGroupSubcategory(groupId, null, await readJson(request)));
     if (method === 'PATCH' && subcategoryId) return json(response, 200, repository.saveFunctionGroupSubcategory(groupId, subcategoryId, await readJson(request)));
     if (method === 'DELETE' && subcategoryId) { repository.deleteFunctionGroupSubcategory(groupId, subcategoryId); response.writeHead(204); return response.end(); }
   }
   id = numericId(path, '/api/function-groups');
-  if (id !== null) { requireRole(user, 'project_admin'); if (method === 'PATCH') return json(response, 200, repository.saveFunctionGroup(id, await readJson(request), user)); if (method === 'DELETE') { repository.deleteFunctionGroup(id, user); response.writeHead(204); return response.end(); } }
+  if (id !== null) { requireRole(user, 'moderator'); if (method === 'PATCH') return json(response, 200, repository.saveFunctionGroup(id, await readJson(request), user)); if (method === 'DELETE') { repository.deleteFunctionGroup(id, user); response.writeHead(204); return response.end(); } }
 
   if (path === '/api/status-groups' && method === 'POST') { requireRole(user, 'moderator'); return json(response, 201, repository.saveStatusGroup(null, await readJson(request))); }
   match = path.match(/^\/api\/status-groups\/(\d+)\/subgroups\/(\d+)\/columns(?:\/(\d+))?$/);
@@ -653,7 +670,7 @@ async function handleProjectApi(request, response, url, user) {
   if (id !== null) { requireRole(user, 'project_admin'); if (method === 'PATCH') return json(response, 200, repository.saveExportTemplate(id, await readJson(request), user)); if (method === 'DELETE') { repository.deleteExportTemplate(id); response.writeHead(204); return response.end(); } }
   if (method === 'PATCH' && path === '/api/reorder') {
     const input = await readJson(request);
-    if (['controllers', 'controller_groups', 'users', 'function_groups', 'function_group_elements', 'function_group_subcategories', 'export_templates'].includes(input.kind)) requireRole(user, 'project_admin'); else requireRole(user, 'moderator');
+    if (['controllers', 'controller_groups', 'users', 'export_templates'].includes(input.kind)) requireRole(user, 'project_admin'); else requireRole(user, 'moderator');
     repository.reorder(input.kind, input.ids); return json(response, 200, { ok: true });
   }
   if (method === 'PATCH' && path.startsWith('/api/settings/')) {

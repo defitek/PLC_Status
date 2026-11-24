@@ -235,7 +235,7 @@ function mergeOperationsData(payload) {
   state.operations = { ...(sameScope ? state.operations : {}), ...payload, _loaded: loaded };
 }
 
-function roleName(role) { return ({ system_admin: 'Administrator systemu', project_admin: 'Administrator projektu', admin: 'Administrator', moderator: 'Manager projektu', user: 'Użytkownik' })[role] || role; }
+function roleName(role) { return ({ system_admin: 'Administrator systemu', project_admin: 'Lider projektu', admin: 'Administrator', moderator: 'Manager projektu', user: 'Użytkownik' })[role] || role; }
 function options(kind) { return state.config.options.filter(item => item.kind === kind).map(item => item.value); }
 function statusCategories() { return state.config.categories.map(item => item.name); }
 function taskCategories() { return state.config.task_categories.map(item => item.name); }
@@ -5601,31 +5601,30 @@ function controllerHierarchyConfig(admin) {
   return `<div class="hierarchy-editor"><aside><div class="hierarchy-tree-toolbar"><strong>Struktura projektu</strong>${admin ? '<button class="mini" id="new-root-group">+ Obszar</button>' : ''}</div><div class="config-tree compact-tree">${rows.join('') || '<div class="empty compact-empty">Brak hierarchii sterowników.</div>'}</div>${admin ? '<button class="secondary full-width" id="new-controller">+ Sterownik bez obszaru</button>' : ''}</aside><section class="hierarchy-detail">${details}</section></div>`;
 }
 
-function canManageUser(item) {
-  return state.me.role === 'system_admin' || (state.me.role === 'project_admin' && item.system_role !== 'system_admin' && item.project_role !== 'project_admin');
-}
-
 function renderSettings() {
   const admin = ['system_admin', 'project_admin'].includes(state.me.role);
   const systemAdmin = state.me.role === 'system_admin';
-  const launchers = [
-    ...(systemAdmin ? [['projects', 'Projekty systemu', 'Globalne projekty, dostęp i bezpieczne usuwanie', state.projects.length, '▦']] : []),
-    ...(systemAdmin ? [['security', 'Dziennik bezpieczeństwa', 'Logowania, MFA, hasła i zmiany dostępu', '', '⌾']] : []),
-    ['hierarchy', 'Hierarchia obszarów / sterowników', 'Projekt → obszar → podobszar → sterownik', state.controllerGroups.length + state.controllers.length, '⌘'],
+  const globalLaunchers = [
+    ...(systemAdmin ? [['projects', 'Projekty systemu', 'Globalne projekty, dostęp i bezpieczne usuwanie', state.projects.length, '▦'], ['global_users', 'Konta użytkowników', 'Konta globalne, aktywacja, role systemowe i hasła', state.users.length, '♙'], ['security', 'Dziennik bezpieczeństwa', 'Logowania, MFA, hasła i zmiany dostępów', '', '⌾']] : []),
+    ['planner_global', 'Globalne ustawienia czasu pracy', 'Święta, normy godzin i mnożniki nadgodzin', (state.planner?.holidays || []).length, '◷']
+  ];
+  const projectLaunchers = [
+    ...(admin ? [['hierarchy', 'Hierarchia obszarów / sterowników', 'Projekt → obszar → podobszar → sterownik', state.controllerGroups.length + state.controllers.length, '⌘']] : []),
     ['status_matrix', 'Tabele i pola statusu', 'Grupy, podgrupy oraz niezależne kolumny statusowe i tekstowe', statusGroups().length, '▦'],
     ['function_groups', 'Obiekty funkcyjne', 'Stacje, roboty i elementy używane również w zadaniach', state.config.function_groups.length, '⚙'],
     ['ops_automations', 'Reguły automatyzacji', 'Powiadomienia i eskalacje według terminów oraz blokad', state.operations?.automation_rules?.length || 0, '⌁'],
     ['status_categories', 'Konfigurator otwartych punktów', 'Kategorie, podkategorie oraz reguły „Oczekiwanie na”', state.config.categories.length + state.config.options.filter(item => item.kind === 'waiting_for').length, '▤'],
     ['task_categories', 'Kategorie zadań', 'Niezależny słownik dla modułu Zadania', state.config.task_categories.length, '✓'],
-    ['users', 'Użytkownicy projektu', 'Role, dostęp, Planner i przypisane obszary', state.users.length, '♙'],
+    ...(admin ? [['users', 'Użytkownicy projektu', 'Dostęp, rola projektowa, Planner i listy wyboru', state.users.length, '♙']] : []),
     ['announcements', 'Informator', 'Etykiety oraz poziomy ważności wiadomości', (state.config.announcement_labels || []).length, '◆'],
-    ...(admin ? [['planner', 'Planner i czas pracy', 'Auta, święta, normy godzin i mnożniki nadgodzin', (state.planner?.holidays || []).length, '▥']] : []),
+    ['planner', 'Planner · ustawienia projektu', 'Auta transportowe używane w bieżącym projekcie', (state.config.planner_vehicles || []).length, '▥'],
     ['dictionaries', 'Słowniki projektu', 'Cele odpraw, zmiany i typy notatek', state.config.options.filter(item => item.kind !== 'waiting_for').length, '≡'],
     ['completion_requirements', 'Zapotrzebowanie', 'Lista zapotrzebowania wybierana w Statusie, Zadaniach i Otwartych punktach', (state.config.requirements || []).length, '◇'],
     ['reminders', 'Przypomnienia', 'Domyślne terminy i okno ostrzegawcze', 2, '◷'],
     ...(admin ? [['backup', 'Backup projektu', 'Pobieranie i odtwarzanie kompletnego projektu', '', '⇄'], ['exports', 'Szablony eksportu', 'Predefiniowane raporty statusu do Excel', (state.config.export_templates || []).length, '↗']] : [])
   ];
-  $('#content').innerHTML = `<section class="settings-home"><header><div><span class="eyebrow">Ustawienia projektu</span><h2>Wybierz obszar konfiguracji</h2><p>Każda grupa ustawień otwiera się w osobnym, trwałym oknie. Zapis nie zamyka edytowanego widoku.</p></div><span class="settings-role">${escapeHtml(roleName(state.me.role))}</span></header><div class="settings-launchers">${launchers.map(([key, title, description, count, icon]) => `<button type="button" class="settings-launcher" data-config-panel="${key}"><span class="settings-launcher-icon">${icon}</span><span><b>${escapeHtml(title)}</b><small>${escapeHtml(description)}</small></span>${count !== '' ? `<em>${count}</em>` : ''}<i>→</i></button>`).join('')}</div></section>`;
+  const launcherHtml = (items, scope) => `<div class="settings-launchers">${items.map(([key, title, description, count, icon]) => `<button type="button" class="settings-launcher" data-config-panel="${key}" data-config-scope="${scope}"><span class="settings-launcher-icon">${icon}</span><span><b>${escapeHtml(title)}</b><small>${escapeHtml(description)}</small></span>${count !== '' ? `<em>${count}</em>` : ''}<i>→</i></button>`).join('')}</div>`;
+  $('#content').innerHTML = `<section class="settings-home"><header><div><span class="eyebrow">Konfigurator</span><h2>Konfiguracja systemu i projektu</h2><p>Ustawienia są rozdzielone według zakresu działania. Oznaczenie zakresu pozostaje widoczne także w otwartym panelu.</p></div><span class="settings-role">${escapeHtml(roleName(state.me.role))}</span></header>${globalLaunchers.length ? `<section class="settings-scope global"><header><span class="config-scope-badge global">GLOBALNE</span><div><h3>Konfiguracja globalna</h3><p>Dotyczy całego systemu i wszystkich projektów.</p></div></header>${launcherHtml(globalLaunchers, 'global')}</section>` : ''}<section class="settings-scope project"><header><span class="config-scope-badge project">PROJEKT</span><div><h3>Konfiguracja projektu</h3><p>Dotyczy wyłącznie projektu ${escapeHtml(state.me.current_project?.code || '')}.</p></div></header>${launcherHtml(projectLaunchers, 'project')}</section></section>`;
   $$('[data-config-panel]').forEach(button => button.addEventListener('click', async () => {
     if (button.dataset.configPanel === 'ops_automations') {
       state.operationsTab = 'automations'; await setView('operations'); return;
@@ -5648,28 +5647,36 @@ function configPanelDefinition(key) {
   const statusStateConfig = `<section class="config-subsection status-state-config"><header><span><h3>Stany punktów statusowych</h3><small class="sub">Stany systemowe korzystają ze spójnego zestawu profesjonalnych ikon. Dla własnych stanów można wybrać symbol.</small></span><button type="button" class="secondary" id="new-status-state">+ Dodaj stan</button></header>${workflowStates.map((item, index) => `<div class="settings-row">${orderControls('status_workflow_states', workflowStates, index)}<span title="${escapeHtml(item.description || '')}"><b>${escapeHtml(item.label)}</b><small class="sub">${escapeHtml(item.description || 'Bez opisu')} · ${item.included ? 'widoczny na listach' : 'wyłączony'}${item.counts_as_done ? ' · zamyka punkt' : ''}</small></span><span class="dictionary-legend">${statusSymbol(item.value)}</span><button type="button" class="mini edit-status-state" data-id="${item.id}">Edytuj</button>${admin && !item.system_key ? `<button type="button" class="mini danger-text delete-status-state" data-id="${item.id}">Usuń</button>` : ''}</div>`).join('')}</section>`;
   const waitingForItems = state.config.options.filter(item => item.kind === 'waiting_for');
   const waitingForConfig = `<section class="config-subsection waiting-for-config"><header><span><h3>Oczekiwanie na</h3><small class="sub">Włącz automatyczne utworzenie zależności zewnętrznej dla punktów oczekujących na wybrany dział.</small></span></header>${waitingForItems.map((item, index) => `<div class="settings-row dictionary-row" title="${escapeHtml(item.description || '')}">${orderControls('options', waitingForItems, index)}<span><b>${escapeHtml(item.value)}</b><small class="sub">${escapeHtml(item.description || 'Bez opisu')}</small></span><span class="dependency-rule ${Number(item.external_dependency_enabled) ? 'enabled' : ''}">${Number(item.external_dependency_enabled) ? 'Zależność zewnętrzna ✓' : 'Bez zależności'}</span><button class="mini edit-option" data-id="${item.id}" data-kind="waiting_for" data-value="${escapeHtml(item.value)}" data-description="${escapeHtml(item.description || '')}" data-external-enabled="${Number(item.external_dependency_enabled) ? 1 : 0}">Edytuj</button>${admin ? `<button class="mini delete-config" data-kind="option" data-id="${item.id}">Usuń</button>` : ''}</div>`).join('') || '<div class="empty compact-empty">Nie zdefiniowano jeszcze żadnego działu.</div>'}<form class="inline-form add-option dictionary-add waiting-for-add" data-kind="waiting_for"><input name="value" placeholder="Nowy dział / strona" required><input name="description" placeholder="Opis widoczny po najechaniu"><label class="checkline"><input type="checkbox" name="external_dependency_enabled" value="1"><span>Pokazuj w Zależnościach zewnętrznych</span></label><button class="mini">Dodaj</button></form></section>`;
-  const users = state.users.map((item, index) => `<div class="settings-row user-config-row">${systemAdmin ? orderControls('users', state.users, index) : ''}<span><b>${escapeHtml(item.display_name)}</b><small class="sub">${escapeHtml(item.username)} · ${item.system_role === 'system_admin' ? 'Administrator systemu' : roleName(item.project_role)} · ${item.project_active ? 'w projekcie' : 'wyłączony z projektu'} · Planner: ${item.planner_enabled ? 'tak' : 'nie'} · Listy wyboru: ${Number(item.assignable) !== 0 ? 'widoczny' : 'ukryty'} · Zależności: ${['moderator', 'project_admin'].includes(item.project_role) || item.system_role === 'system_admin' || Number(item.can_manage_external_dependencies) ? 'edycja' : 'tylko podgląd'}</small></span>${admin && item.project_active ? `<button class="mini toggle-user-assignable ${Number(item.assignable) !== 0 ? 'active-toggle' : ''}" data-id="${item.id}" data-enabled="${Number(item.assignable) !== 0 ? 1 : 0}">${Number(item.assignable) !== 0 ? 'W wyborach ✓' : 'W wyborach —'}</button><button class="mini toggle-user-planner ${item.planner_enabled ? 'active-toggle' : ''}" data-id="${item.id}" data-enabled="${item.planner_enabled ? 1 : 0}">${item.planner_enabled ? 'Planner ✓' : 'Planner —'}</button>` : ''}${systemAdmin ? `<button class="mini reset-user-password" data-id="${item.id}" data-name="${escapeHtml(item.display_name)}">Nowe hasło</button>` : ''}${canManageUser(item) ? `<button class="mini edit-user" data-id="${item.id}">Edytuj dostęp</button>` : ''}</div>`).join('');
+  const users = `<form id="project-users-form" class="project-users-editor"><header><div><span class="config-scope-badge project">PROJEKT</span><h3>Uczestnicy projektu ${escapeHtml(state.me.current_project?.code || '')}</h3><p class="sub">Zaznacz wszystkie potrzebne ustawienia, a następnie zapisz je jedną decyzją.</p></div><button type="submit" class="primary" id="save-project-users" disabled>Zapisz zmiany</button></header><div class="project-users-table-wrap"><table class="project-users-table"><thead><tr><th>Użytkownik</th><th>Dostęp</th><th>Rola w projekcie</th><th>Planner</th><th>Listy wyboru</th><th>Zależności</th></tr></thead><tbody>${state.users.map(item => {
+    const protectedRow = item.system_role === 'system_admin' || (!systemAdmin && item.project_role === 'project_admin');
+    const disabled = protectedRow ? 'disabled' : '';
+    return `<tr data-project-user="${item.id}" class="${item.project_active ? '' : 'inactive'} ${protectedRow ? 'protected' : ''}"><td><b>${escapeHtml(item.display_name)}</b><small>${escapeHtml(item.username)}</small>${item.system_role === 'system_admin' ? '<span class="user-system-mark">Administrator systemu</span>' : ''}</td><td><label class="table-check" title="Dostęp do bieżącego projektu"><input type="checkbox" name="project_active" ${item.project_active ? 'checked' : ''} ${disabled}><span>✓</span></label></td><td><select name="project_role" aria-label="Rola w projekcie" ${disabled}><option value="user"${item.project_role === 'user' ? ' selected' : ''}>Użytkownik</option><option value="moderator"${item.project_role === 'moderator' ? ' selected' : ''}>Manager projektu</option>${systemAdmin ? `<option value="project_admin"${item.project_role === 'project_admin' ? ' selected' : ''}>Lider projektu</option>` : ''}</select></td><td><label class="table-check" title="Uwzględniaj w Plannerze"><input type="checkbox" name="planner_enabled" ${item.planner_enabled ? 'checked' : ''} ${disabled}><span>✓</span></label></td><td><label class="table-check" title="Widoczny na listach wyboru"><input type="checkbox" name="assignable" ${Number(item.assignable) !== 0 ? 'checked' : ''} ${disabled}><span>✓</span></label></td><td><label class="table-check" title="Może modyfikować zależności zewnętrzne"><input type="checkbox" name="can_manage_external_dependencies" ${Number(item.can_manage_external_dependencies) !== 0 ? 'checked' : ''} ${disabled}><span>✓</span></label></td></tr>`;
+  }).join('')}</tbody></table></div><footer><span id="project-users-change-count">Brak niezapisanych zmian</span><button type="submit" class="primary" disabled>Zapisz zmiany</button></footer></form>`;
+  const globalUsers = `<section class="config-panel-body global-users-panel"><header class="config-section-actions"><span><span class="config-scope-badge global">GLOBALNE</span><h3>Konta użytkowników systemu</h3><small class="sub">Dane konta są pokazane tylko tutaj. Dostęp projektowy jest konfigurowany oddzielnie w panelu projektu.</small></span><button class="secondary" id="new-user">+ Dodaj konto</button></header><div class="global-users-table"><div class="global-users-head"><span>Użytkownik</span><span>Rola systemowa</span><span>Stan konta</span><span>Operacje</span></div>${state.users.map(item => `<div class="global-user-row"><span><b>${escapeHtml(item.display_name)}</b><small>${escapeHtml(item.username)}</small></span><span><span class="account-role ${item.system_role === 'system_admin' ? 'admin' : ''}">${item.system_role === 'system_admin' ? 'Administrator systemu' : 'Konto projektowe'}</span></span><span><span class="account-state ${item.active ? 'active' : ''}">${item.active ? 'Aktywne' : 'Nieaktywne'}</span></span><span><button class="mini reset-user-password" data-id="${item.id}" data-name="${escapeHtml(item.display_name)}">Resetuj hasło</button><button class="mini edit-global-user" data-id="${item.id}">Edytuj konto</button></span></div>`).join('')}</div></section>`;
   const importanceItems = state.config.options.filter(item => item.kind === 'announcement_importance');
   const announcementConfig = `<section class="config-panel-body config-two-columns"><section class="config-subsection"><h3>Etykiety wiadomości</h3>${(state.config.announcement_labels || []).map((item, index, items) => `<div class="settings-row">${orderControls('announcement_labels', items, index)}<span><span class="announcement-label ${escapeHtml(item.color)}">${escapeHtml(item.name)}</span></span><button class="mini edit-announcement-label" data-id="${item.id}">Edytuj</button>${admin ? `<button class="mini delete-announcement-label" data-id="${item.id}">Usuń</button>` : ''}</div>`).join('')}<button class="secondary" id="new-announcement-label">+ Dodaj etykietę</button></section><section class="config-subsection"><h3>Poziomy ważności</h3>${importanceItems.map((item, index) => `<div class="settings-row dictionary-row" title="${escapeHtml(item.description || '')}">${orderControls('options', importanceItems, index)}<span><b>${escapeHtml(item.value)}</b><small class="sub">${escapeHtml(item.description || 'Bez opisu')}</small></span><button class="mini edit-option" data-id="${item.id}" data-kind="announcement_importance" data-value="${escapeHtml(item.value)}" data-description="${escapeHtml(item.description || '')}">Edytuj</button>${admin ? `<button class="mini delete-config" data-kind="option" data-id="${item.id}">Usuń</button>` : ''}</div>`).join('')}<form class="inline-form add-option dictionary-add" data-kind="announcement_importance"><input name="value" placeholder="Nowy poziom" required><input name="description" placeholder="Opis"><button class="mini">Dodaj</button></form></section></section>`;
   const plannerSettingFields = [
     ['planner_online_hours', 'Standard godzin ON', '10.5'], ['planner_offline_hours', 'Standard godzin OFF', '8'], ['planner_base_hours', 'Norma dnia roboczego', '8'],
     ['planner_weekday_multiplier', 'Mnożnik nadgodzin w dzień roboczy', '1.5'], ['planner_saturday_multiplier', 'Mnożnik sobotni', '1.5'], ['planner_sunday_holiday_multiplier', 'Mnożnik niedziela / święto', '2'], ['planner_time_off_debit', 'Odjęcie za wolne z nadgodzin', '8']
   ];
-  const plannerVehiclesConfig = `<section class="config-subsection"><header><span><h3>Auta transportowe</h3><small class="sub">Kod T oznacza transport bez wskazanego auta. Zdefiniowane auta są pokazywane jako T1, T2 itd.</small></span><button type="button" class="secondary" id="new-planner-vehicle">+ Dodaj auto</button></header><div class="planner-vehicle-list">${(state.config.planner_vehicles || []).map(vehicle => `<div class="settings-row"><span><b>${escapeHtml(vehicle.code)}</b><small class="sub">${escapeHtml(vehicle.registration_number)}</small></span><button type="button" class="mini edit-planner-vehicle" data-id="${vehicle.id}">Edytuj</button><button type="button" class="mini danger-outline delete-planner-vehicle" data-id="${vehicle.id}">Usuń</button></div>`).join('') || '<div class="empty compact-empty">Brak zdefiniowanych aut. Transport będzie oznaczany jako T.</div>'}</div></section>`;
-  const plannerConfig = `<section class="config-panel-body planner-config-grid">${plannerVehiclesConfig}<section class="config-subsection"><h3>Globalne normy czasu pracy</h3><p class="sub">Jedna konfiguracja obowiązuje we wszystkich projektach.</p><div class="planner-setting-grid">${plannerSettingFields.map(([key, label, fallback]) => `<label class="field"><span>${label}</span><input class="planner-setting" data-key="${key}" type="number" min="0" step="0.25" value="${escapeHtml(state.config.settings[key] || fallback)}"></label>`).join('')}</div></section><section class="config-subsection"><h3>Święta systemowe</h3><p class="sub">Ta lista jest wspólna dla wszystkich projektów.</p><div class="holiday-list-config">${(state.config.planner_holidays || []).map(item => `<div class="settings-row"><span><b>${displayDate(item.holiday_date)}</b> · ${escapeHtml(item.name)}</span><button class="mini edit-planner-holiday" data-id="${item.id}">Edytuj</button><button class="mini delete-planner-holiday" data-id="${item.id}">Usuń</button></div>`).join('') || '<div class="empty compact-empty">Brak zdefiniowanych świąt.</div>'}</div><label class="field"><span>Szybkie dodawanie — DD.MM.RRRR Nazwa święta</span><textarea id="planner-holidays-bulk" rows="7" placeholder="25.12.2026 Boże Narodzenie\n26.12.2026 Drugi dzień świąt"></textarea></label><button class="secondary" id="planner-holidays-bulk-save">Dodaj listę świąt</button></section></section>`;
+  const plannerVehiclesConfig = `<section class="config-subsection"><header><span><span class="config-scope-badge project">PROJEKT</span><h3>Auta transportowe</h3><small class="sub">Kod T oznacza transport bez wskazanego auta. Zdefiniowane auta są pokazywane jako T1, T2 itd.</small></span><button type="button" class="secondary" id="new-planner-vehicle">+ Dodaj auto</button></header><div class="planner-vehicle-list">${(state.config.planner_vehicles || []).map(vehicle => `<div class="settings-row"><span><b>${escapeHtml(vehicle.code)}</b><small class="sub">${escapeHtml(vehicle.registration_number)}</small></span><button type="button" class="mini edit-planner-vehicle" data-id="${vehicle.id}">Edytuj</button><button type="button" class="mini danger-outline delete-planner-vehicle" data-id="${vehicle.id}">Usuń</button></div>`).join('') || '<div class="empty compact-empty">Brak zdefiniowanych aut. Transport będzie oznaczany jako T.</div>'}</div></section>`;
+  const plannerConfig = `<section class="config-panel-body planner-config-grid">${plannerVehiclesConfig}</section>`;
+  const plannerGlobalConfig = `<section class="config-panel-body planner-config-grid"><section class="config-subsection"><span class="config-scope-badge global">GLOBALNE</span><h3>Normy czasu pracy</h3><p class="sub">Jedna konfiguracja obowiązuje we wszystkich projektach.</p><div class="planner-setting-grid">${plannerSettingFields.map(([key, label, fallback]) => `<label class="field"><span>${label}</span><input class="planner-setting" data-key="${key}" type="number" min="0" step="0.25" value="${escapeHtml(state.config.settings[key] || fallback)}"></label>`).join('')}</div></section><section class="config-subsection"><span class="config-scope-badge global">GLOBALNE</span><h3>Święta systemowe</h3><p class="sub">Ta lista jest wspólna dla wszystkich projektów.</p><div class="holiday-list-config">${(state.config.planner_holidays || []).map(item => `<div class="settings-row"><span><b>${displayDate(item.holiday_date)}</b> · ${escapeHtml(item.name)}</span><button class="mini edit-planner-holiday" data-id="${item.id}">Edytuj</button><button class="mini delete-planner-holiday" data-id="${item.id}">Usuń</button></div>`).join('') || '<div class="empty compact-empty">Brak zdefiniowanych świąt.</div>'}</div><label class="field"><span>Szybkie dodawanie — DD.MM.RRRR Nazwa święta</span><textarea id="planner-holidays-bulk" rows="7" placeholder="25.12.2026 Boże Narodzenie\n26.12.2026 Drugi dzień świąt"></textarea></label><button class="secondary" id="planner-holidays-bulk-save">Dodaj listę świąt</button></section></section>`;
   const definitions = {
     projects: ['Projekty systemu', `<section class="config-panel-body"><p class="sub">Konta są globalne, a role i dostęp są niezależne dla każdego projektu. Kolor i skrót rozróżniają projekty w Plannerze.</p>${state.projects.map(item => `<div class="settings-row project-settings-row" style="${projectColorStyle(item.planner_color)}"><i class="project-color-swatch" aria-hidden="true"></i><span><b>${escapeHtml(item.code)} · ${escapeHtml(item.planner_short_code || String(item.code).slice(0, 6))}</b><small class="sub">${escapeHtml(item.description || '')}</small></span><button class="mini edit-project" data-id="${item.id}">Edytuj</button><button class="mini danger-outline delete-project" data-id="${item.id}" ${state.projects.length <= 1 ? 'disabled title="Nie można usunąć ostatniego projektu"' : ''}>Usuń</button></div>`).join('')}<button class="secondary" id="new-project">+ Dodaj projekt</button></section>`],
     security: ['Dziennik bezpieczeństwa', `<section class="config-panel-body"><p class="sub">Ostatnie zdarzenia uwierzytelniania i zmian dostępu. Rejestr jest przechowywany przez 180 dni.</p>${(state.securityEvents || []).map(item => `<div class="settings-row security-event ${escapeHtml(item.outcome)}"><span><b>${escapeHtml(item.event_type)}</b><small class="sub">${escapeHtml(item.username || 'nieznane konto')} · ${escapeHtml(item.ip_address || 'brak adresu')} · ${displayDateTime(item.created_at)}</small></span><em>${escapeHtml(item.outcome)}</em></div>`).join('') || '<div class="empty compact-empty">Brak zarejestrowanych zdarzeń.</div>'}</section>`],
     hierarchy: ['Hierarchia obszarów / sterowników', `<section class="config-panel-body"><p class="sub">Projekt → obszar → podobszar → sterownik. Wybierz element po lewej, a jego działania pojawią się po prawej.</p>${controllerHierarchyConfig(admin)}</section>`],
     status_matrix: ['Tabele i pola statusu', statusMatrixConfig(canEdit)],
     status_states: ['Stany punktów statusowych', `<section class="config-panel-body"><button type="button" class="mini config-back" id="status-states-back">← Tabele i pola statusu</button>${statusStateConfig}</section>`],
-    function_groups: ['Grupy funkcyjne i punkty statusu', functionGroupConfig(admin)],
+    function_groups: ['Grupy funkcyjne i punkty statusu', functionGroupConfig(canEdit)],
     status_categories: ['Konfigurator otwartych punktów', `<section class="config-panel-body"><header class="config-section-actions"><span><h3>Kategorie i podkategorie</h3><small class="sub">Struktura klasyfikacji używana w module Otwartych punktów.</small></span><button type="button" class="secondary" id="waiting-for-open">Oczekiwanie na</button></header>${categoryConfig('status', state.config.categories, admin, canEdit)}</section>`],
     waiting_for: ['Oczekiwanie na', `<section class="config-panel-body"><button type="button" class="mini config-back" id="waiting-for-back">← Konfigurator otwartych punktów</button>${waitingForConfig}</section>`],
     task_categories: ['Kategorie zadań', `<section class="config-panel-body">${categoryConfig('task', state.config.task_categories, admin, canEdit)}</section>`],
-    users: ['Użytkownicy projektu', `<section class="config-panel-body">${users}${systemAdmin ? '<button class="secondary" id="new-user">+ Dodaj globalne konto</button>' : ''}</section>`],
+    users: ['Użytkownicy projektu', `<section class="config-panel-body">${users}</section>`],
+    global_users: ['Konta użytkowników', globalUsers],
     announcements: ['Informator · etykiety i ważność', announcementConfig],
     planner: ['Planner · konfiguracja', plannerConfig],
+    planner_global: ['Globalne ustawienia czasu pracy', plannerGlobalConfig],
     dictionaries: ['Słowniki projektu', `<section class="config-panel-body config-dictionaries">${dictionaries}</section>`],
     completion_requirements: ['Zapotrzebowanie', `<section class="config-panel-body"><p class="sub">Ta lista jest dostępna jako wielokrotny wybór w Statusie, Zadaniach i Otwartych punktach.</p>${(state.config.requirements || []).map((item, index, items) => `<div class="settings-row">${canEdit ? orderControls('completion_requirements', items, index) : ''}<span><b>${escapeHtml(item.name)}</b><small class="sub">${escapeHtml(item.description || 'Bez opisu')}</small></span>${canEdit ? `<button class="mini edit-requirement-config" data-id="${item.id}">Edytuj</button>` : ''}${admin ? `<button class="mini delete-requirement-config" data-id="${item.id}">Usuń</button>` : ''}</div>`).join('') || '<div class="empty compact-empty">Nie zdefiniowano jeszcze zapotrzebowania.</div>'}${canEdit ? '<button class="secondary" id="new-requirement-config">+ Dodaj pozycję</button>' : ''}</section>`],
     reminders: ['Ustawienia przypomnień', `<section class="config-panel-body">${admin ? `<p class="sub">Źródło obszarów dla „Mojego podsumowania” każdy użytkownik wybiera indywidualnie w tym module.</p><label class="field"><span>Domyślne przypomnienie po utworzeniu (dni)</span><input id="default-reminder" type="number" min="1" value="${escapeHtml(state.config.settings.default_reminder_days || 14)}"></label><label class="field"><span>Okno „zbliżających się” przypomnień (dni)</span><input id="warning-days" type="number" min="1" value="${escapeHtml(state.config.settings.reminder_warning_days || 7)}"></label>` : '<p class="sub">Tylko administrator może zmieniać ustawienia projektu.</p>'}</section>`],
@@ -5706,11 +5713,55 @@ async function editStatusWorkflowState(id = null) {
 function refreshConfigPanel() {
   if (!state.configPanel) return;
   const dialog = $('#config-full-dialog'); const [title, html] = configPanelDefinition(state.configPanel);
+  const globalPanels = new Set(['projects', 'global_users', 'planner_global', 'security']);
+  const scope = globalPanels.has(state.configPanel) ? 'global' : 'project';
   dialog.dataset.refreshing = '1';
-  $('#config-full-title').textContent = title;
+  $('#config-full-title').innerHTML = `<span class="config-scope-badge ${scope}">${scope === 'global' ? 'GLOBALNE' : 'PROJEKT'}</span>${escapeHtml(title)}`;
   $('#config-full-content').innerHTML = html;
   bindSettings();
   requestAnimationFrame(() => { $('#config-full-content').scrollTop = state.configScroll || 0; dialog.dataset.dirty = ''; dialog.dataset.refreshing = ''; });
+}
+
+function bindProjectUsersEditor() {
+  const form = $('#project-users-form');
+  if (!form) return;
+  const rows = [...form.querySelectorAll('[data-project-user]')];
+  const readRow = row => ({
+    user_id: Number(row.dataset.projectUser),
+    project_active: row.querySelector('[name="project_active"]').checked ? 1 : 0,
+    project_role: row.querySelector('[name="project_role"]').value,
+    planner_enabled: row.querySelector('[name="planner_enabled"]').checked ? 1 : 0,
+    assignable: row.querySelector('[name="assignable"]').checked ? 1 : 0,
+    can_manage_external_dependencies: row.querySelector('[name="can_manage_external_dependencies"]').checked ? 1 : 0
+  });
+  const initial = new Map(rows.map(row => [Number(row.dataset.projectUser), JSON.stringify(readRow(row))]));
+  const changedRows = () => rows.map(readRow).filter(item => initial.get(item.user_id) !== JSON.stringify(item));
+  const refresh = () => {
+    rows.forEach(row => row.classList.toggle('inactive', !row.querySelector('[name="project_active"]').checked));
+    const count = changedRows().length;
+    form.querySelectorAll('button[type="submit"]').forEach(button => { button.disabled = count === 0; });
+    $('#project-users-change-count').textContent = count ? `${count} ${count === 1 ? 'użytkownik oczekuje' : 'użytkowników oczekuje'} na zapis` : 'Brak niezapisanych zmian';
+    $('#config-full-dialog').dataset.dirty = count ? '1' : '';
+  };
+  form.querySelectorAll('input,select').forEach(control => control.addEventListener('change', refresh));
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    const changes = changedRows();
+    if (!changes.length) return;
+    const destructive = changes.some(change => {
+      const before = JSON.parse(initial.get(change.user_id));
+      return (before.project_active && !change.project_active) || (before.planner_enabled && !change.planner_enabled);
+    });
+    if (destructive && !await uiConfirm('Zapisz zmiany uczestników', 'Wyłączenie dostępu lub widoczności w Plannerze usuwa przypisania tej osoby z planu bieżącego projektu.', 'Zapisz zmiany', true)) return;
+    form.querySelectorAll('button[type="submit"]').forEach(button => { button.disabled = true; });
+    try {
+      const result = await api('/api/project-users', { method: 'PUT', body: JSON.stringify({ changes }) });
+      $('#config-full-dialog').dataset.dirty = '';
+      toast(`Zapisano ustawienia ${result.updated} ${result.updated === 1 ? 'użytkownika' : 'użytkowników'}`);
+      await loadData(true);
+    } catch (error) { toast(error.message, true); refresh(); }
+  });
+  refresh();
 }
 
 function bindSettings() {
@@ -5802,16 +5853,11 @@ function bindSettings() {
   $$('.edit-option').forEach(button => button.addEventListener('click', async () => { const fields = [{ name: 'value', label: 'Wartość', value: button.dataset.value, required: true }, { name: 'description', label: 'Opis', type: 'textarea', rows: 3, value: button.dataset.description || '', full: true }]; if (button.dataset.kind === 'waiting_for') fields.push({ name: 'external_dependency_enabled', label: 'Pokazuj punkty z tą wartością w Zależnościach zewnętrznych', type: 'checkbox', value: button.dataset.externalEnabled === '1', full: true }); const result = await uiForm({ title: 'Edytuj pozycję słownika', fields }); if (!result?.value) return; await api(`/api/options/${button.dataset.id}`, { method: 'PATCH', body: JSON.stringify({ kind: button.dataset.kind, value: result.value, description: result.description || '', external_dependency_enabled: result.external_dependency_enabled ? 1 : 0 }) }); await loadData(); }));
   $$('.delete-config').forEach(button => button.addEventListener('click', async () => { if (!await uiConfirm('Usuń pozycję konfiguracji', 'Zmiana może wpłynąć na istniejące rekordy projektu.', 'Usuń', true)) return; const endpoints = { category: 'categories', subcategory: 'subcategories', task_category: 'task-categories', task_subcategory: 'task-subcategories', option: 'options' }; await api(`/api/${endpoints[button.dataset.kind]}/${button.dataset.id}`, { method: 'DELETE' }); await loadData(); }));
   $$('.edit-controller').forEach(button => button.addEventListener('click', () => openRecord('controllers', state.controllers.find(item => item.id === Number(button.dataset.id)))));
-  $$('.edit-user').forEach(button => button.addEventListener('click', () => openRecord('users', state.users.find(item => item.id === Number(button.dataset.id)))));
+  $$('.edit-global-user').forEach(button => button.addEventListener('click', () => openRecord('global_users', state.users.find(item => item.id === Number(button.dataset.id)))));
   $$('.reset-user-password').forEach(button => button.addEventListener('click', () => resetUserPassword(Number(button.dataset.id), button.dataset.name)));
-  $$('.toggle-user-planner').forEach(button => button.addEventListener('click', async () => {
-    const disabling = button.dataset.enabled === '1';
-    if (disabling && !await uiConfirm('Wyłącz osobę z Plannera', 'Plan tej osoby, korekty czasu i przypisane obszary zostaną usunięte z bieżącego projektu.', 'Wyłącz i usuń przypisania', true)) return;
-    try { const saved = await api(`/api/users/${button.dataset.id}/planner`, { method: 'PUT', body: JSON.stringify({ planner_enabled: disabling ? 0 : 1 }) }); toast(`Ustawienie Plannera zostało zapisane${saved.removed_assignments ? ` · usunięto ${saved.removed_assignments} przypisań` : ''}`); await loadData(); } catch (error) { toast(error.message, true); }
-  }));
-  $$('.toggle-user-assignable').forEach(button => button.addEventListener('click', async () => { try { await api(`/api/users/${button.dataset.id}`, { method: 'PATCH', body: JSON.stringify({ assignable: button.dataset.enabled === '1' ? 0 : 1 }) }); toast('Widoczność użytkownika na listach wyboru została zapisana'); await loadData(); } catch (error) { toast(error.message, true); } }));
+  bindProjectUsersEditor();
   $('#new-controller')?.addEventListener('click', () => openRecord('controllers'));
-  $('#new-user')?.addEventListener('click', () => openRecord('users'));
+  $('#new-user')?.addEventListener('click', () => openRecord('global_users'));
   $('#new-project')?.addEventListener('click', () => editProject());
   $$('.edit-project').forEach(button => button.addEventListener('click', () => editProject(Number(button.dataset.id))));
   $$('.delete-project').forEach(button => button.addEventListener('click', () => deleteProjectSafely(Number(button.dataset.id))));
@@ -6386,8 +6432,8 @@ const formDefinitions = {
     ['scope_group_ids', 'Zakres projektu', 'announcement-scopes'], ['recipient_user_ids', 'Osoby, których wiadomość bezpośrednio dotyczy', 'announcement-users'],
     ['links', 'Przypięte elementy', 'multi-links', ['status', 'task', 'point', 'note', 'goal']]
   ] },
-  users: { endpoint: '/api/users', title: 'użytkownika', fields: [
-    ['username', 'Login'], ['display_name', 'Imię i nazwisko'], ['password', 'Hasło', 'password'], ['system_role', 'Rola systemowa', 'select', [{ value: 'user', label: 'Konto projektowe' }, { value: 'system_admin', label: 'Administrator systemu' }]], ['project_role', 'Rola w tym projekcie', 'select', [{ value: 'user', label: 'Użytkownik' }, { value: 'moderator', label: 'Manager projektu' }, { value: 'project_admin', label: 'Administrator projektu' }]], ['project_active', 'Dostęp do projektu', 'boolean'], ['assignable', 'Widoczny na listach wyboru w projekcie', 'boolean'], ['planner_enabled', 'Uwzględniaj w Plannerze', 'boolean'], ['can_manage_external_dependencies', 'Może modyfikować zależności zewnętrzne', 'boolean'], ['active', 'Konto globalnie aktywne', 'boolean']
+  global_users: { endpoint: '/api/users', title: 'konto użytkownika', fields: [
+    ['username', 'Login'], ['display_name', 'Imię i nazwisko'], ['password', 'Nowe hasło (pozostaw puste bez zmiany)', 'password'], ['system_role', 'Rola systemowa', 'select', [{ value: 'user', label: 'Konto projektowe' }, { value: 'system_admin', label: 'Administrator systemu' }]], ['active', 'Konto globalnie aktywne', 'boolean']
   ] },
   controllers: { endpoint: '/api/controllers', title: 'sterownik', fields: [['leaf_code', 'Nazwa / kod sterownika'], ['group_id', 'Grupa w hierarchii', 'controller-group'], ['area', 'Obszar'], ['description', 'Opis', 'textarea']] }
 };
@@ -6531,7 +6577,7 @@ async function openRecord(type, record = null, prefill = null, duplicateSource =
   state.goalDraftLinks = source?.links ? source.links.map(link => ({ entity_type: link.entity_type, entity_id: Number(link.entity_id) })) : [];
   state.linkDraft = source?.links ? source.links.map(link => ({ entity_type: link.entity_type, entity_id: Number(link.entity_id) })) : [];
   renderRecordDialogHeader();
-  const configDelete = Boolean(record && state.me.role === 'system_admin' && ['controllers', 'users'].includes(type) && !(type === 'users' && record.id === state.me.id));
+  const configDelete = Boolean(record && state.me.role === 'system_admin' && ['controllers', 'global_users'].includes(type) && !(type === 'global_users' && record.id === state.me.id));
   $('#remove').hidden = !(record?.can_delete || configDelete);
   $('#duplicate').hidden = !(record && ['status', 'tasks', 'points', 'goals'].includes(type));
   $('#skip-recurrence').hidden = !(type === 'tasks' && record && Number(record.recurrence_interval || 0) > 0 && record.status !== 'Done');
@@ -6549,11 +6595,6 @@ async function openRecord(type, record = null, prefill = null, duplicateSource =
     ? definition.fields.filter(field => !['hierarchy_target', 'status_group_id', 'status_subgroup_id'].includes(field[0]))
     : definition.fields;
   $('#fields').innerHTML = visibleFields.map(field => fieldHtml(field, source, type)).join('');
-  if (type === 'users' && state.me.role !== 'system_admin') {
-    ['username', 'display_name', 'password', 'system_role', 'active'].forEach(name => { const input = $(`#fields [name="${name}"]`); if (input) input.disabled = true; });
-    const projectRole = $('#fields [name="project_role"]');
-    if (projectRole) [...projectRole.options].forEach(option => { if (option.value === 'project_admin') option.remove(); });
-  }
   bindDynamicFields(type);
   if (!$('#modal').open) $('#modal').showModal();
   setRecordDialogMode(state.dialog.editing);

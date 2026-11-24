@@ -2210,6 +2210,40 @@ test('publishing RAW sends unmanaged project changes to manager approval', () =>
   }
 });
 
+test('project participants are saved in one batch and manager deletions notify project leaders', () => {
+  const temporary = temporaryDatabase();
+  const repository = openDatabase(temporary.path);
+  try {
+    const adminAccount = repository.authenticate('admin');
+    const admin = repository.me(adminAccount.id);
+    const workerRecord = repository.saveUser(null, { username: 'batch.worker', display_name: 'Batch Worker', password: 'secret123', project_role: 'user', planner_enabled: 1, assignable: 1 });
+    const managerRecord = repository.saveUser(null, { username: 'batch.manager', display_name: 'Batch Manager', password: 'secret123', project_role: 'moderator', planner_enabled: 1, assignable: 1 });
+    const worker = repository.me(workerRecord.id); const manager = repository.me(managerRecord.id);
+    repository.savePlannerDay({ user_id: worker.id, plan_date: '2027-05-03', entries: [{ activity_type: 'work', allow_without_area: 1, note: 'Plan przed zmianą', work_mode: 'online', shift: 'Dzień' }] }, admin);
+
+    const saved = repository.saveProjectUsers({ changes: [
+      { user_id: worker.id, project_active: 1, project_role: 'user', planner_enabled: 0, assignable: 0, can_manage_external_dependencies: 1 },
+      { user_id: manager.id, project_active: 1, project_role: 'moderator', planner_enabled: 1, assignable: 1, can_manage_external_dependencies: 0 }
+    ] });
+    assert.equal(saved.updated, 2);
+    assert.equal(saved.removed_assignments, 1);
+    const workerSettings = repository.users().find(item => item.id === worker.id);
+    assert.equal(workerSettings.planner_enabled, 0);
+    assert.equal(workerSettings.assignable, 0);
+    assert.equal(workerSettings.can_manage_external_dependencies, 1);
+    assert.equal(repository.planner('2027-05-03', '2027-05-03', admin).entries.some(item => item.user_id === worker.id), false);
+    assert.throws(() => repository.saveProjectUsers({ changes: [{ user_id: worker.id }, { user_id: worker.id }] }), /powtórzone konto/);
+
+    const task = repository.saveTask(null, { controller: repository.controllers()[0].code, title: 'Usunięcie przez managera' }, worker);
+    repository.deleteTask(task.id, manager);
+    const leaderNotifications = repository.notifications(admin, 100);
+    assert.ok(leaderNotifications.some(item => item.title.includes('Usunięto zadanie') && item.message.includes('Manager projektu')));
+  } finally {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
 test('task images are project-scoped, size-limited, audited and included in backups', () => {
   const temporary = temporaryDatabase();
   const repository = openDatabase(temporary.path);

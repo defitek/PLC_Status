@@ -94,6 +94,9 @@ test('API protects manager data, project directory and account sessions', async 
   const worker = await createUser({ username: 'security-worker', display_name: 'Security Worker', password: 'worker-password', project_role: 'user' });
   const manager = await createUser({ username: 'security-manager', display_name: 'Security Manager', password: 'manager-password', project_role: 'moderator' });
   const hidden = await createUser({ username: 'security-hidden', display_name: 'Hidden Account', password: 'hidden-password', project_role: 'user' });
+  const batchMembership = await request(baseUrl, '/api/project-users', { cookie: adminLogin.cookie, method: 'PUT', body: { changes: [{ user_id: worker.id, project_active: 1, project_role: 'user', planner_enabled: 1, assignable: 0, can_manage_external_dependencies: 0 }] } });
+  assert.equal(batchMembership.status, 200);
+  assert.equal((await batchMembership.json()).updated, 1);
   const deactivate = await request(baseUrl, `/api/users/${hidden.id}`, { cookie: adminLogin.cookie, method: 'PATCH', body: { project_active: 0 } });
   assert.equal(deactivate.status, 200);
 
@@ -127,6 +130,7 @@ test('API protects manager data, project directory and account sessions', async 
   assert.ok(workerUsers.some(user => user.id === manager.id));
   assert.ok(workerUsers.every(user => !Object.hasOwn(user, 'username') && !Object.hasOwn(user, 'system_role')));
   assert.ok(workerUsers.every(user => !Object.hasOwn(user, 'project_role') && !Object.hasOwn(user, 'planner_enabled') && !Object.hasOwn(user, 'area_ids')));
+  assert.equal((await request(baseUrl, '/api/project-users', { cookie: workerLogin.cookie, method: 'PUT', body: { changes: [] } })).status, 403);
   const workerPlanner = await (await request(baseUrl, `/api/planner?from=${planDate}&to=${planDate}`, { cookie: workerLogin.cookie })).json();
   assert.ok(workerPlanner.users.every(user => !Object.hasOwn(user, 'username')));
   assert.ok(workerPlanner.cross_project_entries.some(entry => entry.user_id === worker.id));
@@ -141,6 +145,7 @@ test('API protects manager data, project directory and account sessions', async 
   const managerLogin = await login(baseUrl, 'security-manager', 'manager-password');
   assert.equal(managerLogin.response.status, 200);
   await selectProject(baseUrl, managerLogin.cookie, projectId);
+  assert.equal((await request(baseUrl, '/api/project-users', { cookie: managerLogin.cookie, method: 'PUT', body: { changes: [] } })).status, 403);
   const operationsResponse = await request(baseUrl, '/api/operations?tab=dependencies', { cookie: managerLogin.cookie });
   assert.equal(operationsResponse.status, 200);
   const operations = await operationsResponse.json();

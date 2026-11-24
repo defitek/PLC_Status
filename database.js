@@ -678,9 +678,25 @@ function createRepository(db, defaultProjectId) {
   }
 
   function canDeleteTask(task, user) {
-    if (['system_admin', 'project_admin'].includes(user.role)) return true;
-    if (!['user', 'moderator'].includes(user.role) || task.created_by !== user.id) return false;
+    if (['system_admin', 'project_admin', 'moderator'].includes(user.role)) return true;
+    if (user.role !== 'user' || task.created_by !== user.id) return false;
     return !one("SELECT 1 FROM audit_log WHERE project_id=? AND entity_type='task' AND entity_id=? AND action='update' AND user_id IS NOT NULL AND user_id!=? LIMIT 1", activeProjectId(), task.id, user.id);
+  }
+
+  function canDeletePoint(point, user) {
+    if (['system_admin', 'project_admin', 'moderator'].includes(user.role)) return true;
+    if (user.role !== 'user' || point.created_by !== user.id) return false;
+    return !one("SELECT 1 FROM audit_log WHERE project_id=? AND entity_type='point' AND entity_id=? AND action='update' AND user_id IS NOT NULL AND user_id!=? LIMIT 1", activeProjectId(), point.id, user.id);
+  }
+
+  function notifyManagerDeletion(type, snapshot, currentUser) {
+    if (currentUser?.role !== 'moderator') return;
+    const names = { status: 'punkt statusu', task: 'zadanie', point: 'otwarty punkt', goal: 'kamień milowy' };
+    const title = snapshot.function_detail || snapshot.title || `Element #${snapshot.id}`;
+    const recipients = new Set(all("SELECT user_id FROM project_memberships WHERE project_id=? AND active=1 AND role='project_admin'", activeProjectId()).map(row => Number(row.user_id)));
+    if (['task', 'point'].includes(type) && snapshot.created_by) recipients.add(Number(snapshot.created_by));
+    recipients.delete(Number(currentUser.id));
+    for (const userId of recipients) createNotification(userId, 'automation', type, snapshot.id, `Usunięto ${names[type]}: ${title}`, `${currentUser.display_name} (Manager projektu) usunął element. Informacja została wysłana zgodnie z regułami uprawnień.`);
   }
 
   function setEntityLinks(sourceType, sourceId, links, currentUser) {
@@ -957,7 +973,7 @@ function createRepository(db, defaultProjectId) {
       requirement_ids: requirements.map(item => item.id), requirement_names: requirements.map(item => item.name).join(', '),
       progress_updated_at: progressUpdate?.at || null,
       progress_updated_by_name: progressUpdate?.by_name || '',
-      can_delete: ['system_admin', 'project_admin'].includes(currentUser.role),
+      can_delete: ['system_admin', 'project_admin', 'moderator'].includes(currentUser.role),
       ...editLockState('status', row.id, currentUser),
       ...dependencyState('status', row)
     };
@@ -1018,7 +1034,7 @@ function createRepository(db, defaultProjectId) {
 
   function decoratePoint(row, currentUser) {
     const requirements = requirementRows('point', row.id);
-    return { ...row, links: entityLinkRows('point', row.id), mentioned_user_ids: mentionIds('point', row.id), comments: commentRows('point', row.id), requirements, requirement_ids: requirements.map(item => item.id), requirement_names: requirements.map(item => item.name).join(', '), can_delete: ['system_admin', 'project_admin'].includes(currentUser.role), ...editLockState('point', row.id, currentUser), ...dependencyState('point', row) };
+    return { ...row, links: entityLinkRows('point', row.id), mentioned_user_ids: mentionIds('point', row.id), comments: commentRows('point', row.id), requirements, requirement_ids: requirements.map(item => item.id), requirement_names: requirements.map(item => item.name).join(', '), can_delete: canDeletePoint(row, currentUser), ...editLockState('point', row.id, currentUser), ...dependencyState('point', row) };
   }
 
   function decorateNote(row, currentUser) {
@@ -1320,7 +1336,7 @@ function createRepository(db, defaultProjectId) {
         ...attachControllerMeta(goal),
         links: all('SELECT * FROM goal_links WHERE project_id=? AND goal_id=? ORDER BY entity_type,entity_id', activeProjectId(), goal.id),
         comments: commentRows('goal', goal.id),
-        can_delete: ['system_admin', 'project_admin'].includes(currentUser.role),
+        can_delete: ['system_admin', 'project_admin', 'moderator'].includes(currentUser.role),
         ...editLockState('goal', goal.id, currentUser)
       }));
   }
@@ -4513,6 +4529,36 @@ function createRepository(db, defaultProjectId) {
         WHERE pm.project_id=? AND pm.active=1 AND u.active=1
         ORDER BY u.sort_order,u.display_name`, activeProjectId());
     },
+    saveProjectUsers(input) {
+      const changes = Array.isArray(input?.changes) ? input.changes : [];
+      if (!changes.length) return { updated: 0, removed_assignments: 0, users: this.users() };
+      if (changes.length > 500) throw appError('Jednorazowo można zmienić maksymalnie 500 użytkowników');
+      const seen = new Set(); let removedAssignments = 0;
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        for (const change of changes) {
+          const userId = asId(change.user_id);
+          if (!userId || seen.has(userId)) throw appError('Lista zmian użytkowników zawiera nieprawidłowe lub powtórzone konto');
+          seen.add(userId);
+          const account = one('SELECT id,system_role,active FROM users WHERE id=?', userId);
+          if (!account) throw appError('Nie znaleziono użytkownika', 404);
+          const current = one('SELECT * FROM project_memberships WHERE project_id=? AND user_id=?', activeProjectId(), userId) || {};
+          const systemAdmin = account.system_role === 'system_admin';
+          const projectRole = systemAdmin ? 'project_admin' : ['project_admin', 'moderator', 'user'].includes(clean(change.project_role)) ? clean(change.project_role) : 'user';
+          const projectActive = systemAdmin ? 1 : Number(change.project_active) ? 1 : 0;
+          const plannerEnabled = projectActive && Number(change.planner_enabled) ? 1 : 0;
+          const assignable = projectActive && Number(change.assignable) ? 1 : 0;
+          const dependencyAccess = systemAdmin ? 1 : projectActive && Number(change.can_manage_external_dependencies) ? 1 : 0;
+          db.prepare(`INSERT INTO project_memberships(project_id,user_id,role,active,planner_enabled,assignable,can_manage_external_dependencies) VALUES(?,?,?,?,?,?,?)
+            ON CONFLICT(project_id,user_id) DO UPDATE SET role=excluded.role,active=excluded.active,planner_enabled=excluded.planner_enabled,assignable=excluded.assignable,can_manage_external_dependencies=excluded.can_manage_external_dependencies`).run(
+            activeProjectId(), userId, projectRole, projectActive, plannerEnabled, assignable, dependencyAccess
+          );
+          if ((!projectActive && Number(current.active)) || (!plannerEnabled && Number(current.planner_enabled))) removedAssignments += clearPlannerProjectAssignments(userId);
+        }
+        db.exec('COMMIT');
+      } catch (error) { db.exec('ROLLBACK'); throw error; }
+      return { updated: changes.length, removed_assignments: removedAssignments, users: this.users() };
+    },
     saveUser(id, input) {
       if (id) {
         if (Object.hasOwn(input, 'username') && (!clean(input.username) || clean(input.username).length > 100)) throw appError('Login musi mieć od 1 do 100 znaków');
@@ -5574,7 +5620,12 @@ function createRepository(db, defaultProjectId) {
         return { created: saved.length, items: saved };
       } catch (error) { db.exec('ROLLBACK'); throw error; }
     },
-    deleteStatus(id, currentUser) { removeWithAudit('status', id, currentUser); },
+    deleteStatus(id, currentUser) {
+      if (!['system_admin', 'project_admin', 'moderator'].includes(currentUser.role)) throw appError('Nie możesz usunąć tego punktu statusu', 403);
+      const before = baseSnapshot('status', id); if (!before) throw appError('Nie znaleziono punktu statusu', 404);
+      notifyManagerDeletion('status', before, currentUser);
+      removeWithAudit('status', id, currentUser);
+    },
 
     tasks(code, currentUser) { return taskRows(code, currentUser); },
     taskImages(taskId) { return taskImageRows(taskId); },
@@ -5713,6 +5764,7 @@ function createRepository(db, defaultProjectId) {
       if (!task) throw appError('Nie znaleziono zadania', 404);
       if (!canDeleteTask(task, currentUser)) throw appError('Nie możesz usunąć tego zadania', 403);
       assertEntityEditable('task', id, currentUser);
+      notifyManagerDeletion('task', baseSnapshot('task', id), currentUser);
       removeWithAudit('task', id, currentUser);
     },
     skipRecurringTask(id, currentUser) {
@@ -5788,7 +5840,14 @@ function createRepository(db, defaultProjectId) {
       const row = one(`SELECT p.*,c.code controller,creator.display_name created_by_name,owner.display_name owner_name FROM open_points p JOIN controllers c ON c.id=p.controller_id LEFT JOIN users creator ON creator.id=p.created_by LEFT JOIN users owner ON owner.id=p.owner_user_id WHERE p.id=?`, recordId);
       return decoratePoint(attachControllerMeta(row), currentUser);
     },
-    deletePoint(id, currentUser) { removeWithAudit('point', id, currentUser); },
+    deletePoint(id, currentUser) {
+      const point = one('SELECT * FROM open_points WHERE id=? AND project_id=?', id, activeProjectId());
+      if (!point) throw appError('Nie znaleziono otwartego punktu', 404);
+      if (!canDeletePoint(point, currentUser)) throw appError('Nie możesz usunąć tego otwartego punktu', 403);
+      assertEntityEditable('point', id, currentUser);
+      notifyManagerDeletion('point', baseSnapshot('point', id), currentUser);
+      removeWithAudit('point', id, currentUser);
+    },
 
     notes(code, from, to, currentUser) { return noteRows(code, from, to, currentUser); },
     saveNote(id, input, currentUser) {
@@ -5877,7 +5936,12 @@ function createRepository(db, defaultProjectId) {
       writeAudit('goal', recordId, id ? 'update' : 'create', currentUser, before, after);
       return goalRows('all', currentUser).find(goal => goal.id === recordId);
     },
-    deleteGoal(id, currentUser) { removeWithAudit('goal', id, currentUser); },
+    deleteGoal(id, currentUser) {
+      if (!['system_admin', 'project_admin', 'moderator'].includes(currentUser.role)) throw appError('Nie możesz usunąć tego kamienia milowego', 403);
+      const before = baseSnapshot('goal', id); if (!before) throw appError('Nie znaleziono kamienia milowego', 404);
+      notifyManagerDeletion('goal', before, currentUser);
+      removeWithAudit('goal', id, currentUser);
+    },
 
     audit(type, id) {
       return all(`SELECT a.*,u.display_name user_name FROM audit_log a LEFT JOIN users u ON u.id=a.user_id WHERE a.project_id=? AND a.entity_type=? AND a.entity_id=? ORDER BY a.changed_at DESC,a.id DESC`, activeProjectId(), type, id)

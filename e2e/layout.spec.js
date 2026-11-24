@@ -107,6 +107,40 @@ test('uproszczona nawigacja łączy pracę, plan i komunikację', async ({ page 
   await expectViewportContained(page);
 });
 
+test('konfigurator rozdziela zakres globalny i projektowy oraz zapisuje użytkowników zbiorczo', async ({ page }) => {
+  const createdUser = await page.evaluate(async () => {
+    const suffix = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+    const response = await fetch('/api/users', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: `ui.batch.${suffix}`, display_name: `Użytkownik tabeli ${suffix}`, password: 'ui-batch-password', project_role: 'user', project_active: 1, planner_enabled: 1, assignable: 1 }) });
+    if (!response.ok) throw new Error((await response.json()).error || 'Nie udało się utworzyć konta testowego');
+    return response.json();
+  });
+  await page.reload();
+  await expect(page.locator('#content')).toBeVisible();
+  await openView(page, 'settings');
+  await expect(page.locator('.settings-scope.global')).toBeVisible();
+  await expect(page.locator('.settings-scope.project')).toBeVisible();
+  await expect(page.locator('.settings-scope.global .config-scope-badge')).toHaveText('GLOBALNE');
+  await expect(page.locator('.settings-scope.project .config-scope-badge')).toHaveText('PROJEKT');
+  await page.locator('[data-config-panel="users"]').click();
+  await expect(page.locator('#config-full-dialog')).toBeVisible();
+  await expect(page.locator('#config-full-title .config-scope-badge')).toHaveText('PROJEKT');
+  await expect(page.locator('.project-users-table thead')).toContainText('Listy wyboru');
+  const row = page.locator(`.project-users-table tbody tr[data-project-user="${createdUser.id}"]`);
+  const userId = createdUser.id;
+  const checkbox = row.locator('[name="assignable"]');
+  const initialChecked = await checkbox.isChecked();
+  const initialServerValue = await page.evaluate(async id => Number((await fetch('/api/users').then(response => response.json())).find(item => item.id === id).assignable), userId);
+  expect(Boolean(initialServerValue)).toBe(initialChecked);
+  await checkbox.evaluate(input => input.click());
+  await expect(page.locator('#save-project-users')).toBeEnabled();
+  const beforeSaveValue = await page.evaluate(async id => Number((await fetch('/api/users').then(response => response.json())).find(item => item.id === id).assignable), userId);
+  expect(Boolean(beforeSaveValue)).toBe(initialChecked);
+  await page.locator('#save-project-users').click();
+  await expect.poll(() => page.evaluate(async id => Number((await fetch('/api/users').then(response => response.json())).find(item => item.id === id).assignable), userId)).toBe(initialChecked ? 0 : 1);
+  await expect(page.locator('#save-project-users')).toBeDisabled();
+  await expectViewportContained(page);
+});
+
 test('nagłówki, wyszukiwarka i karty Centrum wiadomości pozostają kompaktowe', async ({ page }) => {
   const searchAlignment = await page.evaluate(() => {
     const input = document.querySelector('#global-search').getBoundingClientRect();
