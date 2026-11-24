@@ -138,6 +138,8 @@ export function prepareDatabase(db, { seedDemo, demoLimit = 100 }) {
       FROM planner_raw_plans plan JOIN planner_raw_users scope ON scope.raw_plan_id=plan.id
       JOIN system_absences absence ON absence.user_id=scope.user_id AND absence.absence_date BETWEEN plan.from_date AND plan.to_date`);
   });
+  runMigration(db, '063-remove-monthly-employee-reviews', () => removeMonthlyEmployeeReviews(db));
+  runMigration(db, '064-remove-configured-user-areas', () => removeConfiguredUserAreas(db));
   return defaultProjectId;
 }
 
@@ -530,27 +532,29 @@ function migrateEntityDependencies(db) {
 }
 
 function removeCommissioningModule(db) {
-  const affectedReviews = db.prepare("SELECT DISTINCT review_id FROM monthly_employee_review_items WHERE entity_type='campaign'").all();
-  db.prepare("DELETE FROM monthly_employee_review_items WHERE entity_type='campaign'").run();
-  for (const { review_id: reviewId } of affectedReviews) {
-    const review = db.prepare('SELECT * FROM monthly_employee_reviews WHERE id=?').get(reviewId);
-    if (!review) continue;
-    const items = db.prepare('SELECT * FROM monthly_employee_review_items WHERE review_id=? AND excluded=0').all(reviewId);
-    const weight = items.reduce((sum, item) => sum + Number(item.contribution_share || 0), 0);
-    const itemScore = weight ? items.reduce((sum, item) => sum + ((Number(item.difficulty) + Number(item.effort) + Number(item.impact) + Number(item.quality)) / 4) * Number(item.contribution_share || 0), 0) / weight * 20 : 0;
-    const dimensionScore = ['delivery_score', 'quality_score', 'timeliness_score', 'communication_score', 'collaboration_score'].reduce((sum, key) => sum + Number(review[key] || 0), 0) / 5 * 20;
-    const itemWeight = Number(db.prepare("SELECT value FROM settings WHERE project_id=? AND key='employee_review_item_weight'").get(review.project_id)?.value || 60);
-    const dimensionWeight = Number(db.prepare("SELECT value FROM settings WHERE project_id=? AND key='employee_review_dimension_weight'").get(review.project_id)?.value || 40);
-    const denominator = (items.length ? itemWeight : 0) + dimensionWeight;
-    const overall = denominator ? ((items.length ? itemScore * itemWeight : 0) + dimensionScore * dimensionWeight) / denominator : 0;
-    db.prepare('UPDATE monthly_employee_reviews SET overall_score=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(Math.round(overall * 10) / 10, reviewId);
-  }
   db.exec(`
     DROP TABLE IF EXISTS test_campaign_items;
     DROP TABLE IF EXISTS test_campaigns;
     DROP TABLE IF EXISTS readiness_gates;
     DROP TABLE IF EXISTS commissioning_templates;
   `);
+}
+
+function removeMonthlyEmployeeReviews(db) {
+  db.exec(`
+    DROP TABLE IF EXISTS monthly_employee_review_audit;
+    DROP TABLE IF EXISTS monthly_employee_review_items;
+    DROP TABLE IF EXISTS monthly_employee_reviews;
+    DELETE FROM settings WHERE key IN ('employee_review_item_weight','employee_review_dimension_weight');
+  `);
+}
+
+function removeConfiguredUserAreas(db) {
+  db.exec(`
+    DROP TABLE IF EXISTS project_user_areas;
+    DELETE FROM settings WHERE key='my_summary_area_source';
+  `);
+  if (columnNames(db, 'project_memberships').has('summary_area_source')) db.exec('ALTER TABLE project_memberships DROP COLUMN summary_area_source');
 }
 
 function removeDefinitionOfDone(db) {
@@ -942,7 +946,6 @@ function migrateToV6(db) {
 function migrateToV7(db) {
   const additions = [
     ['project_memberships', 'planner_enabled', 'INTEGER NOT NULL DEFAULT 1'],
-    ['project_memberships', 'summary_area_source', "TEXT NOT NULL DEFAULT 'configuration'"],
     ['controllers', 'leaf_code', "TEXT NOT NULL DEFAULT ''"],
     ['tasks', 'controller_group_id', 'INTEGER']
   ];
@@ -1132,11 +1135,6 @@ function migrateToV13(db) {
 
 function migrateToV14(db) {
   ensureColumn(db, 'daily_note_sections', 'information_type', "TEXT NOT NULL DEFAULT 'Aktualizacja'");
-  const setting = db.prepare('INSERT OR IGNORE INTO settings(project_id,key,value) VALUES(?,?,?)');
-  for (const project of db.prepare('SELECT id FROM projects').all()) {
-    setting.run(project.id, 'employee_review_item_weight', '60');
-    setting.run(project.id, 'employee_review_dimension_weight', '40');
-  }
   db.exec(`
     UPDATE daily_note_sections
       SET information_type=COALESCE(NULLIF((SELECT n.type FROM daily_notes n WHERE n.id=daily_note_sections.note_id),''),'Aktualizacja')
@@ -1294,7 +1292,6 @@ function seedConfiguration(db, projectId = 1, variant = 'main') {
   ['Rozpoczęcie', 'Kontynuacja', 'Ukończenie'].forEach((value, index) => option.run(projectId, 'meeting_goal', value, index));
   db.prepare("INSERT OR IGNORE INTO settings(project_id,key,value) VALUES(?,'default_reminder_days','14')").run(projectId);
   db.prepare("INSERT OR IGNORE INTO settings(project_id,key,value) VALUES(?,'reminder_warning_days','7')").run(projectId);
-  db.prepare("INSERT OR IGNORE INTO settings(project_id,key,value) VALUES(?,'my_summary_area_source','configuration')").run(projectId);
   [['planner_online_hours', '10.5'], ['planner_offline_hours', '8'], ['planner_base_hours', '8'], ['planner_weekday_multiplier', '1.5'], ['planner_saturday_multiplier', '1.5'], ['planner_sunday_holiday_multiplier', '2'], ['planner_time_off_debit', '8']]
     .forEach(([key, value]) => db.prepare('INSERT OR IGNORE INTO settings(project_id,key,value) VALUES(?,?,?)').run(projectId, key, value));
 
@@ -1601,8 +1598,6 @@ function backfillV6(db) {
     UPDATE goals SET priority='Medium' WHERE priority IS NULL OR priority='';
     INSERT OR IGNORE INTO status_assignees(project_id,status_id,user_id)
       SELECT project_id,id,responsible_user_id FROM status_items WHERE responsible_user_id IS NOT NULL;
-    INSERT OR IGNORE INTO settings(project_id,key,value)
-      SELECT id,'my_summary_area_source','configuration' FROM projects;
   `);
 }
 
@@ -1612,12 +1607,8 @@ function backfillV7(db) {
     db.exec(`
       UPDATE project_memberships
       SET planner_enabled=CASE WHEN user_id IN (SELECT id FROM users WHERE system_role='system_admin') THEN 0 ELSE 1 END;
-      UPDATE project_memberships
-      SET summary_area_source=COALESCE((SELECT CASE WHEN s.value='planner' THEN 'planner' ELSE 'configuration' END
-        FROM settings s WHERE s.project_id=project_memberships.project_id AND s.key='my_summary_area_source'),'configuration');
     `);
   }
-  db.exec("UPDATE project_memberships SET summary_area_source='configuration' WHERE summary_area_source NOT IN ('configuration','planner') OR summary_area_source IS NULL");
   db.exec("DELETE FROM entity_mentions WHERE entity_type='task'");
   db.exec(`INSERT OR IGNORE INTO entity_links(project_id,source_type,source_id,target_type,target_id,created_by)
     SELECT gl.project_id,gl.entity_type,gl.entity_id,'goal',gl.goal_id,g.created_by
@@ -1633,7 +1624,6 @@ function seedV5Demo(db) {
     ['Ogólne', 'Interfejsy', 'Sekwencja'].forEach((name, index) => addGroupSubcategory.run(group.id, name, `Zakres ${name.toLowerCase()} grupy`, index));
   }
 
-  const addArea = db.prepare('INSERT OR IGNORE INTO project_user_areas(project_id,user_id,controller_group_id,sort_order) VALUES(?,?,?,?)');
   const addPlan = db.prepare(`INSERT INTO planner_entries(project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,note,created_by)
     VALUES(?,?,?,?,?,?,?,?,?)`);
   const addAnnotation = db.prepare(`INSERT INTO calendar_annotations(project_id,title,description,start_date,end_date,controller_id,assigned_user_id,color,created_by)
@@ -1646,9 +1636,6 @@ function seedV5Demo(db) {
     const controllers = db.prepare('SELECT id FROM controllers WHERE project_id=? ORDER BY sort_order,id').all(project.id);
     if (!groups.length || !users.length) continue;
     users.forEach((user, index) => {
-      const primary = groups[index % groups.length];
-      addArea.run(project.id, user.id, primary.id, 0);
-      if (groups.length > 1 && index % 3 === 0) addArea.run(project.id, user.id, groups[(index + 1) % groups.length].id, 1);
       for (let offset = 0; offset < 21; offset += 1) {
         const value = new Date(`${isoDate(offset)}T12:00:00Z`);
         if ([0, 6].includes(value.getUTCDay()) || (index + offset) % 5 === 0) continue;

@@ -575,12 +575,11 @@ test('Planner supports optional manpower, configured vehicles and removes orphan
     assert.equal(plan.entries.filter(item => item.user_id === worker.id && item.activity_type === 'work').length, 2);
     assert.equal(plan.entries.find(item => item.activity_type === 'transport' && item.user_id === worker.id).transport_code, 'T1');
     assert.equal(plan.summary.find(item => item.plan_date === date).headcount, 1);
+    assert.deepEqual(plan.users.find(item => item.id === worker.id).planned_area_ids.sort((a, b) => a - b), [first.id, second.id].sort((a, b) => a - b));
 
-    repository.saveUserAreas(worker.id, { area_ids: [first.id] });
     const disabled = repository.setPlannerEnabled(worker.id, { planner_enabled: 0 });
     assert.equal(disabled.removed_assignments, 3);
     assert.equal(repository.projectBackup().tables.planner_entries.some(item => item.user_id === worker.id), false);
-    assert.deepEqual(repository.users().find(item => item.id === worker.id).area_ids, []);
   } finally {
     repository.close();
     rmSync(temporary.directory, { recursive: true, force: true });
@@ -925,9 +924,6 @@ test('V5 data remains compatible with planner, calendar, weighted teamwork, cano
       const root = repository.saveControllerGroup(null, { name: 'V5 Area' });
       const subarea = repository.saveControllerGroup(null, { name: 'V5 Subarea', parent_id: root.id });
       assert.throws(() => repository.saveControllerGroup(null, { name: 'Too deep', parent_id: subarea.id }), /maksymalnie/);
-      assert.throws(() => repository.saveUserAreas(worker.id, { area_ids: [root.id, subarea.id] }), /nadrzędnego/);
-      repository.saveUserAreas(worker.id, { area_ids: [subarea.id, subarea.id] });
-      assert.deepEqual(repository.users().find(item => item.id === worker.id).area_ids, [subarea.id]);
 
       const task = repository.saveTask(null, {
         controller: 'HB522', title: 'Weighted teamwork V5', direct_assignee_user_ids: [admin.id, worker.id, worker.id],
@@ -1051,7 +1047,6 @@ test('V6 supports four-level display paths, safe manpower modes, calendar placem
       const critical = repository.calendar({ from: today, to: today, types: ['status'], priorities: ['Critical'], only_mine: true }, workerA);
       assert.ok(critical.events.some(item => item.entity_id === status.id));
 
-      repository.saveSummaryPreference(workerA.id, { summary_area_source: 'planner' });
       const mine = repository.mySummary(workerA);
       assert.equal(mine.area_source, 'planner');
       assert.ok(mine.assigned_areas.some(item => [roots[0].id, roots[1].id].includes(item.id)));
@@ -1154,7 +1149,6 @@ test('V7 supports canonical hierarchy IDs, area tasks, goal links and configurab
       assert.equal(repository.users().find(user => user.id === admin.id).planner_enabled, 0);
       repository.setPlannerEnabled(admin.id, { planner_enabled: 1 });
       assert.ok(repository.planner(new Date().toISOString().slice(0, 10), new Date().toISOString().slice(0, 10)).users.some(user => user.id === admin.id));
-      repository.saveSummaryPreference(admin.id, { summary_area_source: 'planner' });
       assert.equal(repository.mySummary(admin).area_source, 'planner');
 
       const overview = repository.overview('all');
@@ -1809,7 +1803,7 @@ test('status handovers support meetings, risk and historical suggestions', () =>
   }
 });
 
-test('V14 shares users across projects, exposes cross-project plans and supports monthly employee reviews', () => {
+test('V14 shares users across projects and exposes cross-project plans', () => {
   const temporary = temporaryDatabase();
   const repository = openDatabase(temporary.path);
   try {
@@ -1830,7 +1824,6 @@ test('V14 shares users across projects, exposes cross-project plans and supports
 
     let completedTask;
     let note;
-    let review;
     repository.withProject(project.id, () => {
       const projectAdmin = repository.me(admin.id, project.id);
       repository.saveUser(worker.id, { project_active: 1, planner_enabled: 1, assignable: 1, project_role: 'user' });
@@ -1868,17 +1861,6 @@ test('V14 shares users across projects, exposes cross-project plans and supports
       const noteType = repository.config().options.find(item => item.kind === 'note_type' && item.value === 'Postęp');
       repository.saveOption(noteType.id, { kind: 'note_type', value: 'Aktualizacja postępu' });
       assert.equal(repository.notes('all', null, null, projectAdmin).find(item => item.id === note.id).sections[0].information_type, 'Aktualizacja postępu');
-
-      const period = planDate.slice(0, 7);
-      review = repository.createMonthlyEmployeeReview({ user_id: worker.id, period }, projectAdmin);
-      assert.ok(review.items.some(item => item.entity_type === 'task' && item.entity_id === completedTask.id));
-      review = repository.saveMonthlyEmployeeReview(review.id, {
-        delivery_score: 5, quality_score: 4, timeliness_score: 4, communication_score: 5, collaboration_score: 4,
-        manager_summary: 'Bardzo dobry miesiąc', items: review.items.map(item => ({ ...item, difficulty: 4, effort: 4, impact: 5, quality: 4, contribution_share: 100 }))
-      }, projectAdmin);
-      assert.ok(review.overall_score > 0);
-      assert.equal(repository.monthlyEmployeeReviews(period).find(item => item.user_id === worker.id).review_id, review.id);
-      assert.ok(repository.projectBackup().tables.monthly_employee_reviews.some(item => item.id === review.id));
 
       repository.savePlannerDay({ user_id: worker.id, plan_date: '2026-11-20', absence_type: 'vacation', absence_note: 'Globalny urlop' }, projectAdmin);
       repository.savePlannerHoliday(null, { holiday_date: '2026-11-21', name: 'Globalne święto' }, projectAdmin);
@@ -1973,7 +1955,7 @@ test('edit locks, hierarchical requirements and the refined status workflow are 
   }
 });
 
-test('retired commissioning and Definition of Done workflow are removed from existing databases', () => {
+test('retired commissioning, employee reviews, configured user areas and Definition of Done are removed from existing databases', () => {
   const temporary = temporaryDatabase();
   const initial = openDatabase(temporary.path);
   initial.close();
@@ -1984,8 +1966,16 @@ test('retired commissioning and Definition of Done workflow are removed from exi
     CREATE TABLE test_campaign_items(id INTEGER PRIMARY KEY);
     CREATE TABLE readiness_gates(id INTEGER PRIMARY KEY);
     CREATE TABLE entity_requirement_status(id INTEGER PRIMARY KEY);
+    CREATE TABLE monthly_employee_reviews(id INTEGER PRIMARY KEY);
+    CREATE TABLE monthly_employee_review_items(id INTEGER PRIMARY KEY);
+    CREATE TABLE monthly_employee_review_audit(id INTEGER PRIMARY KEY);
+    CREATE TABLE project_user_areas(project_id INTEGER,user_id INTEGER,controller_group_id INTEGER,sort_order INTEGER);
+    ALTER TABLE project_memberships ADD COLUMN summary_area_source TEXT NOT NULL DEFAULT 'configuration';
+    INSERT OR REPLACE INTO settings(project_id,key,value) VALUES(1,'employee_review_item_weight','60');
+    INSERT OR REPLACE INTO settings(project_id,key,value) VALUES(1,'employee_review_dimension_weight','40');
+    INSERT OR REPLACE INTO settings(project_id,key,value) VALUES(1,'my_summary_area_source','configuration');
   `);
-  legacy.prepare("DELETE FROM schema_migrations WHERE id IN ('035-remove-commissioning-module','036-remove-definition-of-done')").run();
+  legacy.prepare("DELETE FROM schema_migrations WHERE id IN ('035-remove-commissioning-module','036-remove-definition-of-done','063-remove-monthly-employee-reviews','064-remove-configured-user-areas')").run();
   legacy.close();
 
   const repository = openDatabase(temporary.path);
@@ -1994,10 +1984,13 @@ test('retired commissioning and Definition of Done workflow are removed from exi
     assert.equal(repository.saveTestCampaign, undefined);
     assert.equal(repository.saveReadinessGate, undefined);
     assert.equal(repository.saveCommissioningTemplate, undefined);
+    assert.equal(repository.monthlyEmployeeReviews, undefined);
+    assert.equal(repository.createMonthlyEmployeeReview, undefined);
+    assert.equal(repository.saveUserAreas, undefined);
     assert.equal(typeof repository.saveCompletionRequirement, 'function');
     assert.equal(repository.updateRequirementStatus, undefined);
     const backupTables = repository.projectBackup().tables;
-    for (const table of ['commissioning_templates', 'test_campaigns', 'test_campaign_items', 'readiness_gates', 'entity_requirement_status']) assert.equal(Object.hasOwn(backupTables, table), false);
+    for (const table of ['commissioning_templates', 'test_campaigns', 'test_campaign_items', 'readiness_gates', 'entity_requirement_status', 'monthly_employee_reviews', 'monthly_employee_review_items', 'monthly_employee_review_audit', 'project_user_areas']) assert.equal(Object.hasOwn(backupTables, table), false);
     for (const table of ['completion_requirements', 'entity_requirements']) assert.ok(Array.isArray(backupTables[table]));
   } finally {
     repository.close();
@@ -2005,8 +1998,11 @@ test('retired commissioning and Definition of Done workflow are removed from exi
 
   const database = new DatabaseSync(temporary.path);
   try {
-    const removedTables = database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('commissioning_templates','test_campaigns','test_campaign_items','readiness_gates','entity_requirement_status')").all();
+    const removedTables = database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('commissioning_templates','test_campaigns','test_campaign_items','readiness_gates','entity_requirement_status','monthly_employee_reviews','monthly_employee_review_items','monthly_employee_review_audit','project_user_areas')").all();
     assert.deepEqual(removedTables, []);
+    assert.equal(database.prepare("SELECT COUNT(*) count FROM settings WHERE key LIKE 'employee_review_%'").get().count, 0);
+    assert.equal(database.prepare("SELECT COUNT(*) count FROM settings WHERE key='my_summary_area_source'").get().count, 0);
+    assert.equal(database.prepare("SELECT COUNT(*) count FROM pragma_table_info('project_memberships') WHERE name='summary_area_source'").get().count, 0);
   } finally {
     database.close();
     rmSync(temporary.directory, { recursive: true, force: true });

@@ -375,27 +375,6 @@ async function handleProjectApi(request, response, url, user) {
     if (method === 'PATCH') return json(response, 200, repository.saveAutomationRule(automationRuleId, await readJson(request), user));
     if (method === 'DELETE') { repository.deleteAutomationRule(automationRuleId); response.writeHead(204); return response.end(); }
   }
-  if (method === 'GET' && path === '/api/monthly-reviews') {
-    requireRole(user, 'moderator');
-    return json(response, 200, repository.monthlyEmployeeReviews(url.searchParams.get('period')));
-  }
-  if (method === 'POST' && path === '/api/monthly-reviews') {
-    requireRole(user, 'moderator');
-    return json(response, 201, repository.createMonthlyEmployeeReview(await readJson(request), user));
-  }
-  const monthlyReviewAction = path.match(/^\/api\/monthly-reviews\/(\d+)\/action$/);
-  if (monthlyReviewAction && method === 'POST') {
-    requireRole(user, 'moderator');
-    const body = await readJson(request);
-    if (['lock', 'reopen'].includes(body.action)) requireRole(user, 'project_admin');
-    return json(response, 200, repository.actionMonthlyEmployeeReview(Number(monthlyReviewAction[1]), body, user));
-  }
-  const monthlyReviewId = numericId(path, '/api/monthly-reviews');
-  if (monthlyReviewId !== null) {
-    requireRole(user, 'moderator');
-    if (method === 'GET') return json(response, 200, repository.monthlyEmployeeReview(monthlyReviewId));
-    if (method === 'PATCH') return json(response, 200, repository.saveMonthlyEmployeeReview(monthlyReviewId, await readJson(request), user));
-  }
   if (method === 'GET' && path === '/api/planner') return json(response, 200, repository.planner(url.searchParams.get('from'), url.searchParams.get('to'), user));
   if (method === 'GET' && path === '/api/planner/raw-plans') { requireRole(user, 'moderator'); return json(response, 200, repository.plannerRawPlans(user)); }
   if (method === 'POST' && path === '/api/planner/raw-plans') { requireRole(user, 'moderator'); return json(response, 201, repository.createPlannerRawPlan(await readJson(request), user)); }
@@ -571,11 +550,8 @@ async function handleProjectApi(request, response, url, user) {
     }
     if (method === 'DELETE') { requireRole(user, 'system_admin'); if (id === user.id) throw Object.assign(new Error('Nie możesz usunąć własnego konta'), { statusCode: 400 }); const deletedAccount = repository.securityAccount(id); logSecurityEvent(request, 'account_deleted', 'success', null, { actor_user_id: user.id, username: deletedAccount?.username || '' }); await revokeUserSessions(id); repository.deleteUser(id); response.writeHead(204, securityHeaders); return response.end(); }
   }
-  const userAreaMatch = path.match(/^\/api\/users\/(\d+)\/areas$/);
-  if (userAreaMatch && method === 'PUT') { requireRole(user, 'project_admin'); return json(response, 200, repository.saveUserAreas(Number(userAreaMatch[1]), await readJson(request))); }
   const userPlannerMatch = path.match(/^\/api\/users\/(\d+)\/planner$/);
   if (userPlannerMatch && method === 'PUT') { requireRole(user, 'project_admin'); return json(response, 200, repository.setPlannerEnabled(Number(userPlannerMatch[1]), await readJson(request))); }
-  if (path === '/api/my-summary/preferences' && method === 'PUT') return json(response, 200, repository.saveSummaryPreference(user.id, await readJson(request)));
 
   if (path === '/api/controller-groups' && method === 'POST') { requireRole(user, 'project_admin'); return json(response, 201, repository.saveControllerGroup(null, await readJson(request))); }
   id = numericId(path, '/api/controller-groups');

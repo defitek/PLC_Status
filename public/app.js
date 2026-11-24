@@ -15,7 +15,7 @@ import {
 const state = {
   view: 'mine', controller: 'all', me: null, projects: [], controllerGroups: [], controllers: [], users: [],
   config: { categories: [], task_categories: [], function_groups: [], status_groups: [], options: [], announcement_labels: [], requirements: [], settings: {} },
-  overview: null, announcements: [], meetingSummaries: [], notifications: [], communicationPreferences: { digest_enabled: 0 }, navigationCounts: {}, mine: null, dashboard: {}, status: [], tasks: [], points: [], externalDependencies: [], notes: [], goals: [], planner: null, calendar: null, history: [], savedViews: [], operations: null, employeeReviews: [], securityEvents: [], reviewPeriod: new Date().toISOString().slice(0, 7), loadSequence: 0,
+  overview: null, announcements: [], meetingSummaries: [], notifications: [], communicationPreferences: { digest_enabled: 0 }, navigationCounts: {}, mine: null, dashboard: {}, status: [], tasks: [], points: [], externalDependencies: [], notes: [], goals: [], planner: null, calendar: null, history: [], savedViews: [], operations: null, securityEvents: [], loadSequence: 0,
   dialog: null, dialogStack: [], dialogInitial: '', dirtyCloseAttempt: new WeakSet(), goalDraftLinks: [], goalPickerCollections: null, linkDraft: [], statusMode: 'list', taskMode: 'board', taskShowCompleted: false, pointMode: 'list', pointSection: 'points', trendPeriod: 'week',
   functionGroupController: '', functionPointGroup: null, functionPointDraft: [],
   notesFrom: '', notesTo: '', notesWeek: '', draggingTask: false, plannerFrom: '', plannerDays: 14, plannerShowHours: false, plannerShowAreas: false, plannerDetailedView: false, plannerToolsVisible: false,
@@ -53,7 +53,6 @@ const pageCopy = {
   mine: ['Start', 'Twoja praca, terminy i najbliższy plan', ''],
   operations: ['Priorytety i odprawy', 'Wspólna kolejka działań oraz opublikowane plany pracy', ''],
   planner: ['Plan', 'Planner manpoweru i kalendarz projektu', ''],
-  reviews: ['Oceny miesięczne', 'Obiektywna ocena pracy na podstawie aktywności, rezultatów i wkładu w projekt', ''],
   calendar: ['Plan · Kalendarz', 'Zintegrowany harmonogram i adnotacje projektu', '+ Adnotacja'],
   status: ['Status', 'Konfigurowalne grupy, podgrupy i pola weryfikacji', '+ Dodaj punkt'],
   tasks: ['Praca · Zadania', 'Zadania, punkty, zależności i kamienie milowe w jednym module', '+ Nowe zadanie'],
@@ -949,9 +948,7 @@ async function loadData(silent = false) {
   if (state.view === 'history') requests.history = api('/api/history?limit=200');
   if (state.view === 'operations' && canCoordinate()) {
     requests.operationsPayload = api(`/api/operations${query}&tab=${encodeURIComponent(state.operationsTab)}`);
-    if (state.operationsTab === 'reviews') requests.employeeReviews = api(`/api/monthly-reviews?period=${state.reviewPeriod}`);
   }
-  if (state.view === 'reviews' && canCoordinate()) requests.employeeReviews = api(`/api/monthly-reviews?period=${state.reviewPeriod}`);
   const entries = Object.entries(requests);
   const values = await Promise.all(entries.map(([, request]) => request));
   if (loadId !== state.loadSequence) return;
@@ -1174,7 +1171,6 @@ async function acknowledgeAnnouncement(id) {
 async function setView(view) {
   if (view === 'settings' && state.me.role === 'user') return;
   if (view === 'operations' && !canCoordinate()) return;
-  if (view === 'reviews' && !canCoordinate()) return;
   if (view === 'announcements' && state.view !== 'announcements') { state.announcementLabelFilter = ''; state.announcementImportanceFilter = ''; }
   state.view = view;
   document.body.classList.remove('nav-open');
@@ -1190,7 +1186,7 @@ function render() {
   $('#desc').textContent = copy[1];
   $('#add').textContent = copy[2];
   $('#add').hidden = !copy[2];
-  ({ overview: renderOverview, announcements: renderAnnouncements, mine: renderMine, operations: renderOperations, planner: renderPlanner, reviews: renderEmployeeReviews, calendar: renderCalendar, status: renderStatus, tasks: renderTasks, goals: renderGoals, points: renderPoints, notes: renderNotes, history: renderHistory, settings: renderSettings })[state.view]();
+  ({ overview: renderOverview, announcements: renderAnnouncements, mine: renderMine, operations: renderOperations, planner: renderPlanner, calendar: renderCalendar, status: renderStatus, tasks: renderTasks, goals: renderGoals, points: renderPoints, notes: renderNotes, history: renderHistory, settings: renderSettings })[state.view]();
   decorateUnifiedWorkspace();
 }
 
@@ -1781,15 +1777,12 @@ function operationJump(type, id) {
 }
 
 async function reloadOperations(tab = state.operationsTab) {
-  const loadingKey = `${state.controller}:${tab}:${tab === 'reviews' ? state.reviewPeriod : ''}`;
+  const loadingKey = `${state.controller}:${tab}`;
   if (state.operationsLoading.has(loadingKey)) return;
   state.operationsLoading.add(loadingKey);
   try {
-    const requests = [api(`/api/operations?controller=${encodeURIComponent(state.controller)}&tab=${encodeURIComponent(tab)}`)];
-    if (tab === 'reviews') requests.push(api(`/api/monthly-reviews?period=${state.reviewPeriod}`));
-    const [payload, reviews] = await Promise.all(requests);
+    const payload = await api(`/api/operations?controller=${encodeURIComponent(state.controller)}&tab=${encodeURIComponent(tab)}`);
     mergeOperationsData(payload);
-    if (tab === 'reviews') state.employeeReviews = reviews;
     if (state.operations?._loaded?.triage) $('#n-operations').textContent = state.operations.triage?.length || 0;
     if (state.view === 'operations') renderOperations();
   } finally { state.operationsLoading.delete(loadingKey); }
@@ -1804,8 +1797,7 @@ function renderOperations() {
     ['meetings', 'Odprawy projektowe', tabCount('meetings', data.meetings?.filter(item => item.status === 'open').length || 0)]
   ];
   const configurationTabs = {
-    automations: ['automations', 'Reguły automatyzacji', tabCount('automations', data.automation_rules?.filter(item => item.active).length || 0)],
-    reviews: ['reviews', 'Oceny miesięczne', tabCount('reviews', (state.employeeReviews || []).filter(item => item.review_id).length)]
+    automations: ['automations', 'Reguły automatyzacji', tabCount('automations', data.automation_rules?.filter(item => item.active).length || 0)]
   };
   if (configurationTabs[state.operationsTab]) tabs.push(configurationTabs[state.operationsTab]);
   if (!tabs.some(([key]) => key === state.operationsTab)) state.operationsTab = 'triage';
@@ -1817,7 +1809,7 @@ function renderOperations() {
     reloadOperations(state.operationsTab).catch(error => toast(error.message, true));
     return;
   }
-  ({ triage: renderTriage, quality: renderDataQuality, risk: renderRiskRadar, dependencies: renderDependencies, meetings: renderProjectMeetings, automations: renderAutomations, reviews: () => renderEmployeeReviews('#operations-content') })[state.operationsTab]?.();
+  ({ triage: renderTriage, quality: renderDataQuality, risk: renderRiskRadar, dependencies: renderDependencies, meetings: renderProjectMeetings, automations: renderAutomations })[state.operationsTab]?.();
 }
 
 function renderTriage() {
@@ -2901,7 +2893,7 @@ function plannerUnifiedSection(users, days, entryMap, workMap, summaryMap, areaD
   const dayHeader = (date, number = false) => { const weekend = [0, 6].includes(new Date(`${date}T12:00:00Z`).getUTCDay()); const holiday = holidayMap.get(date); return `<th class="${date === today() ? 'today' : ''} ${holiday ? 'holiday' : ''} ${weekend ? 'weekend' : ''}" title="${escapeHtml(holiday?.name || '')}">${number ? date.slice(8, 10) : new Intl.DateTimeFormat('pl-PL', { weekday: 'short', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`))}${holiday && !number ? `<span class="holiday-info" title="${escapeHtml(holiday.name)}">i</span>` : ''}</th>`; };
   const annotationRow = annotations.length ? `<tr class="planner-annotation-row"><th class="person-col"><b>Adnotacje</b><small>z Kalendarza</small></th>${days.map(date => `<td>${annotations.filter(item => item.start_date <= date && item.end_date >= date).map(item => { const scopes = (item.scope_labels || []).join(', ') || 'Cały projekt'; return `<span class="planner-annotation-chip" style="--annotation-bg:${item.background_color || '#dcfce7'};--annotation-text:${item.text_color || '#14532d'}" title="${escapeHtml([item.title, scopes, item.description].filter(Boolean).join(' · '))}"><b>${escapeHtml(item.title)}</b><small>${escapeHtml(scopes)}</small></span>`; }).join('')}</td>`).join('')}</tr>` : '';
   const footer = detailed || showRequirements ? `<tfoot><tr class="total-headcount-row"><th class="person-col">Obsada razem</th>${days.map(date => { const summary = summaryMap.get(date); return `<td class="${date === today() ? 'today' : ''}" data-total-date="${date}"><b>${summary?.headcount || 0}</b><small><i class="on-tag">ON ${summary?.online_headcount || 0}</i><i class="off-tag">OFF ${summary?.offline_headcount || 0}</i></small></td>`; }).join('')}</tr>${requirementTools ? `<tr class="requirement-toolbar-row"><td colspan="${days.length + 1}">${requirementTools}</td></tr>` : ''}${areaRows}</tfoot>` : '';
-  return `<section class="planner-shell planner-unified ${detailed ? 'planner-detailed' : 'planner-simplified'} ${state.plannerRequirementEdit ? 'requirements-editing' : ''}" ${state.plannerRequirementEdit ? 'id="planner-inline-requirements"' : ''}><header><div><strong>Plan zespołu</strong><small>Klik zaznacza · Ctrl+przeciągnięcie zaznacza zakres · Ctrl+Shift+klik zaznacza prostokąt · skróty: P praca · T transport · U urlop · W wolne · E edycja · Delete wyczyść dzień</small></div><span>${users.length} uczestników</span></header><div class="planner-scroll"><table class="planner-table compact" style="--planner-days:${days.length};--requirement-days:${days.length}"><thead><tr><th class="person-col" rowspan="4">Pracownik</th>${months.map(item => `<th colspan="${item.count}">${escapeHtml(item.value)}</th>`).join('')}</tr><tr>${weeks.map(item => `<th colspan="${item.count}">${escapeHtml(item.value)}</th>`).join('')}</tr><tr>${days.map(date => dayHeader(date)).join('')}</tr><tr>${days.map(date => dayHeader(date, true)).join('')}</tr></thead><tbody>${annotationRow}${users.map(user => `<tr class="${Number(user.id) === Number(state.me.id) ? 'planner-current-user' : ''}"><th class="person-col"><b>${escapeHtml(user.display_name)}${Number(user.id) === Number(state.me.id) ? ' · Ty' : ''}</b>${detailed ? `<small>${escapeHtml(user.configured_areas || 'bez obszaru')}</small>` : ''}${showTime ? `<em>${Number((state.planner.time_details?.users || []).find(item => item.user_id === user.id)?.actual_hours || 0).toFixed(1)} h</em>` : ''}</th>${days.map(date => plannerCell(user, date, entryMap.get(`${user.id}:${date}`) || [], workMap.get(`${user.id}:${date}`), absenceMap.get(`${user.id}:${date}`), timeMap.get(`${user.id}:${date}`), holidayMap.get(date), showTime, overlapMap.get(`${user.id}:${date}`), detailed)).join('')}</tr>`).join('') || `<tr><td colspan="${days.length + 1}" class="empty compact-empty">Brak uczestników Plannera.</td></tr>`}</tbody>${footer}</table></div></section>`;
+  return `<section class="planner-shell planner-unified ${detailed ? 'planner-detailed' : 'planner-simplified'} ${state.plannerRequirementEdit ? 'requirements-editing' : ''}" ${state.plannerRequirementEdit ? 'id="planner-inline-requirements"' : ''}><header><div><strong>Plan zespołu</strong><small>Klik zaznacza · Ctrl+przeciągnięcie zaznacza zakres · Ctrl+Shift+klik zaznacza prostokąt · skróty: P praca · T transport · U urlop · W wolne · E edycja · Delete wyczyść dzień</small></div><span>${users.length} uczestników</span></header><div class="planner-scroll"><table class="planner-table compact" style="--planner-days:${days.length};--requirement-days:${days.length}"><thead><tr><th class="person-col" rowspan="4">Pracownik</th>${months.map(item => `<th colspan="${item.count}">${escapeHtml(item.value)}</th>`).join('')}</tr><tr>${weeks.map(item => `<th colspan="${item.count}">${escapeHtml(item.value)}</th>`).join('')}</tr><tr>${days.map(date => dayHeader(date)).join('')}</tr><tr>${days.map(date => dayHeader(date, true)).join('')}</tr></thead><tbody>${annotationRow}${users.map(user => `<tr class="${Number(user.id) === Number(state.me.id) ? 'planner-current-user' : ''}"><th class="person-col"><b>${escapeHtml(user.display_name)}${Number(user.id) === Number(state.me.id) ? ' · Ty' : ''}</b>${detailed ? `<small>${escapeHtml(user.planned_areas || 'bez obszaru')}</small>` : ''}${showTime ? `<em>${Number((state.planner.time_details?.users || []).find(item => item.user_id === user.id)?.actual_hours || 0).toFixed(1)} h</em>` : ''}</th>${days.map(date => plannerCell(user, date, entryMap.get(`${user.id}:${date}`) || [], workMap.get(`${user.id}:${date}`), absenceMap.get(`${user.id}:${date}`), timeMap.get(`${user.id}:${date}`), holidayMap.get(date), showTime, overlapMap.get(`${user.id}:${date}`), detailed)).join('')}</tr>`).join('') || `<tr><td colspan="${days.length + 1}" class="empty compact-empty">Brak uczestników Plannera.</td></tr>`}</tbody>${footer}</table></div></section>`;
 }
 
 function plannerInlineRequirementRows(days) {
@@ -3893,66 +3885,6 @@ function showPlannerContext(event, userId, date, entryIds = [], targetProjectId 
       if (button.dataset.action === 'clear') return clearSelectedPlannerDays();
     } catch (error) { toast(error.message, true); }
   }));
-}
-
-function reviewStatusLabel(value) {
-  return ({ not_started: 'Nie rozpoczęto', draft: 'W przygotowaniu', approved: 'Zatwierdzona', locked: 'Zamknięta' })[value] || value;
-}
-
-function reviewMetricTile(label, value, detail = '') {
-  return `<span><b>${escapeHtml(value)}</b>${escapeHtml(label)}${detail ? `<small>${escapeHtml(detail)}</small>` : ''}</span>`;
-}
-
-function renderEmployeeReviews(target = '#content') {
-  if (!canCoordinate()) return setView('mine');
-  const rows = state.employeeReviews || [];
-  const started = rows.filter(item => item.review_id).length;
-  const approved = rows.filter(item => ['approved', 'locked'].includes(item.review_status)).length;
-  const average = started ? Math.round(rows.reduce((sum, item) => sum + Number(item.overall_score || 0), 0) / started * 10) / 10 : 0;
-  $(target).innerHTML = `<section class="review-command"><div><span class="eyebrow">Poufny moduł managerski</span><h2>Oceny pracownicze · ${escapeHtml(state.reviewPeriod)}</h2><p>Dane ilościowe są snapshotem miesiąca. Ocena jakościowa pozostaje świadomą decyzją managera.</p></div><label>Miesiąc <input id="review-period" type="month" value="${escapeHtml(state.reviewPeriod)}"></label><div class="review-summary">${reviewMetricTile('pracowników', rows.length)}${reviewMetricTile('rozpoczętych', started)}${reviewMetricTile('zatwierdzonych', approved)}${reviewMetricTile('średni wynik', `${average}%`)}</div></section>
-  <section class="panel review-list"><div class="review-list-head"><b>Pracownik</b><span>Plan</span><span>Rezultaty</span><span>Przekazanie</span><span>Ocena</span><span>Stan</span></div>${rows.map(item => {
-    const m = item.metrics || {}; const completed = Number(m.tasks?.completed_in_month || 0) + Number(m.statuses?.completed_in_month || 0) + Number(m.points?.completed_in_month || 0);
-    return `<button type="button" class="review-row" data-review-user="${item.user_id}" data-review-id="${item.review_id || ''}"><span><b>${escapeHtml(item.display_name)}</b><small>${escapeHtml(roleName(item.role))}</small></span><span><b>${m.planned_days || 0} dni</b><small>${m.planned_hours || 0} h · ON ${m.online_days || 0} / OFF ${m.offline_days || 0}</small></span><span><b>${completed}</b><small>zamkniętych · ${m.project_updates || 0} aktualizacji</small></span><span><b>${m.handover?.sections || 0}</b><small>informacji · ${m.handover?.links || 0} powiązań</small></span><span class="review-score"><b>${Number(item.overall_score || 0).toFixed(1)}%</b><i><u style="width:${Number(item.overall_score || 0)}%"></u></i></span><span>${badge(reviewStatusLabel(item.review_status))}</span></button>`;
-  }).join('') || '<div class="empty">Brak aktywnych pracowników projektu.</div>'}</section>`;
-  $('#review-period').addEventListener('change', async event => {
-    state.reviewPeriod = event.target.value || today().slice(0, 7);
-    try { state.employeeReviews = await api(`/api/monthly-reviews?period=${state.reviewPeriod}`); renderEmployeeReviews(target); } catch (error) { toast(error.message, true); }
-  });
-  $$('[data-review-user]').forEach(button => button.addEventListener('click', () => openEmployeeReview(Number(button.dataset.reviewUser), Number(button.dataset.reviewId) || null)));
-}
-
-function reviewSelect(name, label, value, disabled = false) {
-  const meanings = ['1 · wymaga poprawy', '2 · poniżej oczekiwań', '3 · zgodnie z oczekiwaniami', '4 · bardzo dobrze', '5 · ponad oczekiwania'];
-  return `<label class="field"><span>${escapeHtml(label)}</span><select data-review-field="${name}" ${disabled ? 'disabled' : ''}>${meanings.map((text, index) => `<option value="${index + 1}"${Number(value) === index + 1 ? ' selected' : ''}>${escapeHtml(text)}</option>`).join('')}</select></label>`;
-}
-
-async function openEmployeeReview(userId, reviewId = null) {
-  try {
-    let review = reviewId ? await api(`/api/monthly-reviews/${reviewId}`) : await api('/api/monthly-reviews', { method: 'POST', body: JSON.stringify({ user_id: userId, period: state.reviewPeriod }) });
-    const user = (state.employeeReviews || []).find(item => Number(item.user_id) === Number(userId));
-    const locked = review.review_status === 'locked'; const metrics = review.metrics || {};
-    $('#insight-title').textContent = `Ocena miesięczna · ${user?.display_name || 'Pracownik'}`;
-    $('#insight-description').textContent = `${review.period} · ${reviewStatusLabel(review.review_status)} · wynik ${Number(review.overall_score || 0).toFixed(1)}%`;
-    $('#insight-content').innerHTML = `<div class="review-editor" data-review-id="${review.id}">
-      <div class="review-editor-actions"><span>${badge(reviewStatusLabel(review.review_status))}</span>${locked ? '' : '<button type="button" class="primary" id="review-save">Zapisz ocenę</button>'}${!locked && review.review_status !== 'approved' ? '<button type="button" class="secondary" id="review-approve">Zatwierdź</button>' : ''}${['project_admin', 'system_admin'].includes(state.me.role) && review.review_status === 'approved' ? '<button type="button" class="primary" id="review-lock">Zamknij miesiąc</button>' : ''}${['project_admin', 'system_admin'].includes(state.me.role) && locked ? '<button type="button" class="secondary" id="review-reopen">Otwórz ponownie</button>' : ''}</div>
-      <section class="review-evidence"><h3>Dane miesiąca</h3><div>${reviewMetricTile('dni w projekcie', metrics.planned_days || 0, `${metrics.planned_hours || 0} h`)}${reviewMetricTile('zadania zamknięte', metrics.tasks?.completed_in_month || 0, `${metrics.tasks?.overdue || 0} opóźnionych`)}${reviewMetricTile('status zamknięty', metrics.statuses?.completed_in_month || 0, `${metrics.statuses?.blocked || 0} blokad`)}${reviewMetricTile('punkty zamknięte', metrics.points?.completed_in_month || 0, `${metrics.points?.overdue || 0} opóźnionych`)}${reviewMetricTile('informacje statusowe', metrics.handover?.sections || 0, `${metrics.handover?.links || 0} powiązań`)}${reviewMetricTile('aktualizacje', metrics.project_updates || 0)}</div></section>
-      <section class="review-dimensions"><h3>Ocena kompetencji i współpracy</h3><div>${reviewSelect('delivery_score', 'Dowożenie rezultatów', review.delivery_score, locked)}${reviewSelect('quality_score', 'Jakość rozwiązania', review.quality_score, locked)}${reviewSelect('timeliness_score', 'Terminowość', review.timeliness_score, locked)}${reviewSelect('communication_score', 'Przekazywanie statusu', review.communication_score, locked)}${reviewSelect('collaboration_score', 'Współpraca i inicjatywa', review.collaboration_score, locked)}</div></section>
-      <section class="review-items"><header><div><h3>Rezultaty do oceny</h3><p>Trudność, nakład, wpływ i jakość są liczone z udziałem pracownika.</p></div><b>${review.items.length} pozycji</b></header><div class="review-item-table"><div class="review-item-head"><span>Rezultat</span><span>Trudność</span><span>Nakład</span><span>Wpływ</span><span>Jakość</span><span>Udział %</span><span>Uwagi</span><span>Pomiń</span></div>${review.items.map(item => `<div class="review-item" data-review-item="${item.id}"><button type="button" data-review-jump="${item.entity_type}" data-id="${item.entity_id}"><b>${escapeHtml(item.title_snapshot)}</b><small>${escapeHtml(item.scope_snapshot)} · ${escapeHtml(item.role_snapshot)}${item.completed_at ? ` · ${displayDate(String(item.completed_at).slice(0, 10))}` : ''}</small></button>${['difficulty','effort','impact','quality'].map(key => `<select data-item-field="${key}" ${locked ? 'disabled' : ''}>${[1,2,3,4,5].map(value => `<option${Number(item[key]) === value ? ' selected' : ''}>${value}</option>`).join('')}</select>`).join('')}<input data-item-field="contribution_share" type="number" min="0" max="100" value="${item.contribution_share}" ${locked ? 'disabled' : ''}><input data-item-field="reviewer_note" value="${escapeHtml(item.reviewer_note || '')}" placeholder="Krótka uwaga" ${locked ? 'disabled' : ''}><input data-item-field="excluded" type="checkbox" ${item.excluded ? 'checked' : ''} ${locked ? 'disabled' : ''}></div>`).join('') || '<div class="empty">Brak automatycznie zebranych rezultatów w tym miesiącu.</div>'}</div></section>
-      <section class="review-narrative"><label class="field full"><span>Podsumowanie managera</span><textarea data-review-field="manager_summary" rows="4" ${locked ? 'disabled' : ''}>${escapeHtml(review.manager_summary || '')}</textarea></label><label class="field"><span>Mocne strony</span><textarea data-review-field="strengths" rows="4" ${locked ? 'disabled' : ''}>${escapeHtml(review.strengths || '')}</textarea></label><label class="field"><span>Obszary do rozwoju</span><textarea data-review-field="improvement_areas" rows="4" ${locked ? 'disabled' : ''}>${escapeHtml(review.improvement_areas || '')}</textarea></label><label class="field full"><span>Plan rozwoju / ustalenia na kolejny miesiąc</span><textarea data-review-field="development_plan" rows="4" ${locked ? 'disabled' : ''}>${escapeHtml(review.development_plan || '')}</textarea></label></section>
-      <details class="review-audit"><summary>Historia oceny · ${review.audit.length}</summary>${review.audit.map(item => `<p><b>${escapeHtml(item.user_name || 'System')}</b><span>${escapeHtml(item.action)} · ${displayDateTime(item.changed_at)}</span></p>`).join('') || '<div class="empty">Brak historii.</div>'}</details></div>`;
-    const collect = () => ({
-      ...Object.fromEntries($$('[data-review-field]').map(input => [input.dataset.reviewField, input.value])),
-      items: $$('.review-item').map(root => ({ id: Number(root.dataset.reviewItem), ...Object.fromEntries([...root.querySelectorAll('[data-item-field]')].map(input => [input.dataset.itemField, input.type === 'checkbox' ? input.checked : input.type === 'number' || input.tagName === 'SELECT' ? Number(input.value) : input.value])) }))
-    });
-    const refresh = async updated => { review = updated; state.employeeReviews = await api(`/api/monthly-reviews?period=${state.reviewPeriod}`); if (state.view === 'reviews') renderEmployeeReviews(); else if (state.view === 'operations' && state.operationsTab === 'reviews') renderEmployeeReviews('#operations-content'); await openEmployeeReview(userId, review.id); };
-    $('#review-save')?.addEventListener('click', async () => { try { await refresh(await api(`/api/monthly-reviews/${review.id}`, { method: 'PATCH', body: JSON.stringify(collect()) })); toast('Ocena została zapisana'); } catch (error) { toast(error.message, true); } });
-    $('#review-approve')?.addEventListener('click', async () => { if (!await uiConfirm('Zatwierdź ocenę', 'Ocena pozostanie edytowalna do momentu zamknięcia miesiąca.', 'Zatwierdź')) return; try { await refresh(await api(`/api/monthly-reviews/${review.id}/action`, { method: 'POST', body: JSON.stringify({ action: 'approve' }) })); } catch (error) { toast(error.message, true); } });
-    $('#review-lock')?.addEventListener('click', async () => { if (!await uiConfirm('Zamknij ocenę miesiąca', 'Po zamknięciu pola oceny zostaną zablokowane.', 'Zamknij', true)) return; try { await refresh(await api(`/api/monthly-reviews/${review.id}/action`, { method: 'POST', body: JSON.stringify({ action: 'lock' }) })); } catch (error) { toast(error.message, true); } });
-    $('#review-reopen')?.addEventListener('click', async () => { try { await refresh(await api(`/api/monthly-reviews/${review.id}/action`, { method: 'POST', body: JSON.stringify({ action: 'reopen' }) })); } catch (error) { toast(error.message, true); } });
-    $$('[data-review-jump]').forEach(button => button.addEventListener('click', () => openEntityOverlay(button.dataset.reviewJump, Number(button.dataset.id))));
-    $('#insight-dialog').classList.add('employee-review-dialog');
-    if (!$('#insight-dialog').open) $('#insight-dialog').showModal();
-  } catch (error) { toast(error.message, true); }
 }
 
 function renderCalendar() {
@@ -5716,7 +5648,7 @@ function configPanelDefinition(key) {
   const statusStateConfig = `<section class="config-subsection status-state-config"><header><span><h3>Stany punktów statusowych</h3><small class="sub">Stany systemowe korzystają ze spójnego zestawu profesjonalnych ikon. Dla własnych stanów można wybrać symbol.</small></span><button type="button" class="secondary" id="new-status-state">+ Dodaj stan</button></header>${workflowStates.map((item, index) => `<div class="settings-row">${orderControls('status_workflow_states', workflowStates, index)}<span title="${escapeHtml(item.description || '')}"><b>${escapeHtml(item.label)}</b><small class="sub">${escapeHtml(item.description || 'Bez opisu')} · ${item.included ? 'widoczny na listach' : 'wyłączony'}${item.counts_as_done ? ' · zamyka punkt' : ''}</small></span><span class="dictionary-legend">${statusSymbol(item.value)}</span><button type="button" class="mini edit-status-state" data-id="${item.id}">Edytuj</button>${admin && !item.system_key ? `<button type="button" class="mini danger-text delete-status-state" data-id="${item.id}">Usuń</button>` : ''}</div>`).join('')}</section>`;
   const waitingForItems = state.config.options.filter(item => item.kind === 'waiting_for');
   const waitingForConfig = `<section class="config-subsection waiting-for-config"><header><span><h3>Oczekiwanie na</h3><small class="sub">Włącz automatyczne utworzenie zależności zewnętrznej dla punktów oczekujących na wybrany dział.</small></span></header>${waitingForItems.map((item, index) => `<div class="settings-row dictionary-row" title="${escapeHtml(item.description || '')}">${orderControls('options', waitingForItems, index)}<span><b>${escapeHtml(item.value)}</b><small class="sub">${escapeHtml(item.description || 'Bez opisu')}</small></span><span class="dependency-rule ${Number(item.external_dependency_enabled) ? 'enabled' : ''}">${Number(item.external_dependency_enabled) ? 'Zależność zewnętrzna ✓' : 'Bez zależności'}</span><button class="mini edit-option" data-id="${item.id}" data-kind="waiting_for" data-value="${escapeHtml(item.value)}" data-description="${escapeHtml(item.description || '')}" data-external-enabled="${Number(item.external_dependency_enabled) ? 1 : 0}">Edytuj</button>${admin ? `<button class="mini delete-config" data-kind="option" data-id="${item.id}">Usuń</button>` : ''}</div>`).join('') || '<div class="empty compact-empty">Nie zdefiniowano jeszcze żadnego działu.</div>'}<form class="inline-form add-option dictionary-add waiting-for-add" data-kind="waiting_for"><input name="value" placeholder="Nowy dział / strona" required><input name="description" placeholder="Opis widoczny po najechaniu"><label class="checkline"><input type="checkbox" name="external_dependency_enabled" value="1"><span>Pokazuj w Zależnościach zewnętrznych</span></label><button class="mini">Dodaj</button></form></section>`;
-  const users = state.users.map((item, index) => `<div class="settings-row user-config-row">${systemAdmin ? orderControls('users', state.users, index) : ''}<span><b>${escapeHtml(item.display_name)}</b><small class="sub">${escapeHtml(item.username)} · ${item.system_role === 'system_admin' ? 'Administrator systemu' : roleName(item.project_role)} · ${item.project_active ? 'w projekcie' : 'wyłączony z projektu'} · Planner: ${item.planner_enabled ? 'tak' : 'nie'} · Listy wyboru: ${Number(item.assignable) !== 0 ? 'widoczny' : 'ukryty'} · Zależności: ${['moderator', 'project_admin'].includes(item.project_role) || item.system_role === 'system_admin' || Number(item.can_manage_external_dependencies) ? 'edycja' : 'tylko podgląd'}</small><small class="sub">Obszary: ${(item.area_ids || []).map(id => state.controllerGroups.find(group => group.id === id)?.path_label).filter(Boolean).map(escapeHtml).join(', ') || 'nie przypisano'}</small></span>${admin && item.project_active ? `<button class="mini toggle-user-assignable ${Number(item.assignable) !== 0 ? 'active-toggle' : ''}" data-id="${item.id}" data-enabled="${Number(item.assignable) !== 0 ? 1 : 0}">${Number(item.assignable) !== 0 ? 'W wyborach ✓' : 'W wyborach —'}</button><button class="mini toggle-user-planner ${item.planner_enabled ? 'active-toggle' : ''}" data-id="${item.id}" data-enabled="${item.planner_enabled ? 1 : 0}">${item.planner_enabled ? 'Planner ✓' : 'Planner —'}</button>` : ''}${admin && item.project_active && item.system_role !== 'system_admin' ? `<button class="mini edit-user-areas" data-id="${item.id}">Obszary</button>` : ''}${systemAdmin ? `<button class="mini reset-user-password" data-id="${item.id}" data-name="${escapeHtml(item.display_name)}">Nowe hasło</button>` : ''}${canManageUser(item) ? `<button class="mini edit-user" data-id="${item.id}">Edytuj dostęp</button>` : ''}</div>`).join('');
+  const users = state.users.map((item, index) => `<div class="settings-row user-config-row">${systemAdmin ? orderControls('users', state.users, index) : ''}<span><b>${escapeHtml(item.display_name)}</b><small class="sub">${escapeHtml(item.username)} · ${item.system_role === 'system_admin' ? 'Administrator systemu' : roleName(item.project_role)} · ${item.project_active ? 'w projekcie' : 'wyłączony z projektu'} · Planner: ${item.planner_enabled ? 'tak' : 'nie'} · Listy wyboru: ${Number(item.assignable) !== 0 ? 'widoczny' : 'ukryty'} · Zależności: ${['moderator', 'project_admin'].includes(item.project_role) || item.system_role === 'system_admin' || Number(item.can_manage_external_dependencies) ? 'edycja' : 'tylko podgląd'}</small></span>${admin && item.project_active ? `<button class="mini toggle-user-assignable ${Number(item.assignable) !== 0 ? 'active-toggle' : ''}" data-id="${item.id}" data-enabled="${Number(item.assignable) !== 0 ? 1 : 0}">${Number(item.assignable) !== 0 ? 'W wyborach ✓' : 'W wyborach —'}</button><button class="mini toggle-user-planner ${item.planner_enabled ? 'active-toggle' : ''}" data-id="${item.id}" data-enabled="${item.planner_enabled ? 1 : 0}">${item.planner_enabled ? 'Planner ✓' : 'Planner —'}</button>` : ''}${systemAdmin ? `<button class="mini reset-user-password" data-id="${item.id}" data-name="${escapeHtml(item.display_name)}">Nowe hasło</button>` : ''}${canManageUser(item) ? `<button class="mini edit-user" data-id="${item.id}">Edytuj dostęp</button>` : ''}</div>`).join('');
   const importanceItems = state.config.options.filter(item => item.kind === 'announcement_importance');
   const announcementConfig = `<section class="config-panel-body config-two-columns"><section class="config-subsection"><h3>Etykiety wiadomości</h3>${(state.config.announcement_labels || []).map((item, index, items) => `<div class="settings-row">${orderControls('announcement_labels', items, index)}<span><span class="announcement-label ${escapeHtml(item.color)}">${escapeHtml(item.name)}</span></span><button class="mini edit-announcement-label" data-id="${item.id}">Edytuj</button>${admin ? `<button class="mini delete-announcement-label" data-id="${item.id}">Usuń</button>` : ''}</div>`).join('')}<button class="secondary" id="new-announcement-label">+ Dodaj etykietę</button></section><section class="config-subsection"><h3>Poziomy ważności</h3>${importanceItems.map((item, index) => `<div class="settings-row dictionary-row" title="${escapeHtml(item.description || '')}">${orderControls('options', importanceItems, index)}<span><b>${escapeHtml(item.value)}</b><small class="sub">${escapeHtml(item.description || 'Bez opisu')}</small></span><button class="mini edit-option" data-id="${item.id}" data-kind="announcement_importance" data-value="${escapeHtml(item.value)}" data-description="${escapeHtml(item.description || '')}">Edytuj</button>${admin ? `<button class="mini delete-config" data-kind="option" data-id="${item.id}">Usuń</button>` : ''}</div>`).join('')}<form class="inline-form add-option dictionary-add" data-kind="announcement_importance"><input name="value" placeholder="Nowy poziom" required><input name="description" placeholder="Opis"><button class="mini">Dodaj</button></form></section></section>`;
   const plannerSettingFields = [
@@ -5872,7 +5804,6 @@ function bindSettings() {
   $$('.edit-controller').forEach(button => button.addEventListener('click', () => openRecord('controllers', state.controllers.find(item => item.id === Number(button.dataset.id)))));
   $$('.edit-user').forEach(button => button.addEventListener('click', () => openRecord('users', state.users.find(item => item.id === Number(button.dataset.id)))));
   $$('.reset-user-password').forEach(button => button.addEventListener('click', () => resetUserPassword(Number(button.dataset.id), button.dataset.name)));
-  $$('.edit-user-areas').forEach(button => button.addEventListener('click', () => editUserAreas(Number(button.dataset.id))));
   $$('.toggle-user-planner').forEach(button => button.addEventListener('click', async () => {
     const disabling = button.dataset.enabled === '1';
     if (disabling && !await uiConfirm('Wyłącz osobę z Plannera', 'Plan tej osoby, korekty czasu i przypisane obszary zostaną usunięte z bieżącego projektu.', 'Wyłącz i usuń przypisania', true)) return;
@@ -6092,20 +6023,6 @@ async function deleteProjectSafely(id) {
     toast(`Projekt ${project.code} został trwale usunięty`);
     if (!state.me.current_project) openProjectDialog(true); else await loadData();
   } catch (error) { toast(error.message, true); }
-}
-
-async function editUserAreas(userId) {
-  const user = state.users.find(item => item.id === userId); if (!user) return;
-  const result = await openBulkChoice({
-    title: `Obszary · ${user.display_name}`,
-    description: 'Wyszukaj obszary i zaznacz je pojedynczo lub zbiorczo. Przypisanie steruje sugestiami w „Moim podsumowaniu”.',
-    submitLabel: 'Zapisz obszary',
-    selectedIds: user.area_ids || [],
-    items: state.controllerGroups.map(group => ({ id: group.id, label: group.name, detail: (group.path_names || []).slice(0, -1).join(' / '), depth: Math.max(0, Number(group.depth || 1) - 1), search: group.path_label || '' }))
-  });
-  if (result === null) return;
-  const area_ids = state.controllerGroups.filter(group => result.has(Number(group.id))).map(group => group.id);
-  try { await api(`/api/users/${userId}/areas`, { method: 'PUT', body: JSON.stringify({ area_ids }) }); toast('Przypisania obszarów zapisano'); await loadData(); } catch (error) { toast(error.message, true); }
 }
 
 const bytesToBase64 = bytes => { let binary = ''; for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000)); return btoa(binary); };
