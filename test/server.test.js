@@ -132,7 +132,7 @@ test('API protects manager data, project directory and account sessions', async 
   assert.ok(workerPlanner.cross_project_entries.some(entry => entry.user_id === worker.id));
   assert.ok(workerPlanner.cross_project_entries.every(entry => entry.user_id === worker.id));
   assert.equal(workerPlanner.absences.some(absence => absence.user_id === hidden.id), false);
-  for (const privatePath of ['/api/operations', '/api/monthly-reviews', '/api/automation-rules', '/api/backup']) {
+  for (const privatePath of ['/api/operations', '/api/automation-rules', '/api/backup']) {
     const response = await request(baseUrl, privatePath, { cookie: workerLogin.cookie });
     assert.equal(response.status, 403, privatePath);
   }
@@ -148,8 +148,7 @@ test('API protects manager data, project directory and account sessions', async 
   assert.ok(operations.dependencies);
   assert.equal(Object.hasOwn(operations, 'triage'), false);
   assert.equal(Object.hasOwn(operations, 'meetings'), false);
-  assert.equal((await request(baseUrl, '/api/monthly-reviews', { cookie: managerLogin.cookie })).status, 200);
-  for (const removedPath of ['/api/commissioning', '/api/commissioning-templates', '/api/test-campaigns', '/api/readiness-gates']) {
+  for (const removedPath of ['/api/monthly-reviews', '/api/monthly-reviews/1', '/api/commissioning', '/api/commissioning-templates', '/api/test-campaigns', '/api/readiness-gates']) {
     assert.equal((await request(baseUrl, removedPath, { cookie: managerLogin.cookie })).status, 404, removedPath);
   }
   const managerUsers = await (await request(baseUrl, '/api/users', { cookie: managerLogin.cookie })).json();

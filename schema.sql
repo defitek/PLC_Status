@@ -63,7 +63,6 @@ CREATE TABLE IF NOT EXISTS project_memberships (
   planner_enabled INTEGER NOT NULL DEFAULT 1,
   assignable INTEGER NOT NULL DEFAULT 1,
   can_manage_external_dependencies INTEGER NOT NULL DEFAULT 0,
-  summary_area_source TEXT NOT NULL DEFAULT 'configuration' CHECK(summary_area_source IN ('configuration','planner')),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY(project_id,user_id)
 ) STRICT, WITHOUT ROWID;
@@ -516,15 +515,6 @@ CREATE TABLE IF NOT EXISTS project_sequences (
   entity_type TEXT NOT NULL,
   next_value INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY(project_id,entity_type)
-) STRICT, WITHOUT ROWID;
-
-CREATE TABLE IF NOT EXISTS project_user_areas (
-  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  controller_group_id INTEGER NOT NULL REFERENCES controller_groups(id) ON DELETE CASCADE,
-  sort_order INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY(project_id,user_id,controller_group_id)
 ) STRICT, WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS planner_vehicles (
@@ -993,65 +983,6 @@ CREATE TABLE IF NOT EXISTS daily_note_sections (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS monthly_employee_reviews (
-  id INTEGER PRIMARY KEY,
-  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  period TEXT NOT NULL,
-  reviewer_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  review_status TEXT NOT NULL DEFAULT 'draft' CHECK(review_status IN ('draft','approved','locked')),
-  delivery_score INTEGER NOT NULL DEFAULT 3 CHECK(delivery_score BETWEEN 1 AND 5),
-  quality_score INTEGER NOT NULL DEFAULT 3 CHECK(quality_score BETWEEN 1 AND 5),
-  timeliness_score INTEGER NOT NULL DEFAULT 3 CHECK(timeliness_score BETWEEN 1 AND 5),
-  communication_score INTEGER NOT NULL DEFAULT 3 CHECK(communication_score BETWEEN 1 AND 5),
-  collaboration_score INTEGER NOT NULL DEFAULT 3 CHECK(collaboration_score BETWEEN 1 AND 5),
-  overall_score REAL NOT NULL DEFAULT 0,
-  manager_summary TEXT NOT NULL DEFAULT '',
-  strengths TEXT NOT NULL DEFAULT '',
-  improvement_areas TEXT NOT NULL DEFAULT '',
-  development_plan TEXT NOT NULL DEFAULT '',
-  snapshot_json TEXT NOT NULL DEFAULT '{}',
-  approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  approved_at TEXT,
-  locked_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  locked_at TEXT,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE(project_id,user_id,period)
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS monthly_employee_review_items (
-  id INTEGER PRIMARY KEY,
-  review_id INTEGER NOT NULL REFERENCES monthly_employee_reviews(id) ON DELETE CASCADE,
-  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  entity_type TEXT NOT NULL CHECK(entity_type IN ('task','status','point','note')),
-  entity_id INTEGER NOT NULL,
-  title_snapshot TEXT NOT NULL,
-  scope_snapshot TEXT NOT NULL DEFAULT '',
-  role_snapshot TEXT NOT NULL DEFAULT '',
-  completed_at TEXT,
-  difficulty INTEGER NOT NULL DEFAULT 3 CHECK(difficulty BETWEEN 1 AND 5),
-  effort INTEGER NOT NULL DEFAULT 3 CHECK(effort BETWEEN 1 AND 5),
-  impact INTEGER NOT NULL DEFAULT 3 CHECK(impact BETWEEN 1 AND 5),
-  quality INTEGER NOT NULL DEFAULT 3 CHECK(quality BETWEEN 1 AND 5),
-  contribution_share INTEGER NOT NULL DEFAULT 100 CHECK(contribution_share BETWEEN 0 AND 100),
-  excluded INTEGER NOT NULL DEFAULT 0,
-  reviewer_note TEXT NOT NULL DEFAULT '',
-  sort_order INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE(review_id,entity_type,entity_id)
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS monthly_employee_review_audit (
-  id INTEGER PRIMARY KEY,
-  review_id INTEGER NOT NULL REFERENCES monthly_employee_reviews(id) ON DELETE CASCADE,
-  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  action TEXT NOT NULL,
-  changes_json TEXT NOT NULL DEFAULT '{}',
-  changed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-) STRICT;
-
 CREATE TABLE IF NOT EXISTS daily_note_section_scopes (
   section_id INTEGER NOT NULL REFERENCES daily_note_sections(id) ON DELETE CASCADE,
   scope_type TEXT NOT NULL CHECK(scope_type IN ('project','group','controller')),
@@ -1197,7 +1128,6 @@ CREATE INDEX IF NOT EXISTS idx_entity_links_target ON entity_links(project_id,ta
 CREATE INDEX IF NOT EXISTS idx_task_assignees_user ON task_assignees(project_id,user_id,task_id);
 CREATE INDEX IF NOT EXISTS idx_task_images_task ON task_images(project_id,task_id,created_at,id);
 CREATE INDEX IF NOT EXISTS idx_status_assignees_user ON status_assignees(project_id,user_id,status_id);
-CREATE INDEX IF NOT EXISTS idx_project_user_areas_user ON project_user_areas(project_id,user_id);
 CREATE INDEX IF NOT EXISTS idx_project_memberships_user ON project_memberships(user_id,active,project_id);
 CREATE INDEX IF NOT EXISTS idx_planner_vehicles_project ON planner_vehicles(project_id,sort_order,code);
 CREATE INDEX IF NOT EXISTS idx_planner_project_date ON planner_entries(project_id,plan_date,user_id);
@@ -1231,9 +1161,6 @@ CREATE INDEX IF NOT EXISTS idx_entity_dependencies_prerequisite ON entity_depend
 CREATE INDEX IF NOT EXISTS idx_handovers_date ON shift_handovers(project_id,handover_date,status);
 CREATE INDEX IF NOT EXISTS idx_automation_rules_project ON automation_rules(project_id,active,trigger_type);
 CREATE INDEX IF NOT EXISTS idx_note_sections_note ON daily_note_sections(note_id,sort_order);
-CREATE INDEX IF NOT EXISTS idx_monthly_reviews_project_period ON monthly_employee_reviews(project_id,period,user_id);
-CREATE INDEX IF NOT EXISTS idx_monthly_review_items_review ON monthly_employee_review_items(review_id,sort_order,id);
-CREATE INDEX IF NOT EXISTS idx_monthly_review_audit_review ON monthly_employee_review_audit(review_id,changed_at DESC,id DESC);
 CREATE INDEX IF NOT EXISTS idx_meetings_project ON project_meetings(project_id,meeting_date DESC);
 CREATE INDEX IF NOT EXISTS idx_external_dependencies_entity ON external_dependencies(project_id,entity_type,entity_id,dependency_status);
 CREATE INDEX IF NOT EXISTS idx_entity_edit_locks_project ON entity_edit_locks(project_id,entity_type,entity_id);
