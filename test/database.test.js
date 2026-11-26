@@ -1296,7 +1296,9 @@ test('Planner shows cross-project work immediately, then confirms it, and exclud
       assert.equal(planner.entries.some(item => item.user_id === workerId && item.plan_date === rejectedDate), false);
       assert.ok(planner.users.some(user => user.id === workerId), 'worker remains an active participant of the target Planner');
       assert.equal(planner.incoming_cross_project_requests.length, 0);
-      assert.equal(planner.time_details.details.find(item => item.user_id === workerId && item.date === planDate).actual_hours, 12, 'online work and transport from both projects must be calculated once in the global day total');
+      const approvedDayTime = planner.time_details.details.find(item => item.user_id === workerId && item.date === planDate);
+      assert.equal(approvedDayTime.actual_hours, 10.5, 'transport must not increase working time');
+      assert.equal(approvedDayTime.travel_hours, 1.5, 'transport must be exposed in the separate business-travel pool');
     });
     repository.withProject(sourceProjectId, () => {
       const admin = repository.me(managerId, sourceProjectId);
@@ -1307,7 +1309,9 @@ test('Planner shows cross-project work immediately, then confirms it, and exclud
       assert.equal(planner.summary.find(item => item.plan_date === planDate).online_headcount, 1, 'global headcount includes visible work from another project');
       assert.equal(planner.requirement_projects.find(project => Number(project.id) === Number(targetProject.id)).summary.find(item => item.plan_date === planDate).online_headcount, 1, 'project bar exposes its own visible headcount');
       assert.equal(planner.requirement_projects.find(project => Number(project.id) === Number(sourceProjectId)).summary.find(item => item.plan_date === planDate).headcount, 1, 'source project bar includes transport headcount');
-      assert.equal(planner.time_details.details.find(item => item.user_id === workerId && item.date === planDate).actual_hours, 12);
+      const sourceDayTime = planner.time_details.details.find(item => item.user_id === workerId && item.date === planDate);
+      assert.equal(sourceDayTime.actual_hours, 10.5);
+      assert.equal(sourceDayTime.travel_hours, 1.5);
       const transportUpdate = repository.createPlannerCrossProjectRequests({ target_project_id: targetProject.id, items: [{
         user_id: workerId, plan_date: planDate, transport_only_update: 1, entries: [{ activity_type: 'transport', duration_hours: 2.25, note: 'Transport bez akceptacji' }]
       }] }, admin);
@@ -1442,6 +1446,8 @@ test('V9 supports guarded duplication, comments, pushes, calendar ranges and wor
       const timeOffHoliday = repository.planner('2026-10-10', '2026-10-10', admin).time_details.details.find(item => item.user_id === worker.id);
       assert.equal(timeOffHoliday.overtime_weighted, 0, 'wolne z nadgodzin nie może obciążać salda w święto');
       repository.deletePlannerHoliday(timeOffHolidayRecord.id);
+      const timeOffWeekend = repository.planner('2026-10-10', '2026-10-10', admin).time_details.details.find(item => item.user_id === worker.id);
+      assert.equal(timeOffWeekend.overtime_weighted, 0, 'wolne nie może obciążać salda w sobotę');
       repository.savePlannerDay({
         user_id: worker.id, plan_date: '2026-10-11', entries: [{ activity_type: 'transport', controller_group_id: root.id, shift: 'Noc', transport_mode: 'transport_only', duration_hours: 3.5 }]
       }, admin);
@@ -1451,10 +1457,22 @@ test('V9 supports guarded duplication, comments, pushes, calendar ranges and wor
       const managerPlanner = repository.planner('2026-10-08', '2026-10-11', admin);
       const workerPlanner = repository.planner('2026-10-08', '2026-10-11', worker);
       const workerHours = managerPlanner.time_details.users.find(item => item.user_id === worker.id);
-      assert.equal(workerHours.actual_hours, 14);
+      assert.equal(workerHours.actual_hours, 10.5);
       assert.equal(workerHours.credited_hours, 8);
-      assert.equal(workerHours.overtime_balance, 20);
-      assert.equal(managerPlanner.time_details.details.find(item => item.user_id === worker.id && item.date === '2026-10-11').actual_hours, 3.5);
+      assert.equal(workerHours.travel_hours, 3.5);
+      assert.equal(workerHours.overtime_balance, 21);
+      const transportTime = managerPlanner.time_details.details.find(item => item.user_id === worker.id && item.date === '2026-10-11');
+      assert.equal(transportTime.actual_hours, 0);
+      assert.equal(transportTime.travel_hours, 3.5);
+      assert.equal(transportTime.overtime_weighted, 0, 'transport must never generate overtime');
+      const emptyWeekday = repository.planner('2026-10-12', '2026-10-12', admin).time_details.details.find(item => item.user_id === worker.id);
+      assert.equal(emptyWeekday.overtime_weighted, -8, 'an empty working day must debit the overtime pool');
+      const emptyWeekend = repository.planner('2026-10-17', '2026-10-17', admin).time_details.details.find(item => item.user_id === worker.id);
+      assert.equal(emptyWeekend.overtime_weighted, 0, 'an empty weekend must not debit the overtime pool');
+      const emptyHolidayRecord = repository.savePlannerHoliday(null, { holiday_date: '2026-10-13', name: 'Pusty dzień świąteczny V9' }, admin);
+      const emptyHoliday = repository.planner('2026-10-13', '2026-10-13', admin).time_details.details.find(item => item.user_id === worker.id);
+      assert.equal(emptyHoliday.overtime_weighted, 0, 'an empty configured holiday must not debit the overtime pool');
+      repository.deletePlannerHoliday(emptyHolidayRecord.id);
       const normalizedTransport = managerPlanner.entries.find(item => item.user_id === worker.id && item.plan_date === '2026-10-11');
       assert.equal(normalizedTransport.controller_group_id, null, 'transport must not retain a project area');
       assert.equal(normalizedTransport.shift, 'Dzień', 'transport must not retain a selected work shift');

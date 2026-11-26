@@ -411,7 +411,8 @@ test('Planner przelicza godziny po dodaniu święta i dla ręcznie wybranego okr
   expect(before.overtime_weighted).toBeLessThan(0);
 
   await page.waitForTimeout(500);
-  await page.locator('#planner-config-open').click();
+  await openView(page, 'settings');
+  await page.locator('[data-config-panel="planner_global"]').click();
   const [year, month, day] = target.date.split('-');
   await page.locator('#planner-holidays-bulk').fill(`${day}.${month}.${year} Święto E2E przeliczenia`);
   await expect(page.locator('#planner-holidays-bulk')).toHaveValue(`${day}.${month}.${year} Święto E2E przeliczenia`);
@@ -426,11 +427,14 @@ test('Planner przelicza godziny po dodaniu święta i dla ręcznie wybranego okr
   expect(after.overtime_weighted).toBe(0);
   await page.locator('#config-full-close').click();
 
+  await openView(page, 'planner');
   await page.locator('#planner-hours-open').click();
   await page.locator('#planner-hours-from').fill(target.date);
   await page.locator('#planner-hours-to').fill(target.date);
   await page.locator('#planner-hours-recalculate').click();
   await expect(page.locator('.planner-hours-toolbar small')).toContainText('Przeliczono:');
+  await expect(page.locator('.hours-table thead')).toContainText('Podróże służbowe');
+  await expect(page.locator('.hours-rules')).toContainText('Transport: tylko pula „Podróże służbowe”, bez nadgodzin');
   await page.locator('.hours-details summary').click();
   const detail = page.locator('.hours-details tbody tr', { hasText: 'Wolne z nadgodzin' });
   await expect(detail).toContainText('święto');

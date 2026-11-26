@@ -2022,25 +2022,24 @@ function createRepository(db, defaultProjectId) {
       const holiday = holidayDates.has(date);
       const isSaturday = weekday === 6;
       const isSunday = weekday === 0;
+      const isWorkingDay = !isSaturday && !isSunday && !holiday;
+      const workEntries = dayEntries.filter(item => item.transport_mode !== 'transport_only');
+      const travelHours = dayEntries.filter(item => item.transport_mode === 'transport_only')
+        .reduce((sum, item) => sum + Math.max(0, Number(item.duration_hours || 0)), 0);
       let actual = 0; let credited = 0; let overtimeRaw = 0; let overtimeWeighted = 0; let label = '';
       if (absence?.absence_type === 'time_off') {
-        const debit = holiday ? 0 : timeOffDebit;
+        const debit = isWorkingDay ? timeOffDebit : 0;
         overtimeRaw = -debit; overtimeWeighted = -debit; label = 'Wolne z nadgodzin';
       } else if (absence?.absence_type === 'vacation') {
-        credited = !isSaturday && !isSunday && !holiday ? baseHours : 0; label = 'Urlop';
+        credited = isWorkingDay ? baseHours : 0; label = 'Urlop';
       } else if (dayEntries.length) {
-        const workEntries = dayEntries.filter(item => item.transport_mode !== 'transport_only');
-        const transportHours = dayEntries.filter(item => item.transport_mode === 'transport_only')
-          .reduce((sum, item) => sum + Math.max(0, Number(item.duration_hours || 0)), 0);
         if (!workEntries.length) {
-          actual = transportHours;
-          label = `T · OFF${transportHours ? ` · ${formatTransportDuration(transportHours)}` : ''}`;
+          label = `T · Podróż służbowa${travelHours ? ` · ${formatTransportDuration(travelHours)}` : ''}`;
         } else {
           actual = workEntries.some(item => item.work_mode === 'online') ? onlineHours : offlineHours;
           label = workEntries.some(item => item.work_mode === 'online') ? 'ON' : 'OFF';
-          if (transportHours) {
-            actual += transportHours;
-            label += ` + T ${formatTransportDuration(transportHours)}`;
+          if (travelHours) {
+            label += ` + T ${formatTransportDuration(travelHours)}`;
           }
         }
       }
@@ -2062,12 +2061,17 @@ function createRepository(db, defaultProjectId) {
         if (isSunday || holiday) { overtimeRaw = actual; overtimeWeighted = actual * sundayHolidayMultiplier; }
         else if (isSaturday) { overtimeRaw = actual; overtimeWeighted = actual * saturdayMultiplier; }
         else { overtimeRaw = Math.max(0, actual - baseHours); overtimeWeighted = overtimeRaw * weekdayMultiplier; }
+      } else if (!absence && !dayEntries.length && isWorkingDay) {
+        overtimeRaw = -timeOffDebit;
+        overtimeWeighted = -timeOffDebit;
+        label = 'Brak planu · dzień wolny';
       }
       overtimeRaw += Number(adjustment.overtime_raw_adjustment || 0);
       overtimeWeighted += Number(adjustment.overtime_weighted_adjustment || 0);
       allDetails.push({
         user_id: user.id, display_name: user.display_name, date, label,
-        actual_hours: actual, credited_hours: credited, overtime_raw: overtimeRaw, overtime_weighted: overtimeWeighted,
+        actual_hours: actual, credited_hours: credited, travel_hours: travelHours,
+        overtime_raw: overtimeRaw, overtime_weighted: overtimeWeighted,
         actual_hours_adjustment: actualAdjustment,
         overtime_raw_adjustment: Number(adjustment.overtime_raw_adjustment || 0),
         overtime_weighted_adjustment: Number(adjustment.overtime_weighted_adjustment || 0),
@@ -2100,6 +2104,7 @@ function createRepository(db, defaultProjectId) {
         user_id: user.id, display_name: user.display_name,
         actual_hours: rows.reduce((sum, row) => sum + row.actual_hours, 0),
         credited_hours: rows.reduce((sum, row) => sum + row.credited_hours, 0),
+        travel_hours: rows.reduce((sum, row) => sum + row.travel_hours, 0),
         overtime_raw: rows.reduce((sum, row) => sum + row.overtime_raw, 0),
         overtime_weighted: rows.reduce((sum, row) => sum + row.overtime_weighted, 0),
         overtime_raw_balance: rows.at(-1)?.overtime_raw_cumulative || 0,
