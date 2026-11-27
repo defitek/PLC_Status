@@ -140,7 +140,47 @@ export function prepareDatabase(db, { seedDemo, demoLimit = 100 }) {
   });
   runMigration(db, '063-remove-monthly-employee-reviews', () => removeMonthlyEmployeeReviews(db));
   runMigration(db, '064-remove-configured-user-areas', () => removeConfiguredUserAreas(db));
+  runMigration(db, '065-formal-planner-model', () => migrateFormalPlannerModel(db));
   return defaultProjectId;
+}
+
+function migrateFormalPlannerModel(db) {
+  ensureColumn(db, 'planner_entries', 'allocated_hours', 'REAL CHECK(allocated_hours IS NULL OR allocated_hours >= 0)');
+  ensureColumn(db, 'planner_raw_entries', 'allocated_hours', 'REAL CHECK(allocated_hours IS NULL OR allocated_hours >= 0)');
+  ensureColumn(db, 'planner_cross_project_requests', 'entries_json', "TEXT NOT NULL DEFAULT '[]'");
+  db.exec(`CREATE TABLE IF NOT EXISTS planner_project_requirements (
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,plan_date TEXT NOT NULL,
+    work_mode TEXT NOT NULL CHECK(work_mode IN ('online','offline')),required_count INTEGER NOT NULL DEFAULT 0 CHECK(required_count >= 0),
+    note TEXT NOT NULL DEFAULT '',created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(project_id,plan_date,work_mode)) STRICT, WITHOUT ROWID;
+  CREATE TABLE IF NOT EXISTS planner_day_comments (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,plan_date TEXT NOT NULL,comment TEXT NOT NULL DEFAULT '',
+    updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(user_id,plan_date)) STRICT, WITHOUT ROWID;
+  CREATE TABLE IF NOT EXISTS planner_project_locks (
+    project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,locked_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    locked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,last_activity_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP) STRICT;
+  CREATE TABLE IF NOT EXISTS planner_global_locks (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,plan_date TEXT NOT NULL,
+    locked_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,locked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_activity_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(user_id,plan_date)) STRICT, WITHOUT ROWID;
+  CREATE TABLE IF NOT EXISTS planner_day_history (
+    id INTEGER PRIMARY KEY,project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    plan_date TEXT NOT NULL,action TEXT NOT NULL DEFAULT 'update',before_json TEXT NOT NULL DEFAULT '{}',after_json TEXT NOT NULL DEFAULT '{}',
+    changes_json TEXT NOT NULL DEFAULT '[]',changed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP) STRICT;
+  CREATE TABLE IF NOT EXISTS planner_information_queue (
+    id INTEGER PRIMARY KEY,project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    plan_date TEXT NOT NULL,history_id INTEGER REFERENCES planner_day_history(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','informed')),informed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    informed_at TEXT,informed_note TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP) STRICT;
+  CREATE TABLE IF NOT EXISTS planner_snapshots (
+    id INTEGER PRIMARY KEY,project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,year INTEGER NOT NULL CHECK(year BETWEEN 2026 AND 2040),
+    quarter INTEGER NOT NULL CHECK(quarter BETWEEN 1 AND 4),name TEXT NOT NULL,snapshot_json TEXT NOT NULL,
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP) STRICT;
+  CREATE INDEX IF NOT EXISTS idx_planner_history_day ON planner_day_history(project_id,user_id,plan_date,created_at);
+  CREATE INDEX IF NOT EXISTS idx_planner_information_pending ON planner_information_queue(project_id,status,plan_date,user_id);
+  CREATE INDEX IF NOT EXISTS idx_planner_snapshots_quarter ON planner_snapshots(project_id,year,quarter,created_at DESC)`);
 }
 
 function migrateProjectPlannerColors(db) {
@@ -201,6 +241,11 @@ function migratePlannerManpowerScope(db) {
 function migratePlannerTransportMinutePrecision(db) {
   const tableSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='planner_entries'").get()?.sql || '';
   if (!/duration_hours\s*<=\s*24/i.test(tableSql)) return;
+  const existingColumns = columnNames(db, 'planner_entries');
+  const allocatedHours = existingColumns.has('allocated_hours') ? 'allocated_hours' : 'NULL';
+  const countInManpower = existingColumns.has('count_in_manpower') ? 'count_in_manpower' : '1';
+  const vehicleId = existingColumns.has('vehicle_id') ? 'vehicle_id' : 'NULL';
+  const crossProjectRequestId = existingColumns.has('cross_project_request_id') ? 'cross_project_request_id' : 'NULL';
   db.exec(`
     BEGIN IMMEDIATE;
     CREATE TABLE planner_entries_v55 (
@@ -213,17 +258,21 @@ function migratePlannerTransportMinutePrecision(db) {
       work_mode TEXT NOT NULL DEFAULT 'online' CHECK(work_mode IN ('online','offline')),
       transport_mode TEXT NOT NULL DEFAULT 'none' CHECK(transport_mode IN ('none','transport_work','transport_only')),
       duration_hours REAL NOT NULL DEFAULT 0 CHECK(duration_hours >= 0),
+      allocated_hours REAL CHECK(allocated_hours IS NULL OR allocated_hours >= 0),
+      count_in_manpower INTEGER NOT NULL DEFAULT 1 CHECK(count_in_manpower IN (0,1)),
+      vehicle_id INTEGER REFERENCES planner_vehicles(id) ON DELETE SET NULL,
+      cross_project_request_id INTEGER,
       note TEXT NOT NULL DEFAULT '',
       created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     ) STRICT;
-    INSERT INTO planner_entries_v55(id,project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,note,created_by,created_at,updated_at)
+    INSERT INTO planner_entries_v55(id,project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,allocated_hours,count_in_manpower,vehicle_id,cross_project_request_id,note,created_by,created_at,updated_at)
       SELECT id,project_id,user_id,plan_date,
         CASE WHEN transport_mode='transport_only' THEN 'Dzień' ELSE shift END,
         CASE WHEN transport_mode='transport_only' THEN NULL ELSE controller_group_id END,
         work_mode,transport_mode,
-        CASE WHEN transport_mode='transport_only' THEN CASE WHEN duration_hours>0 THEN MAX(1,ROUND(duration_hours*60))/60.0 ELSE 8 END ELSE 0 END,
+        CASE WHEN transport_mode='transport_only' THEN CASE WHEN duration_hours>0 THEN MAX(1,ROUND(duration_hours*60))/60.0 ELSE 8 END ELSE 0 END,${allocatedHours},${countInManpower},${vehicleId},${crossProjectRequestId},
         note,created_by,created_at,updated_at
       FROM planner_entries;
     DROP TABLE planner_entries;

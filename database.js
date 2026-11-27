@@ -1480,13 +1480,14 @@ function createRepository(db, defaultProjectId) {
     ['status_items', 'project_id=?'], ['status_cell_values', 'status_item_id IN (SELECT id FROM status_items WHERE project_id=?)'], ['status_assignees', 'project_id=?'], ['tasks', 'project_id=?'], ['task_images', 'project_id=?'], ['task_dependencies', 'project_id=?'],
     ['task_checklist', 'task_id IN (SELECT id FROM tasks WHERE project_id=?)'],
     ['task_scope_checklist', 'task_id IN (SELECT id FROM tasks WHERE project_id=?)'],
-    ['task_assignees', 'project_id=?'], ['planner_vehicles', 'project_id=?'], ['planner_entries', 'project_id=?'],
+    ['task_assignees', 'project_id=?'], ['planner_entries', 'project_id=?'],
     ['planner_raw_plans', 'project_id=?'],
     ['planner_raw_users', 'raw_plan_id IN (SELECT id FROM planner_raw_plans WHERE project_id=?)'],
     ['planner_raw_projects', 'raw_plan_id IN (SELECT id FROM planner_raw_plans WHERE project_id=?)'],
     ['planner_raw_entries', 'raw_plan_id IN (SELECT id FROM planner_raw_plans WHERE project_id=?)'],
     ['planner_raw_absences', 'raw_plan_id IN (SELECT id FROM planner_raw_plans WHERE project_id=?)'],
-    ['planner_requirements', 'project_id=?'], ['planner_holidays', 'project_id=?'], ['planner_absences', 'project_id=?'], ['planner_overlap_reviews', 'project_id=?'], ['planner_time_adjustments', 'project_id=?'],
+    ['planner_requirements', 'project_id=?'], ['planner_project_requirements', 'project_id=?'], ['planner_holidays', 'project_id=?'], ['planner_absences', 'project_id=?'], ['planner_overlap_reviews', 'project_id=?'], ['planner_time_adjustments', 'project_id=?'],
+    ['planner_day_history', 'project_id=?'], ['planner_information_queue', 'project_id=?'], ['planner_snapshots', 'project_id=?'],
     ['calendar_annotations', 'project_id=?'], ['calendar_annotation_scopes', 'annotation_id IN (SELECT id FROM calendar_annotations WHERE project_id=?)'], ['calendar_item_dates', 'project_id=?'],
     ['open_points', 'project_id=?'], ['entity_dependencies', 'project_id=?'], ['daily_notes', 'project_id=?'], ['goals', 'project_id=?'],
     ['daily_note_sections', 'project_id=?'], ['daily_note_section_scopes', 'section_id IN (SELECT id FROM daily_note_sections WHERE project_id=?)'],
@@ -1517,7 +1518,7 @@ function createRepository(db, defaultProjectId) {
     'options', 'settings', 'completion_requirements', 'function_groups', 'function_group_elements', 'function_group_subcategories', 'function_group_checks',
     'function_group_check_subcategories', 'status_groups', 'status_subgroups', 'status_columns', 'status_workflow_states', 'status_items', 'status_cell_values', 'status_assignees', 'tasks', 'task_images', 'task_dependencies', 'task_checklist', 'task_scope_checklist', 'task_assignees', 'open_points', 'entity_dependencies',
     'daily_notes', 'daily_note_sections', 'daily_note_section_scopes', 'daily_note_section_links', 'daily_note_section_recipients', 'goals', 'goal_links', 'entity_mentions', 'entity_links', 'entity_requirements', 'entity_edit_locks', 'entity_comments', 'comment_mentions', 'entity_notification_preferences', 'user_communication_preferences', 'notifications', 'audit_log',
-    'export_templates', 'project_sequences', 'planner_vehicles', 'planner_entries', 'planner_raw_plans', 'planner_raw_users', 'planner_raw_projects', 'planner_raw_entries', 'planner_raw_absences', 'planner_requirements', 'planner_holidays', 'planner_absences', 'planner_overlap_reviews', 'planner_time_adjustments',
+    'export_templates', 'project_sequences', 'planner_entries', 'planner_raw_plans', 'planner_raw_users', 'planner_raw_projects', 'planner_raw_entries', 'planner_raw_absences', 'planner_requirements', 'planner_project_requirements', 'planner_holidays', 'planner_absences', 'planner_overlap_reviews', 'planner_time_adjustments', 'planner_day_history', 'planner_information_queue', 'planner_snapshots',
     'announcements', 'announcement_labels', 'announcement_scopes', 'announcement_users', 'announcement_links', 'announcement_label_links', 'announcement_reads', 'announcement_snoozes', 'calendar_annotations', 'calendar_annotation_scopes', 'calendar_item_dates',
     'shift_handovers', 'shift_handover_items', 'automation_rules', 'automation_rule_hits', 'saved_views',
     'project_meetings', 'project_meeting_items', 'project_meeting_item_assignees', 'project_meeting_item_workers', 'external_dependencies', 'external_dependency_updates'
@@ -1665,12 +1666,14 @@ function createRepository(db, defaultProjectId) {
       const durationMinutes = activityType === 'transport' && Number.isFinite(requestedDuration) ? Math.round(requestedDuration * 60) : 0;
       if (activityType === 'transport' && durationMinutes < 1) throw appError('Czas transportu musi wynosić co najmniej 1 minutę');
       const durationHours = activityType === 'transport' ? durationMinutes / 60 : 0;
+      const requestedAllocation = source.allocated_hours === '' || source.allocated_hours === null || source.allocated_hours === undefined ? null : Number(source.allocated_hours);
+      const allocatedHours = activityType === 'work' && Number.isFinite(requestedAllocation) && requestedAllocation >= 0 ? Math.round(requestedAllocation * 100) / 100 : null;
       const shift = activityType === 'transport' ? 'Dzień' : clean(source.shift) || 'Dzień';
       const countInManpower = activityType === 'work' && Number(source.count_in_manpower) === 0 ? 0 : 1;
       const vehicleId = activityType === 'transport' ? asId(source.vehicle_id) : null;
       if (groupId && !one('SELECT 1 FROM controller_groups WHERE id=? AND project_id=? AND active=1', groupId, projectId)) throw appError('Wybrany obszar nie należy do projektu');
       if (activityType === 'work' && !one("SELECT 1 FROM options WHERE project_id=? AND kind='shift' AND value=? AND active=1", projectId, shift)) throw appError(`Nieznana zmiana: ${shift}`);
-      if (vehicleId && !one('SELECT 1 FROM planner_vehicles WHERE id=? AND project_id=? AND active=1', vehicleId, projectId)) throw appError('Wybrane auto nie należy do tego projektu');
+      if (vehicleId && !one('SELECT 1 FROM planner_vehicles WHERE id=? AND active=1', vehicleId)) throw appError('Wybrane auto nie istnieje na globalnej liście transportów');
       if (!groupId && activityType === 'work' && !clean(source.note) && !Number(source.allow_without_area) && !source.id) continue;
       if (groupId) {
         const key = `${activityType}:${groupId}`;
@@ -1678,16 +1681,19 @@ function createRepository(db, defaultProjectId) {
         seenAssignments.add(key);
         hierarchyGroups[activityType].push(groupId);
       }
-      normalized.push({ groupId, shift, workMode, transportMode, activityType, durationHours, countInManpower, vehicleId, note: clean(source.note) });
+      normalized.push({ groupId, shift, workMode, transportMode, activityType, durationHours, allocatedHours, countInManpower, vehicleId, note: clean(source.note) });
     }
     if (hasHierarchyOverlap(hierarchyGroups.work, projectId) || hasHierarchyOverlap(hierarchyGroups.transport, projectId)) throw appError('Nie można przypisać jednocześnie obszaru nadrzędnego i jego podobszaru dla tego samego rodzaju aktywności');
+    if (new Set(normalized.filter(entry => entry.activityType === 'work').map(entry => entry.workMode)).size > 1) throw appError('Pracownik może pracować danego dnia wyłącznie ON albo wyłącznie OFF');
+    if (new Set(normalized.filter(entry => entry.activityType === 'work' && entry.allocatedHours !== null).map(entry => entry.allocatedHours)).size > 1) throw appError('Wszystkie obszary tego samego projektu muszą mieć tę samą liczbę przydzielonych godzin');
     return normalized;
   }
 
   function replacePlannerDay(userId, planDate, normalized, currentUser) {
-    db.prepare('DELETE FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=?').run(activeProjectId(), userId, planDate);
-    const insert = db.prepare(`INSERT INTO planner_entries(project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,count_in_manpower,vehicle_id,note,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`);
-    normalized.forEach(entry => insert.run(activeProjectId(), userId, planDate, entry.shift, entry.groupId, entry.workMode, entry.transportMode, entry.durationHours, entry.countInManpower, entry.vehicleId, entry.note, currentUser.id));
+    db.prepare("DELETE FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=? AND transport_mode!='transport_only'").run(activeProjectId(), userId, planDate);
+    db.prepare("DELETE FROM planner_entries WHERE user_id=? AND plan_date=? AND transport_mode='transport_only'").run(userId, planDate);
+    const insert = db.prepare(`INSERT INTO planner_entries(project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,allocated_hours,count_in_manpower,vehicle_id,note,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    normalized.forEach(entry => insert.run(activeProjectId(), userId, planDate, entry.shift, entry.groupId, entry.workMode, entry.transportMode, entry.durationHours, entry.allocatedHours, entry.countInManpower, entry.vehicleId, entry.note, currentUser.id));
     syncPlannerOverlapReview(userId, planDate, currentUser);
   }
 
@@ -1729,6 +1735,132 @@ function createRepository(db, defaultProjectId) {
     return Boolean(one(`SELECT 1 FROM project_memberships WHERE project_id=? AND user_id=? AND active=1 AND role IN ('moderator','project_admin')`, projectId, asId(currentUser?.id)));
   }
 
+  function cleanupPlannerLocks() {
+    db.prepare("DELETE FROM planner_project_locks WHERE datetime(last_activity_at)<datetime('now','-30 minutes')").run();
+    db.prepare("DELETE FROM planner_global_locks WHERE datetime(last_activity_at)<datetime('now','-30 minutes')").run();
+  }
+
+  function plannerLock(currentUser) {
+    cleanupPlannerLocks();
+    return one(`SELECT lock.*,u.display_name locked_by_name,
+      CAST((julianday('now')-julianday(lock.last_activity_at))*24*60 AS INTEGER) idle_minutes
+      FROM planner_project_locks lock JOIN users u ON u.id=lock.locked_by WHERE lock.project_id=?`, activeProjectId());
+  }
+
+  function checkoutPlanner(currentUser) {
+    cleanupPlannerLocks();
+    const existing = plannerLock(currentUser);
+    if (existing && Number(existing.locked_by) !== Number(currentUser.id)) throw appError(`Planner jest wyewidencjonowany przez: ${existing.locked_by_name}`, 409);
+    db.prepare(`INSERT INTO planner_project_locks(project_id,locked_by) VALUES(?,?)
+      ON CONFLICT(project_id) DO UPDATE SET last_activity_at=CURRENT_TIMESTAMP`).run(activeProjectId(), currentUser.id);
+    return plannerLock(currentUser);
+  }
+
+  function checkinPlanner(currentUser, force = false) {
+    cleanupPlannerLocks();
+    const existing = plannerLock(currentUser);
+    if (!existing) return { ok: true };
+    const privileged = currentUser?.role === 'system_admin' || currentUser?.role === 'project_admin';
+    if (Number(existing.locked_by) !== Number(currentUser.id) && !(force && privileged)) throw appError('Tylko autor blokady, Lider projektu lub Administrator systemu może zaewidencjonować Planner', 403);
+    db.prepare('DELETE FROM planner_project_locks WHERE project_id=?').run(activeProjectId());
+    db.prepare('DELETE FROM planner_global_locks WHERE locked_by=?').run(Number(existing.locked_by));
+    return { ok: true };
+  }
+
+  function touchPlannerLock(currentUser) {
+    checkoutPlanner(currentUser);
+    db.prepare('UPDATE planner_project_locks SET last_activity_at=CURRENT_TIMESTAMP WHERE project_id=? AND locked_by=?').run(activeProjectId(), currentUser.id);
+  }
+
+  function touchPlannerGlobalLock(userId, planDate, currentUser) {
+    cleanupPlannerLocks();
+    const existing = one(`SELECT lock.*,u.display_name locked_by_name FROM planner_global_locks lock JOIN users u ON u.id=lock.locked_by
+      WHERE lock.user_id=? AND lock.plan_date=?`, userId, planDate);
+    if (existing && Number(existing.locked_by) !== Number(currentUser.id)) throw appError(`Globalne dane tego dnia edytuje: ${existing.locked_by_name}`, 409);
+    db.prepare(`INSERT INTO planner_global_locks(user_id,plan_date,locked_by) VALUES(?,?,?)
+      ON CONFLICT(user_id,plan_date) DO UPDATE SET last_activity_at=CURRENT_TIMESTAMP`).run(userId, planDate, currentUser.id);
+  }
+
+  function validatePlannerWorkMode(userId, planDate, projectId, normalized) {
+    const modes = new Set(normalized.filter(entry => entry.activityType === 'work').map(entry => entry.workMode));
+    all(`SELECT DISTINCT pe.work_mode FROM planner_entries pe
+      LEFT JOIN planner_cross_project_requests request ON request.id=pe.cross_project_request_id
+      WHERE pe.user_id=? AND pe.plan_date=? AND pe.project_id!=? AND pe.transport_mode!='transport_only'
+        AND (request.id IS NULL OR request.status='approved')`, userId, planDate, projectId).forEach(row => modes.add(row.work_mode));
+    if (modes.size > 1) throw appError('Nie można łączyć pracy ON i OFF u jednego pracownika tego samego dnia, również pomiędzy projektami');
+  }
+
+  function validatePlannerAllocatedHours(userId, planDate, projectId, normalized) {
+    const targetWork=normalized.filter(entry=>entry.activityType==='work');
+    const rows=all("SELECT project_id,work_mode,allocated_hours FROM planner_entries WHERE user_id=? AND plan_date=? AND project_id!=? AND transport_mode!='transport_only' ORDER BY project_id,id",userId,planDate,projectId);
+    const projects=new Map();
+    for(const row of rows){const current=projects.get(Number(row.project_id))||{mode:row.work_mode,values:new Set()};if(row.allocated_hours!==null)current.values.add(Number(row.allocated_hours));projects.set(Number(row.project_id),current);}
+    if(targetWork.length){const values=new Set(targetWork.filter(entry=>entry.allocatedHours!==null).map(entry=>entry.allocatedHours));projects.set(Number(projectId),{mode:targetWork[0].workMode,values});}
+    if(![...projects.values()].some(item=>item.values.size)) return;
+    if([...projects.values()].some(item=>item.values.size>1)) throw appError('Projekt może mieć tylko jedną wartość przydzielonych godzin na osobę i dzień');
+    const mode=[...projects.values()][0]?.mode||'offline';
+    const dailyHours=Number(one('SELECT value FROM system_settings WHERE key=?',mode==='online'?'planner_online_hours':'planner_offline_hours')?.value||8);
+    const explicit=[...projects.values()].filter(item=>item.values.size).map(item=>[...item.values][0]);
+    const missing=projects.size-explicit.length; const total=explicit.reduce((sum,value)=>sum+value,0);
+    if(total>dailyHours+0.01) throw appError(`Przydział godzin do projektów przekracza dzienny czas pracy (${dailyHours} h)`);
+    if(!missing&&Math.abs(total-dailyHours)>0.01) throw appError(`Przydział godzin do projektów musi sumować się do dziennego czasu pracy (${dailyHours} h)`);
+  }
+
+  function validatePlannerRawAllocatedHours(rawPlanId,userId,planDate,projectId,normalized){
+    const targetWork=normalized.filter(entry=>entry.activityType==='work');
+    const rows=all("SELECT project_id,work_mode,allocated_hours FROM planner_raw_entries WHERE raw_plan_id=? AND user_id=? AND plan_date=? AND project_id!=? AND transport_mode!='transport_only' ORDER BY project_id,id",rawPlanId,userId,planDate,projectId);
+    const projects=new Map();
+    for(const row of rows){const current=projects.get(Number(row.project_id))||{mode:row.work_mode,values:new Set()};if(row.allocated_hours!==null)current.values.add(Number(row.allocated_hours));projects.set(Number(row.project_id),current);}
+    if(targetWork.length)projects.set(Number(projectId),{mode:targetWork[0].workMode,values:new Set(targetWork.filter(entry=>entry.allocatedHours!==null).map(entry=>entry.allocatedHours))});
+    if(![...projects.values()].some(item=>item.values.size))return;
+    if([...projects.values()].some(item=>item.values.size>1))throw appError('Projekt może mieć tylko jedną wartość przydzielonych godzin na osobę i dzień');
+    const mode=[...projects.values()][0]?.mode||'offline';const dailyHours=Number(one('SELECT value FROM system_settings WHERE key=?',mode==='online'?'planner_online_hours':'planner_offline_hours')?.value||8);
+    const explicit=[...projects.values()].filter(item=>item.values.size).map(item=>[...item.values][0]);const missing=projects.size-explicit.length;const total=explicit.reduce((sum,value)=>sum+value,0);
+    if(total>dailyHours+0.01)throw appError(`Przydział godzin do projektów przekracza dzienny czas pracy (${dailyHours} h)`);
+    if(!missing&&Math.abs(total-dailyHours)>0.01)throw appError(`Przydział godzin do projektów musi sumować się do dziennego czasu pracy (${dailyHours} h)`);
+  }
+
+  function plannerDayState(userId, planDate, projectId = activeProjectId()) {
+    const entries = all(`SELECT pe.*,COALESCE(pv.code,'T') vehicle_code,cg.name area_name,p.code project_code FROM planner_entries pe
+      JOIN projects p ON p.id=pe.project_id LEFT JOIN planner_vehicles pv ON pv.id=pe.vehicle_id LEFT JOIN controller_groups cg ON cg.id=pe.controller_group_id
+      WHERE pe.user_id=? AND pe.plan_date=? AND (pe.project_id=? OR pe.transport_mode='transport_only')
+      ORDER BY pe.transport_mode,pe.project_id,pe.id`, userId, planDate, projectId).map(row => ({
+        project_id: Number(row.project_id),project_code:row.project_code,activity_type: row.transport_mode === 'transport_only' ? 'transport' : 'work',
+        area_id: row.controller_group_id ? Number(row.controller_group_id) : null,area: row.area_name || '',work_mode: row.work_mode,
+        shift: row.shift,vehicle_id: row.vehicle_id ? Number(row.vehicle_id) : null,vehicle: row.vehicle_code || 'T',note: row.note || ''
+      }));
+    const absence = one('SELECT absence_type,note FROM system_absences WHERE user_id=? AND absence_date=?', userId, planDate) || null;
+    const dayComment = one('SELECT comment FROM planner_day_comments WHERE user_id=? AND plan_date=?', userId, planDate)?.comment || '';
+    return { entries, absence, day_comment: dayComment };
+  }
+
+  function plannerStateChanges(before, after) {
+    const label = entry => entry.activity_type === 'transport' ? entry.vehicle || 'T' : [entry.project_code || entry.project_id, entry.area || 'bez obszaru', entry.work_mode.toUpperCase(), entry.shift].join(' · ');
+    const signature = value => JSON.stringify(value || null);
+    const changes = [];
+    const beforeEntries = new Map((before.entries || []).map(entry => [label(entry), entry]));
+    const afterEntries = new Map((after.entries || []).map(entry => [label(entry), entry]));
+    for (const [key, value] of beforeEntries) if (!afterEntries.has(key)) changes.push({ type: 'removed', label: key, from: value });
+    for (const [key, value] of afterEntries) {
+      if (!beforeEntries.has(key)) changes.push({ type: 'added', label: key, to: value });
+      else if (signature(beforeEntries.get(key)) !== signature(value)) changes.push({ type: 'changed', label: key, from: beforeEntries.get(key), to: value });
+    }
+    if (signature(before.absence) !== signature(after.absence)) changes.push({ type: 'absence', label: 'Nieobecność', from: before.absence, to: after.absence });
+    if (before.day_comment !== after.day_comment) changes.push({ type: 'comment', label: 'Komentarz ogólny', from: before.day_comment, to: after.day_comment });
+    return changes;
+  }
+
+  function recordPlannerDayChange(userId, planDate, before, after, currentUser, projectId = activeProjectId()) {
+    const changes = plannerStateChanges(before, after);
+    if (!changes.length) return null;
+    const action = !(before.entries?.length || before.absence || before.day_comment) ? 'create' : !(after.entries?.length || after.absence || after.day_comment) ? 'delete' : 'update';
+    const historyId = Number(db.prepare(`INSERT INTO planner_day_history(project_id,user_id,plan_date,action,before_json,after_json,changes_json,changed_by)
+      VALUES(?,?,?,?,?,?,?,?)`).run(projectId,userId,planDate,action,JSON.stringify(before),JSON.stringify(after),JSON.stringify(changes),currentUser.id).lastInsertRowid);
+    db.prepare(`INSERT INTO planner_information_queue(project_id,user_id,plan_date,history_id,status)
+      VALUES(?,?,?,?,'pending')`).run(projectId,userId,planDate,historyId);
+    return historyId;
+  }
+
   function validatePlannerProjectLimit(userId, planDate, projectId, includesWork) {
     if (!includesWork) return;
     const otherProjects = Number(one(`SELECT COUNT(DISTINCT project_id) count FROM planner_entries
@@ -1743,7 +1875,9 @@ function createRepository(db, defaultProjectId) {
     const projectUsers = plannerProjectUsers();
     const canManageRequirements = ['system_admin', 'project_admin', 'moderator'].includes(currentUser?.role);
     const currentProject = one('SELECT id,code,name,planner_color,planner_short_code FROM projects WHERE id=?', activeProjectId());
-    const vehicles = all('SELECT * FROM planner_vehicles WHERE project_id=? AND active=1 ORDER BY sort_order,code,id', activeProjectId());
+    const vehicles = all(`SELECT vehicle.* FROM planner_vehicles vehicle JOIN (
+      SELECT MIN(id) id FROM planner_vehicles WHERE active=1 GROUP BY upper(code)
+    ) canonical ON canonical.id=vehicle.id ORDER BY vehicle.sort_order,vehicle.code,vehicle.id`);
     const vehicleMap = new Map(vehicles.map(vehicle => [Number(vehicle.id), vehicle]));
     const entries = all(`SELECT pe.*,u.display_name,creator.display_name created_by_name,
       request.status cross_project_status,source.code cross_project_source_code
@@ -1752,7 +1886,7 @@ function createRepository(db, defaultProjectId) {
       LEFT JOIN users creator ON creator.id=pe.created_by
       LEFT JOIN planner_cross_project_requests request ON request.id=pe.cross_project_request_id
       LEFT JOIN projects source ON source.id=request.source_project_id
-      WHERE pe.project_id=? AND pe.plan_date BETWEEN ? AND ? AND pm.planner_enabled=1
+      WHERE pe.project_id=? AND pe.plan_date BETWEEN ? AND ? AND pm.planner_enabled=1 AND pe.transport_mode!='transport_only'
       ORDER BY pe.plan_date,u.sort_order,pe.id`, activeProjectId(), range.from, range.to).map(entry => {
         const area = groupMap.get(Number(entry.controller_group_id));
         const vehicle = vehicleMap.get(Number(entry.vehicle_id));
@@ -1768,16 +1902,29 @@ function createRepository(db, defaultProjectId) {
       JOIN projects p ON p.id=pe.project_id AND p.active=1
       JOIN project_memberships pm ON pm.project_id=pe.project_id AND pm.user_id=pe.user_id AND pm.active=1
       LEFT JOIN users creator ON creator.id=pe.created_by
-      LEFT JOIN planner_vehicles pv ON pv.id=pe.vehicle_id AND pv.project_id=pe.project_id
+      LEFT JOIN planner_vehicles pv ON pv.id=pe.vehicle_id
       LEFT JOIN planner_cross_project_requests request ON request.id=pe.cross_project_request_id
       LEFT JOIN projects source ON source.id=request.source_project_id
-      WHERE pe.project_id!=? AND pe.plan_date BETWEEN ? AND ? AND pm.planner_enabled=1
+      WHERE pe.project_id!=? AND pe.plan_date BETWEEN ? AND ? AND pm.planner_enabled=1 AND pe.transport_mode!='transport_only'
       ${crossProjectVisibility.sql}
       ORDER BY pe.plan_date,u.sort_order,p.sort_order,pe.id`, activeProjectId(), range.from, range.to, ...crossProjectVisibility.params).map(entry => {
         const otherHierarchy = hierarchyData(entry.project_id);
         const area = otherHierarchy.groups.find(group => group.id === Number(entry.controller_group_id));
         return { ...entry, activity_type: entry.transport_mode === 'transport_only' ? 'transport' : 'work', transport_code: entry.transport_code || 'T', vehicle_registration: entry.vehicle_registration || '', is_current_project: false, area_name: area?.name || '', area_path: area?.path_label || '', area_depth: area?.depth || 0, root_area_id: area?.root_group_id || null };
       });
+    const currentUserIds = projectUsers.map(user => Number(user.id));
+    const globalTransports = currentUserIds.length ? all(`SELECT pe.*,u.display_name,creator.display_name created_by_name,
+      COALESCE(pv.code,'T') transport_code,COALESCE(pv.registration_number,'') vehicle_registration
+      FROM planner_entries pe JOIN users u ON u.id=pe.user_id LEFT JOIN users creator ON creator.id=pe.created_by
+      LEFT JOIN planner_vehicles pv ON pv.id=pe.vehicle_id
+      WHERE pe.transport_mode='transport_only' AND pe.user_id IN (${currentUserIds.map(() => '?').join(',')})
+        AND pe.plan_date BETWEEN ? AND ? ORDER BY pe.plan_date,u.sort_order,pe.id`, ...currentUserIds, range.from, range.to).map(entry => ({
+          ...entry, project_id: activeProjectId(), storage_project_id: entry.project_id, activity_type: 'transport', transport_code: entry.transport_code || 'T',
+          project_code: currentProject?.code || '', project_short_code: currentProject?.planner_short_code || String(currentProject?.code || '').slice(0, 6),
+          project_name: currentProject?.name || '', project_color: currentProject?.planner_color || '#2563eb', is_current_project: true,
+          area_name: '', area_path: '', area_depth: 0, root_area_id: null
+        })) : [];
+    entries.push(...globalTransports);
     const holidays = all('SELECT * FROM system_holidays WHERE holiday_date BETWEEN ? AND ? ORDER BY holiday_date', range.from, range.to);
     const timeAdjustments = all(`SELECT * FROM planner_time_adjustments
       WHERE project_id=? AND plan_date BETWEEN ? AND ? ORDER BY plan_date,user_id`, activeProjectId(), range.from, range.to);
@@ -1815,8 +1962,8 @@ function createRepository(db, defaultProjectId) {
       activeProjectId(), range.from, range.to, activeProjectId(), range.from, range.to).map(row => ({ ...row, tasks: Number(row.tasks), points: Number(row.points), statuses: Number(row.statuses), notes: Number(row.notes) }));
     const summarizePlannerEntries = source => {
       const byDate = new Map();
-      source.filter(entry => Number(entry.count_in_manpower) !== 0).forEach(entry => {
-        if (!byDate.has(entry.plan_date)) byDate.set(entry.plan_date, []);
+      source.forEach(entry => { if (!byDate.has(entry.plan_date)) byDate.set(entry.plan_date, []); });
+      source.filter(entry => Number(entry.count_in_manpower) !== 0 && entry.transport_mode !== 'transport_only').forEach(entry => {
         byDate.get(entry.plan_date).push(entry);
       });
       return [...byDate.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([planDate, dayEntries]) => ({
@@ -1824,7 +1971,7 @@ function createRepository(db, defaultProjectId) {
         headcount: new Set(dayEntries.map(entry => Number(entry.user_id))).size,
         online_headcount: new Set(dayEntries.filter(entry => entry.transport_mode !== 'transport_only' && entry.work_mode === 'online').map(entry => Number(entry.user_id))).size,
         offline_headcount: new Set(dayEntries.filter(entry => entry.transport_mode !== 'transport_only' && entry.work_mode === 'offline').map(entry => Number(entry.user_id))).size,
-        transport_only: dayEntries.filter(entry => entry.transport_mode === 'transport_only').length,
+        transport_only: source.filter(entry => entry.plan_date === planDate && entry.transport_mode === 'transport_only').length,
         transport_work: dayEntries.filter(entry => entry.transport_mode === 'transport_work').length
       }));
     };
@@ -1836,6 +1983,8 @@ function createRepository(db, defaultProjectId) {
         const area = groupMap.get(Number(row.controller_group_id));
         return { ...row, area_path: area?.path_label || row.area_name, root_area_id: area?.root_group_id || row.controller_group_id };
       }) : [];
+    const projectRequirements = canManageRequirements ? all(`SELECT * FROM planner_project_requirements
+      WHERE project_id=? AND plan_date BETWEEN ? AND ? ORDER BY plan_date,work_mode`, activeProjectId(), range.from, range.to) : [];
     const currentDate = new Date().toISOString().slice(0, 10);
     const area_summary = hierarchy.groups.filter(group => !group.parent_id).map(group => {
       const descendants = new Set(groupDescendantIds(group.id));
@@ -1901,6 +2050,8 @@ function createRepository(db, defaultProjectId) {
     const allRelatedEntries = canManageRequirements && requirementProjectPlaceholders ? all(`SELECT pe.* FROM planner_entries pe
       JOIN project_memberships pm ON pm.project_id=pe.project_id AND pm.user_id=pe.user_id AND pm.active=1 AND pm.planner_enabled=1
       WHERE pe.project_id IN (${requirementProjectPlaceholders}) AND pe.plan_date BETWEEN ? AND ? ORDER BY pe.project_id,pe.plan_date,pe.user_id,pe.id`, ...relatedRequirementProjectIds, range.from, range.to) : entries;
+    const allRelatedProjectRequirements = canManageRequirements && requirementProjectPlaceholders ? all(`SELECT * FROM planner_project_requirements
+      WHERE project_id IN (${requirementProjectPlaceholders}) AND plan_date BETWEEN ? AND ? ORDER BY project_id,plan_date,work_mode`, ...relatedRequirementProjectIds, range.from, range.to) : projectRequirements;
     const requirementProjects = relatedRequirementProjectIds.map(projectId => {
       const project = one('SELECT id,code,name,planner_color,planner_short_code FROM projects WHERE id=? AND active=1', projectId);
       const sharedUserCount = Number(one(`SELECT COUNT(DISTINCT current_pm.user_id) count FROM project_memberships current_pm
@@ -1908,6 +2059,7 @@ function createRepository(db, defaultProjectId) {
         WHERE current_pm.project_id=? AND current_pm.active=1 AND current_pm.planner_enabled=1`, projectId, activeProjectId())?.count || 0);
       const projectHierarchy = hierarchyData(projectId);
       const projectRequirements = allRelatedRequirements.filter(row => Number(row.project_id) === Number(projectId));
+      const projectTotals = allRelatedProjectRequirements.filter(row => Number(row.project_id) === Number(projectId));
       const projectEntries = allRelatedEntries.filter(row => Number(row.project_id) === Number(projectId) && row.transport_mode !== 'transport_only' && Number(row.count_in_manpower) !== 0);
       const visibleProjectEntries = visiblePlannerEntries.filter(row => Number(row.project_id) === Number(projectId));
       const roots = projectHierarchy.groups.filter(group => !group.parent_id).map(group => {
@@ -1926,8 +2078,17 @@ function createRepository(db, defaultProjectId) {
           })
         };
       });
-      return { ...project, planner_short_code: project?.planner_short_code || String(project?.code || '').slice(0, 6), shared_user_count: sharedUserCount, can_manage: canManagePlannerProject(currentUser, projectId), areas: projectHierarchy.groups, requirements: projectRequirements, area_day_summary: roots, summary: summarizePlannerEntries(visibleProjectEntries) };
-    }).filter(project => project.id && (Number(project.id) === Number(activeProjectId()) || Number(project.shared_user_count) > 0));
+      const projectSummary = summarizePlannerEntries(visibleProjectEntries).map(day => ({ ...day,
+        online_required: Number(projectTotals.find(row => row.plan_date === day.plan_date && row.work_mode === 'online')?.required_count || 0),
+        offline_required: Number(projectTotals.find(row => row.plan_date === day.plan_date && row.work_mode === 'offline')?.required_count || 0)
+      }));
+      for (let index = 0; index < range.days; index += 1) {
+        const date = new Date(`${range.from}T12:00:00Z`); date.setUTCDate(date.getUTCDate() + index); const value = date.toISOString().slice(0,10);
+        if (!projectSummary.some(day => day.plan_date === value) && projectTotals.some(row => row.plan_date === value)) projectSummary.push({ plan_date:value,headcount:0,online_headcount:0,offline_headcount:0,transport_only:0,transport_work:0,
+          online_required:Number(projectTotals.find(row => row.plan_date===value && row.work_mode==='online')?.required_count||0),offline_required:Number(projectTotals.find(row => row.plan_date===value && row.work_mode==='offline')?.required_count||0) });
+      }
+      return { ...project, planner_short_code: project?.planner_short_code || String(project?.code || '').slice(0, 6), shared_user_count: sharedUserCount, can_manage: canManagePlannerProject(currentUser, projectId), areas: projectHierarchy.groups, requirements: projectRequirements, project_requirements: projectTotals, area_day_summary: roots, summary: projectSummary.sort((a,b)=>a.plan_date.localeCompare(b.plan_date)) };
+    }).filter(project => project.id && (Number(project.id) === Number(activeProjectId()) || (project.summary || []).some(day => Number(day.headcount) > 0)));
     let timeDetails = null;
     if (canManageRequirements) {
       const plannerUserIds = projectUsers.map(user => Number(user.id)).filter(Boolean);
@@ -1974,19 +2135,40 @@ function createRepository(db, defaultProjectId) {
       WHERE request.target_project_id=? AND request.status='pending' ORDER BY request.plan_date,u.sort_order,request.id`, activeProjectId()) : [];
     const outgoingCrossProjectRequests = canManageRequirements ? all(`${requestSelect}
       WHERE request.source_project_id=? AND request.status='pending' ORDER BY request.plan_date,u.sort_order,request.id`, activeProjectId()) : [];
+    const proposedEntries = [...incomingCrossProjectRequests, ...outgoingCrossProjectRequests].flatMap(request => {
+      let proposal = [];
+      try { proposal = JSON.parse(request.entries_json || '[]'); } catch { proposal = []; }
+      const projectId = Number(request.target_project_id); const project = one('SELECT id,code,name,planner_color,planner_short_code FROM projects WHERE id=?', projectId);
+      const proposalHierarchy = hierarchyData(projectId); const groups = new Map(proposalHierarchy.groups.map(group => [Number(group.id),group]));
+      return proposal.map((entry,index) => { const area = groups.get(Number(entry.controller_group_id)); return {
+        ...entry,id:`proposal-${request.id}-${index}`,request_id:request.id,project_id:projectId,user_id:request.user_id,display_name:request.display_name,
+        plan_date:request.plan_date,activity_type:'work',transport_mode:'none',duration_hours:0,cross_project_status:'pending',is_proposal:true,
+        project_code:project?.code || '',project_short_code:project?.planner_short_code || String(project?.code || '').slice(0,6),project_name:project?.name || '',project_color:project?.planner_color || '#2563eb',
+        is_current_project:projectId === activeProjectId(),area_name:area?.name || '',area_path:area?.path_label || '',area_depth:area?.depth || 0,root_area_id:area?.root_group_id || null
+      }; });
+    });
+    const proposalKeys = new Set(proposedEntries.map(entry => `${entry.project_id}:${entry.user_id}:${entry.plan_date}`));
+    [...entries,...crossProjectEntries].forEach(entry => { if (entry.transport_mode !== 'transport_only' && proposalKeys.has(`${entry.project_id}:${entry.user_id}:${entry.plan_date}`)) entry.superseded_by_proposal = true; });
     const assignmentProjects = canManageRequirements ? all('SELECT id,code,name,planner_color,planner_short_code FROM projects WHERE active=1 ORDER BY sort_order,name,id').map(project => ({
       ...project,
       can_manage: canManagePlannerProject(currentUser, project.id),
       eligible_user_ids: all('SELECT user_id FROM project_memberships WHERE project_id=? AND active=1 AND planner_enabled=1 ORDER BY user_id', project.id).map(row => Number(row.user_id)),
       areas: hierarchyData(project.id).groups.map(group => ({ id: group.id, name: group.name, path_label: group.path_label, depth: group.depth })),
       shifts: all("SELECT value FROM options WHERE project_id=? AND kind='shift' AND active=1 ORDER BY sort_order,id", project.id).map(row => row.value),
-      vehicles: all('SELECT id,code,registration_number FROM planner_vehicles WHERE project_id=? AND active=1 ORDER BY sort_order,code,id', project.id)
+      vehicles: vehicles.map(({ id,code,registration_number }) => ({ id,code,registration_number }))
     })) : [];
     const previousDateValue = new Date(`${range.from}T12:00:00Z`); previousDateValue.setUTCDate(previousDateValue.getUTCDate() - 1);
     const previousProjectUserIds = all(`SELECT DISTINCT pe.user_id FROM planner_entries pe
       JOIN projects p ON p.id=pe.project_id AND p.active=1
       WHERE pe.plan_date=? AND pe.transport_mode!='transport_only' ORDER BY pe.user_id`, previousDateValue.toISOString().slice(0, 10)).map(row => Number(row.user_id));
-    return { ...range, users, entries, cross_project_entries: crossProjectEntries, previous_project_user_ids: previousProjectUserIds, incoming_cross_project_requests: incomingCrossProjectRequests, outgoing_cross_project_requests: outgoingCrossProjectRequests, assignment_projects: assignmentProjects, requirement_projects: requirementProjects, absences, holidays, annotations, overlap_reviews: overlapReviews, time_adjustments: canManageRequirements ? timeAdjustments : [], work, summary, area_summary, area_day_summary, shift_summary, mode_summary, areas: hierarchy.groups, vehicles, requirements, time_details: timeDetails, can_manage_requirements: canManageRequirements, can_manage_time: canManageRequirements };
+    const dayComments = all(`SELECT comment.* FROM planner_day_comments comment JOIN project_memberships pm ON pm.user_id=comment.user_id
+      WHERE pm.project_id=? AND pm.active=1 AND pm.planner_enabled=1 AND comment.plan_date BETWEEN ? AND ?`, activeProjectId(), range.from, range.to);
+    const historyCounts = all(`SELECT user_id,plan_date,COUNT(*) history_count FROM planner_day_history
+      WHERE project_id=? AND plan_date BETWEEN ? AND ? GROUP BY user_id,plan_date`, activeProjectId(), range.from, range.to);
+    const informationQueue = canManageRequirements ? all(`SELECT queue.*,u.display_name,actor.display_name informed_by_name FROM planner_information_queue queue
+      JOIN users u ON u.id=queue.user_id LEFT JOIN users actor ON actor.id=queue.informed_by
+      WHERE queue.project_id=? AND queue.plan_date BETWEEN ? AND ? ORDER BY queue.status,queue.plan_date,u.sort_order,queue.id`, activeProjectId(), range.from, range.to) : [];
+    return { ...range, users, entries, cross_project_entries: crossProjectEntries, proposed_entries: proposedEntries, previous_project_user_ids: previousProjectUserIds, incoming_cross_project_requests: incomingCrossProjectRequests, outgoing_cross_project_requests: outgoingCrossProjectRequests, assignment_projects: assignmentProjects, requirement_projects: requirementProjects, absences, day_comments: dayComments, history_counts: historyCounts, information_queue: informationQueue, planner_lock: plannerLock(currentUser), holidays, annotations, overlap_reviews: overlapReviews, time_adjustments: canManageRequirements ? timeAdjustments : [], work, summary, area_summary, area_day_summary, shift_summary, mode_summary, areas: hierarchy.groups, vehicles, requirements, project_requirements: projectRequirements, time_details: timeDetails, can_manage_requirements: canManageRequirements, can_manage_time: canManageRequirements };
   }
 
   function plannerTimeCalculation(range, users, entries, absences, holidays, adjustments = [], visibleRange = range) {
@@ -2068,6 +2250,17 @@ function createRepository(db, defaultProjectId) {
       }
       overtimeRaw += Number(adjustment.overtime_raw_adjustment || 0);
       overtimeWeighted += Number(adjustment.overtime_weighted_adjustment || 0);
+      const projectWork = new Map();
+      for (const entry of workEntries) if (!projectWork.has(Number(entry.project_id))) projectWork.set(Number(entry.project_id), { project_id:Number(entry.project_id),project_code:entry.project_code || '',project_name:entry.project_name || '',work_mode:entry.work_mode,allocated_hours:entry.allocated_hours === null || entry.allocated_hours === undefined ? null : Number(entry.allocated_hours) });
+      const allocations = [...projectWork.values()];
+      if (allocations.length && actual > 0) {
+        const explicit = allocations.filter(item => item.allocated_hours !== null);
+        const explicitSum = explicit.reduce((sum,item)=>sum+item.allocated_hours,0);
+        const missing = allocations.filter(item => item.allocated_hours === null);
+        const remaining = Math.max(0,actual-explicitSum);
+        const fallback = missing.length ? remaining / missing.length : 0;
+        allocations.forEach(item => { item.hours = Math.round((item.allocated_hours === null ? fallback : item.allocated_hours) * 100) / 100; delete item.allocated_hours; });
+      }
       allDetails.push({
         user_id: user.id, display_name: user.display_name, date, label,
         actual_hours: actual, credited_hours: credited, travel_hours: travelHours,
@@ -2078,7 +2271,7 @@ function createRepository(db, defaultProjectId) {
         work_start_time: manualStart || '', work_end_time: manualEnd || '',
         overtime_raw_balance_override: nullableNumber(adjustment.overtime_raw_balance_override),
         overtime_weighted_balance_override: nullableNumber(adjustment.overtime_weighted_balance_override),
-        adjustment_note: adjustment.note || '', is_holiday: holiday ? 1 : 0,
+        adjustment_note: adjustment.note || '', project_hours: allocations, is_holiday: holiday ? 1 : 0,
         is_weekend: isSaturday || isSunday ? 1 : 0, absence_type: absence?.absence_type || ''
       });
     }
@@ -2112,7 +2305,9 @@ function createRepository(db, defaultProjectId) {
         overloaded_weeks: [...weekly.entries()].filter(([, hours]) => hours > 48).map(([week, hours]) => ({ week, hours }))
       };
     });
-    return { details, users: userSummary };
+    const projectHours = new Map();
+    details.forEach(detail => (detail.project_hours || []).forEach(item => { const key=`${item.project_id}:${item.work_mode}`; const current=projectHours.get(key)||{ project_id:item.project_id,project_code:item.project_code,project_name:item.project_name,work_mode:item.work_mode,hours:0 }; current.hours += Number(item.hours||0); projectHours.set(key,current); }));
+    return { details, users: userSummary, projects: [...projectHours.values()].map(item => ({ ...item,hours:Math.round(item.hours*100)/100 })) };
   }
 
   function savePlannerDay(input, currentUser) {
@@ -2122,7 +2317,12 @@ function createRepository(db, defaultProjectId) {
     validatePlannerUserDate(userId, planDate);
     const absenceType = ['time_off', 'vacation'].includes(input.absence_type) ? input.absence_type : '';
     const normalized = absenceType ? [] : normalizePlannerEntries(input.entries);
+    touchPlannerLock(currentUser);
+    if (absenceType || normalized.some(entry => entry.activityType === 'transport')) touchPlannerGlobalLock(userId, planDate, currentUser);
+    validatePlannerWorkMode(userId, planDate, activeProjectId(), normalized);
+    validatePlannerAllocatedHours(userId, planDate, activeProjectId(), normalized);
     validatePlannerProjectLimit(userId, planDate, activeProjectId(), normalized.some(entry => entry.activityType === 'work'));
+    const before = plannerDayState(userId, planDate);
     db.exec('BEGIN IMMEDIATE');
     try {
       replacePlannerDay(userId, planDate, normalized, currentUser);
@@ -2133,6 +2333,10 @@ function createRepository(db, defaultProjectId) {
         db.prepare(`INSERT INTO system_absences(user_id,absence_date,absence_type,note,created_by)
           VALUES(?,?,?,?,?)`).run(userId, planDate, absenceType, clean(input.absence_note), currentUser.id);
       }
+      const dayComment = clean(input.day_comment);
+      if (dayComment) db.prepare(`INSERT INTO planner_day_comments(user_id,plan_date,comment,updated_by) VALUES(?,?,?,?)
+        ON CONFLICT(user_id,plan_date) DO UPDATE SET comment=excluded.comment,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP`).run(userId, planDate, dayComment, currentUser.id);
+      else db.prepare('DELETE FROM planner_day_comments WHERE user_id=? AND plan_date=?').run(userId, planDate);
       if (['actual_hours_adjustment', 'overtime_raw_adjustment', 'overtime_weighted_adjustment', 'work_start_time', 'work_end_time', 'overtime_raw_balance_override', 'overtime_weighted_balance_override', 'adjustment_note'].some(key => Object.hasOwn(input, key))) {
         const actualAdjustment = Number(input.actual_hours_adjustment || 0);
         const rawAdjustment = Number(input.overtime_raw_adjustment || 0);
@@ -2154,9 +2358,118 @@ function createRepository(db, defaultProjectId) {
             VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(activeProjectId(), userId, planDate, actualAdjustment, rawAdjustment, weightedAdjustment, workStart, workEnd, rawBalance, weightedBalance, adjustmentNote, currentUser.id);
         }
       }
+      const after = plannerDayState(userId, planDate);
+      recordPlannerDayChange(userId, planDate, before, after, currentUser);
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
     return plannerData(planDate, planDate, currentUser);
+  }
+
+  function plannerDayHistory(userId, planDate) {
+    const normalizedUserId = asId(userId); const normalizedDate = nullableDate(planDate);
+    if (!normalizedUserId || !normalizedDate) throw appError('Pracownik i dzień są wymagane');
+    return all(`SELECT history.*,actor.display_name changed_by_name FROM planner_day_history history
+      LEFT JOIN users actor ON actor.id=history.changed_by WHERE history.project_id=? AND history.user_id=? AND history.plan_date=?
+      ORDER BY history.created_at DESC,history.id DESC`, activeProjectId(), normalizedUserId, normalizedDate).map(row => ({
+        ...row,before:JSON.parse(row.before_json||'{}'),after:JSON.parse(row.after_json||'{}'),changes:JSON.parse(row.changes_json||'[]')
+      }));
+  }
+
+  function updatePlannerInformation(input, currentUser) {
+    const ids = [...new Set((Array.isArray(input.ids) ? input.ids : []).map(asId).filter(Boolean))];
+    const from = nullableDate(input.from); const to = nullableDate(input.to);
+    const rows = ids.length ? all(`SELECT * FROM planner_information_queue WHERE project_id=? AND id IN (${ids.map(()=>'?').join(',')})`,activeProjectId(),...ids)
+      : from && to ? all(`SELECT * FROM planner_information_queue WHERE project_id=? AND status='pending' AND plan_date BETWEEN ? AND ?`,activeProjectId(),from,to) : [];
+    if (!rows.length) throw appError('Brak zmian do oznaczenia lub wysłania');
+    const note = clean(input.note); const notify = Number(input.notify_users) === 1;
+    const update = db.prepare(`UPDATE planner_information_queue SET status='informed',informed_by=?,informed_at=CURRENT_TIMESTAMP,
+      informed_note=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND project_id=?`);
+    rows.forEach(row => update.run(currentUser.id,note,row.id,activeProjectId()));
+    if (notify) for (const [userId,userRows] of [...new Map(rows.map(row=>[Number(row.user_id),[]])).keys()].map(userId=>[userId,rows.filter(row=>Number(row.user_id)===userId)])) {
+      const dates=[...new Set(userRows.map(row=>row.plan_date))].sort();
+      createNotification(userId,'automation','note',userRows.at(-1).history_id || userRows.at(-1).id,'Zmiany w Twoim planie',`Zaktualizowano plan na ${dates.length} ${dates.length===1?'dzień':'dni'} (${dates[0]}${dates.length>1?` – ${dates.at(-1)}`:''}).${note?` ${note}`:''}`);
+    }
+    return { updated:rows.length,notified_users:notify?new Set(rows.map(row=>row.user_id)).size:0 };
+  }
+
+  function plannerSnapshots() {
+    return all(`SELECT snapshot.id,snapshot.project_id,snapshot.year,snapshot.quarter,snapshot.name,snapshot.created_by,snapshot.created_at,
+      creator.display_name created_by_name FROM planner_snapshots snapshot LEFT JOIN users creator ON creator.id=snapshot.created_by
+      WHERE snapshot.project_id=? ORDER BY snapshot.year DESC,snapshot.quarter DESC,snapshot.created_at DESC`,activeProjectId());
+  }
+
+  function plannerQuarterRange(year, quarter) {
+    const normalizedYear=Number(year); const normalizedQuarter=Number(quarter);
+    if (!Number.isInteger(normalizedYear)||normalizedYear<2026||normalizedYear>2040||![1,2,3,4].includes(normalizedQuarter)) throw appError('Snapshot może dotyczyć kwartałów Q1–Q4 w latach 2026–2040');
+    const month=(normalizedQuarter-1)*3; const from=new Date(Date.UTC(normalizedYear,month,1)).toISOString().slice(0,10); const to=new Date(Date.UTC(normalizedYear,month+3,0)).toISOString().slice(0,10);
+    return { year:normalizedYear,quarter:normalizedQuarter,from,to };
+  }
+
+  function createPlannerSnapshot(input,currentUser) {
+    const range=plannerQuarterRange(input.year,input.quarter);
+    if (Number(one('SELECT COUNT(*) count FROM planner_snapshots WHERE project_id=? AND year=? AND quarter=?',activeProjectId(),range.year,range.quarter)?.count||0)>=3) throw appError('Dla jednego kwartału można utworzyć maksymalnie 3 snapshoty');
+    const userIds=plannerProjectUsers().map(user=>Number(user.id)); const placeholders=userIds.map(()=>'?').join(',');
+    const projectIds=userIds.length?all(`SELECT DISTINCT pm.project_id FROM project_memberships pm JOIN projects p ON p.id=pm.project_id AND p.active=1
+      WHERE pm.user_id IN (${placeholders}) AND pm.active=1 AND pm.planner_enabled=1 ORDER BY pm.project_id`,...userIds).map(row=>Number(row.project_id)):[];
+    const payload={ version:1,...range,project_ids:projectIds,
+      entries:userIds.length?all(`SELECT * FROM planner_entries WHERE user_id IN (${placeholders}) AND plan_date BETWEEN ? AND ? ORDER BY plan_date,user_id,project_id,id`,...userIds,range.from,range.to):[],
+      absences:userIds.length?all(`SELECT * FROM system_absences WHERE user_id IN (${placeholders}) AND absence_date BETWEEN ? AND ? ORDER BY absence_date,user_id`,...userIds,range.from,range.to):[],
+      comments:userIds.length?all(`SELECT * FROM planner_day_comments WHERE user_id IN (${placeholders}) AND plan_date BETWEEN ? AND ? ORDER BY plan_date,user_id`,...userIds,range.from,range.to):[] };
+    const name=clean(input.name)||`Q${range.quarter} ${range.year} · ${new Date().toLocaleString('pl-PL')}`;
+    const id=Number(db.prepare('INSERT INTO planner_snapshots(project_id,year,quarter,name,snapshot_json,created_by) VALUES(?,?,?,?,?,?)').run(activeProjectId(),range.year,range.quarter,name,JSON.stringify(payload),currentUser.id).lastInsertRowid);
+    return plannerSnapshots().find(item=>item.id===id);
+  }
+
+  function restorePlannerSnapshot(id,input,currentUser) {
+    const row=one('SELECT * FROM planner_snapshots WHERE id=? AND project_id=?',asId(id),activeProjectId());
+    if(!row) throw appError('Nie znaleziono snapshotu',404);
+    const payload=JSON.parse(row.snapshot_json||'{}'); const range=plannerQuarterRange(row.year,row.quarter);
+    const from=nullableDate(input.from)||range.from; const to=nullableDate(input.to)||range.to;
+    if(from<range.from||to>range.to||from>to) throw appError('Zakres przywracania musi mieścić się w kwartale snapshotu');
+    touchPlannerLock(currentUser);
+    const userIds=plannerProjectUsers().map(user=>Number(user.id));
+    const targetEntries=(payload.entries||[]).filter(entry=>userIds.includes(Number(entry.user_id))&&entry.plan_date>=from&&entry.plan_date<=to);
+    const targetAbsences=(payload.absences||[]).filter(item=>userIds.includes(Number(item.user_id))&&item.absence_date>=from&&item.absence_date<=to);
+    const targetComments=(payload.comments||[]).filter(item=>userIds.includes(Number(item.user_id))&&item.plan_date>=from&&item.plan_date<=to);
+    const dates=[]; for(let date=from;date<=to;date=new Date(`${date}T12:00:00Z`).toISOString().slice(0,10)){ dates.push(date); const next=new Date(`${date}T12:00:00Z`); next.setUTCDate(next.getUTCDate()+1); date=next.toISOString().slice(0,10); if(date>to) break; }
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      for(const userId of userIds) for(const planDate of dates){
+        const before=plannerDayState(userId,planDate);
+        db.prepare("DELETE FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=? AND transport_mode!='transport_only'").run(activeProjectId(),userId,planDate);
+        db.prepare("DELETE FROM planner_entries WHERE user_id=? AND plan_date=? AND transport_mode='transport_only'").run(userId,planDate);
+        const rows=targetEntries.filter(entry=>Number(entry.user_id)===userId&&entry.plan_date===planDate&&(Number(entry.project_id)===activeProjectId()||entry.transport_mode==='transport_only'));
+        const insert=db.prepare(`INSERT INTO planner_entries(project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,allocated_hours,count_in_manpower,vehicle_id,note,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+        rows.forEach(entry=>insert.run(entry.transport_mode==='transport_only'?activeProjectId():entry.project_id,userId,planDate,entry.shift,entry.controller_group_id,entry.work_mode,entry.transport_mode,entry.duration_hours,entry.allocated_hours??null,entry.count_in_manpower,entry.vehicle_id,entry.note,currentUser.id));
+        db.prepare('DELETE FROM system_absences WHERE user_id=? AND absence_date=?').run(userId,planDate);
+        const absence=targetAbsences.find(item=>Number(item.user_id)===userId&&item.absence_date===planDate);
+        if(absence) {
+          db.prepare('DELETE FROM planner_entries WHERE user_id=? AND plan_date=?').run(userId,planDate);
+          db.prepare("UPDATE planner_cross_project_requests SET status='rejected',decided_by=?,decided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE user_id=? AND plan_date=? AND status='pending'").run(currentUser.id,userId,planDate);
+          db.prepare('INSERT INTO system_absences(user_id,absence_date,absence_type,note,created_by) VALUES(?,?,?,?,?)').run(userId,planDate,absence.absence_type,absence.note,currentUser.id);
+        }
+        db.prepare('DELETE FROM planner_day_comments WHERE user_id=? AND plan_date=?').run(userId,planDate); const comment=targetComments.find(item=>Number(item.user_id)===userId&&item.plan_date===planDate); if(comment) db.prepare('INSERT INTO planner_day_comments(user_id,plan_date,comment,updated_by) VALUES(?,?,?,?)').run(userId,planDate,comment.comment,currentUser.id);
+        recordPlannerDayChange(userId,planDate,before,plannerDayState(userId,planDate),currentUser);
+      }
+      db.exec('COMMIT');
+    }catch(error){db.exec('ROLLBACK');throw error;}
+    let awaitingApproval=0; let directlySaved=0;
+    const snapshotProjectIds=[...new Set((payload.project_ids||targetEntries.map(entry=>entry.project_id)).map(Number).filter(projectId=>projectId&&projectId!==activeProjectId()))];
+    for(const projectId of snapshotProjectIds){
+      if(!one('SELECT 1 FROM projects WHERE id=? AND active=1',projectId)) continue;
+      const eligibleUsers=userIds.filter(userId=>one('SELECT 1 FROM project_memberships WHERE project_id=? AND user_id=? AND active=1 AND planner_enabled=1',projectId,userId));
+      const items=[];
+      for(const userId of eligibleUsers) for(const planDate of dates){
+        if(targetAbsences.some(item=>Number(item.user_id)===userId&&item.absence_date===planDate)) continue;
+        const desired=targetEntries.filter(entry=>Number(entry.project_id)===projectId&&Number(entry.user_id)===userId&&entry.plan_date===planDate&&entry.transport_mode!=='transport_only');
+        const existing=all("SELECT * FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=? AND transport_mode!='transport_only' ORDER BY id",projectId,userId,planDate);
+        const shape=rows=>JSON.stringify(rows.map(entry=>({controller_group_id:entry.controller_group_id||null,work_mode:entry.work_mode,shift:entry.shift,allocated_hours:entry.allocated_hours??null,count_in_manpower:Number(entry.count_in_manpower),note:clean(entry.note)})).sort((left,right)=>JSON.stringify(left).localeCompare(JSON.stringify(right))));
+        if(shape(existing)===shape(desired)) continue;
+        items.push({user_id:userId,plan_date:planDate,replace_all:1,note:`Przywrócenie snapshotu · ${row.name}`,entries:desired.map(entry=>({activity_type:'work',controller_group_id:entry.controller_group_id,allow_without_area:entry.controller_group_id?0:1,work_mode:entry.work_mode,shift:entry.shift,allocated_hours:entry.allocated_hours??null,count_in_manpower:entry.count_in_manpower,note:entry.note}))});
+      }
+      for(let index=0;index<items.length;index+=200){const result=createPlannerCrossProjectRequests({target_project_id:projectId,items:items.slice(index,index+200)},currentUser);awaitingApproval+=result.awaiting_approval;directlySaved+=result.directly_saved;}
+    }
+    return { restored:true,from,to,days:dates.length,awaiting_approval:awaitingApproval,directly_saved:directlySaved };
   }
 
   function plannerRawPlanRow(id, currentUser) {
@@ -2170,7 +2483,7 @@ function createRepository(db, defaultProjectId) {
       project_id: Number(entry.project_id), user_id: Number(entry.user_id), plan_date: entry.plan_date, shift: entry.shift,
       controller_group_id: entry.controller_group_id ? Number(entry.controller_group_id) : null,
       work_mode: entry.work_mode, transport_mode: entry.transport_mode,
-      duration_hours: Number(entry.duration_hours || 0), count_in_manpower: Number(entry.count_in_manpower) === 0 ? 0 : 1,
+      duration_hours: Number(entry.duration_hours || 0), allocated_hours: entry.allocated_hours === null || entry.allocated_hours === undefined ? null : Number(entry.allocated_hours), count_in_manpower: Number(entry.count_in_manpower) === 0 ? 0 : 1,
       vehicle_id: entry.vehicle_id ? Number(entry.vehicle_id) : null, note: clean(entry.note)
     };
   }
@@ -2192,7 +2505,8 @@ function createRepository(db, defaultProjectId) {
     const raw = all('SELECT * FROM planner_raw_entries WHERE raw_plan_id=? ORDER BY user_id,plan_date,id', plan.id);
     const projects = new Map(projectIds.map(projectId => [projectId, one('SELECT id,code,name FROM projects WHERE id=?', projectId)]));
     const areaLabels = new Map(projectIds.flatMap(projectId => hierarchyData(projectId).groups.map(group => [`${projectId}:${group.id}`, group.path_label || group.name])));
-    const vehicleCodes = new Map(projectIds.flatMap(projectId => all('SELECT id,code FROM planner_vehicles WHERE project_id=?', projectId).map(vehicle => [`${projectId}:${vehicle.id}`, vehicle.code])));
+    const globalVehicleRows=all('SELECT id,code FROM planner_vehicles WHERE active=1');
+    const vehicleCodes = new Map(projectIds.flatMap(projectId => globalVehicleRows.map(vehicle => [`${projectId}:${vehicle.id}`, vehicle.code])));
     const keys = new Set([...production, ...raw].map(entry => `${entry.project_id}:${entry.user_id}:${entry.plan_date}`));
     const signature = rows => JSON.stringify(rows.map(plannerRawEntryShape).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))));
     const entryChanges = [...keys].sort().flatMap(key => {
@@ -2246,8 +2560,8 @@ function createRepository(db, defaultProjectId) {
         JOIN planner_raw_users scope ON scope.raw_plan_id=? AND scope.user_id=membership.user_id
         WHERE membership.active=1 AND membership.planner_enabled=1`).run(planId, planId);
       db.prepare('INSERT OR IGNORE INTO planner_raw_projects(raw_plan_id,project_id) VALUES(?,?)').run(planId, activeProjectId());
-      db.prepare(`INSERT INTO planner_raw_entries(raw_plan_id,project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,count_in_manpower,vehicle_id,note)
-        SELECT ?,project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,count_in_manpower,vehicle_id,note
+      db.prepare(`INSERT INTO planner_raw_entries(raw_plan_id,project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,allocated_hours,count_in_manpower,vehicle_id,note)
+        SELECT ?,project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,allocated_hours,count_in_manpower,vehicle_id,note
         FROM planner_entries entry WHERE entry.plan_date BETWEEN ? AND ?
           AND EXISTS(SELECT 1 FROM planner_raw_users scope WHERE scope.raw_plan_id=? AND scope.user_id=entry.user_id)
           AND EXISTS(SELECT 1 FROM planner_raw_projects project_scope WHERE project_scope.raw_plan_id=? AND project_scope.project_id=entry.project_id)`).run(planId, fromDate, toDate, planId, planId);
@@ -2273,8 +2587,8 @@ function createRepository(db, defaultProjectId) {
       const addedRanges = [];
       if (fromDate < plan.from_date) addedRanges.push([fromDate, shiftDate(plan.from_date, -1)]);
       if (toDate > plan.to_date) addedRanges.push([shiftDate(plan.to_date, 1), toDate]);
-      const copyEntries = db.prepare(`INSERT INTO planner_raw_entries(raw_plan_id,project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,count_in_manpower,vehicle_id,note)
-        SELECT ?,entry.project_id,entry.user_id,entry.plan_date,entry.shift,entry.controller_group_id,entry.work_mode,entry.transport_mode,entry.duration_hours,entry.count_in_manpower,entry.vehicle_id,entry.note
+      const copyEntries = db.prepare(`INSERT INTO planner_raw_entries(raw_plan_id,project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,allocated_hours,count_in_manpower,vehicle_id,note)
+        SELECT ?,entry.project_id,entry.user_id,entry.plan_date,entry.shift,entry.controller_group_id,entry.work_mode,entry.transport_mode,entry.duration_hours,entry.allocated_hours,entry.count_in_manpower,entry.vehicle_id,entry.note
         FROM planner_entries entry WHERE entry.plan_date BETWEEN ? AND ?
           AND EXISTS(SELECT 1 FROM planner_raw_users scope WHERE scope.raw_plan_id=? AND scope.user_id=entry.user_id)
           AND EXISTS(SELECT 1 FROM planner_raw_projects project_scope WHERE project_scope.raw_plan_id=? AND project_scope.project_id=entry.project_id)`);
@@ -2297,7 +2611,7 @@ function createRepository(db, defaultProjectId) {
     projectIds.forEach(projectId => {
       const project = one('SELECT id,code,name,planner_color,planner_short_code FROM projects WHERE id=?', projectId);
       const hierarchy = hierarchyData(projectId);
-      projectMeta.set(projectId, { project, hierarchy, groups: new Map(hierarchy.groups.map(group => [Number(group.id), group])), vehicles: new Map(all('SELECT * FROM planner_vehicles WHERE project_id=?', projectId).map(vehicle => [Number(vehicle.id), vehicle])) });
+      projectMeta.set(projectId, { project, hierarchy, groups: new Map(hierarchy.groups.map(group => [Number(group.id), group])), vehicles: new Map(all('SELECT * FROM planner_vehicles WHERE active=1').map(vehicle => [Number(vehicle.id), vehicle])) });
     });
     const decorate = entry => {
       const meta = projectMeta.get(Number(entry.project_id)); const area = meta?.groups.get(Number(entry.controller_group_id)); const vehicle = meta?.vehicles.get(Number(entry.vehicle_id)); const project = meta?.project || {};
@@ -2360,8 +2674,12 @@ function createRepository(db, defaultProjectId) {
       WHERE raw_plan_id=? AND user_id=? AND plan_date=? AND project_id!=? AND transport_mode!='transport_only'`, plan.id, userId, planDate, targetProjectId)?.count || 0);
     if (normalized.some(entry => entry.activityType === 'work') && otherProjects >= 3) throw appError('Jedna osoba może być przypisana maksymalnie do 3 projektów jednego dnia');
     if (!absenceType && normalized.length && !Object.hasOwn(input, 'absence_type') && one('SELECT 1 FROM planner_raw_absences WHERE raw_plan_id=? AND user_id=? AND absence_date=?', plan.id, userId, planDate)) throw appError('Urlop lub wolne wyklucza inne elementy planu RAW');
-    const insert = db.prepare(`INSERT INTO planner_raw_entries(raw_plan_id,project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,count_in_manpower,vehicle_id,note)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`);
+    const rawModes=new Set(normalized.filter(entry=>entry.activityType==='work').map(entry=>entry.workMode));
+    all(`SELECT DISTINCT work_mode FROM planner_raw_entries WHERE raw_plan_id=? AND user_id=? AND plan_date=? AND project_id!=? AND transport_mode!='transport_only'`,plan.id,userId,planDate,targetProjectId).forEach(row=>rawModes.add(row.work_mode));
+    if(rawModes.size>1) throw appError('Plan RAW nie może łączyć pracy ON i OFF tego samego dnia');
+    validatePlannerRawAllocatedHours(plan.id,userId,planDate,targetProjectId,normalized);
+    const insert = db.prepare(`INSERT INTO planner_raw_entries(raw_plan_id,project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,allocated_hours,count_in_manpower,vehicle_id,note)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     db.exec('BEGIN IMMEDIATE');
     try {
       if (absenceType) {
@@ -2372,7 +2690,7 @@ function createRepository(db, defaultProjectId) {
         if (Object.hasOwn(input, 'absence_type')) db.prepare('DELETE FROM planner_raw_absences WHERE raw_plan_id=? AND user_id=? AND absence_date=?').run(plan.id, userId, planDate);
         if (Number(input.clear_all_projects)) db.prepare('DELETE FROM planner_raw_entries WHERE raw_plan_id=? AND user_id=? AND plan_date=?').run(plan.id, userId, planDate);
         else db.prepare('DELETE FROM planner_raw_entries WHERE raw_plan_id=? AND project_id=? AND user_id=? AND plan_date=?').run(plan.id, targetProjectId, userId, planDate);
-        normalized.forEach(entry => insert.run(plan.id, targetProjectId, userId, planDate, entry.shift, entry.groupId, entry.workMode, entry.transportMode, entry.durationHours, entry.countInManpower, entry.vehicleId, entry.note));
+        normalized.forEach(entry => insert.run(plan.id, targetProjectId, userId, planDate, entry.shift, entry.groupId, entry.workMode, entry.transportMode, entry.durationHours, entry.allocatedHours, entry.countInManpower, entry.vehicleId, entry.note));
       }
       db.prepare('UPDATE planner_raw_plans SET updated_at=CURRENT_TIMESTAMP WHERE id=?').run(plan.id);
       db.exec('COMMIT');
@@ -2382,6 +2700,9 @@ function createRepository(db, defaultProjectId) {
 
   function publishPlannerRawPlan(id, input, currentUser) {
     const plan = plannerRawPlanRow(id, currentUser); const changes = plannerRawChanges(plan);
+    touchPlannerLock(currentUser);
+    const productionChangeKeys=[...new Set(changes.filter(change=>!change.project_id||canManagePlannerProject(currentUser,Number(change.project_id))).map(change=>`${change.user_id}:${change.plan_date}`))];
+    const beforeStates=new Map(productionChangeKeys.map(key=>{const [userId,date]=key.split(':');return [key,plannerDayState(Number(userId),date)];}));
     const userIds = plannerRawScopeUserIds(plan.id); const projectIds = plannerRawScopeProjectIds(plan.id);
     if (!userIds.length) throw appError('Snapshot RAW nie zawiera uczestników');
     const invalidProjectCount = one(`SELECT user_id,plan_date,COUNT(DISTINCT project_id) count FROM planner_raw_entries
@@ -2393,8 +2714,8 @@ function createRepository(db, defaultProjectId) {
     if (conflictingAbsence) throw appError(`Nie można opublikować planu: ${conflictingAbsence.plan_date} zawiera pracę i nieobecność`);
     const managedProjectIds = projectIds.filter(projectId => canManagePlannerProject(currentUser, projectId));
     const unmanagedChangedProjectIds = [...new Set(changes.filter(change => change.kind === 'entries' && change.project_id && !managedProjectIds.includes(Number(change.project_id))).map(change => Number(change.project_id)))];
-    const insert = db.prepare(`INSERT INTO planner_entries(project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,count_in_manpower,vehicle_id,note,created_by)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`);
+    const insert = db.prepare(`INSERT INTO planner_entries(project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,allocated_hours,count_in_manpower,vehicle_id,note,created_by)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     const userPlaceholders = userIds.map(() => '?').join(',');
     db.exec('BEGIN IMMEDIATE');
     try {
@@ -2403,7 +2724,7 @@ function createRepository(db, defaultProjectId) {
         SELECT user_id,absence_date,absence_type,note,? FROM planner_raw_absences WHERE raw_plan_id=?`).run(currentUser.id, plan.id);
       for (const projectId of managedProjectIds) {
         db.prepare(`DELETE FROM planner_entries WHERE project_id=? AND user_id IN (${userPlaceholders}) AND plan_date BETWEEN ? AND ?`).run(projectId, ...userIds, plan.from_date, plan.to_date);
-        all('SELECT * FROM planner_raw_entries WHERE raw_plan_id=? AND project_id=? ORDER BY id', plan.id, projectId).forEach(entry => insert.run(projectId, entry.user_id, entry.plan_date, entry.shift, entry.controller_group_id, entry.work_mode, entry.transport_mode, entry.duration_hours, entry.count_in_manpower, entry.vehicle_id, entry.note, currentUser.id));
+        all('SELECT * FROM planner_raw_entries WHERE raw_plan_id=? AND project_id=? ORDER BY id', plan.id, projectId).forEach(entry => insert.run(projectId, entry.user_id, entry.plan_date, entry.shift, entry.controller_group_id, entry.work_mode, entry.transport_mode, entry.duration_hours, entry.allocated_hours??null, entry.count_in_manpower, entry.vehicle_id, entry.note, currentUser.id));
       }
       all('SELECT user_id,absence_date FROM planner_raw_absences WHERE raw_plan_id=?', plan.id).forEach(absence => {
         db.prepare('DELETE FROM planner_entries WHERE user_id=? AND plan_date=?').run(absence.user_id, absence.absence_date);
@@ -2421,12 +2742,13 @@ function createRepository(db, defaultProjectId) {
         const productionRows = all('SELECT * FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=? ORDER BY id', projectId, change.user_id, change.plan_date);
         const workShape = rows => JSON.stringify(rows.filter(row => row.transport_mode !== 'transport_only').map(plannerRawEntryShape).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))));
         const transportOnlyUpdate = workShape(desiredRows) === workShape(productionRows);
-        return [{ user_id: change.user_id, plan_date: change.plan_date, entries: desiredRows.map(row => ({ activity_type: row.transport_mode === 'transport_only' ? 'transport' : 'work', controller_group_id: row.controller_group_id, allow_without_area: row.controller_group_id ? 0 : 1, work_mode: row.work_mode, shift: row.shift, duration_hours: row.duration_hours, count_in_manpower: row.count_in_manpower, vehicle_id: row.vehicle_id, note: row.note })), replace_all: 1, transport_only_update: transportOnlyUpdate ? 1 : 0, note: `Publikacja RAW · ${plan.name}` }];
+        return [{ user_id: change.user_id, plan_date: change.plan_date, entries: desiredRows.map(row => ({ activity_type: row.transport_mode === 'transport_only' ? 'transport' : 'work', controller_group_id: row.controller_group_id, allow_without_area: row.controller_group_id ? 0 : 1, work_mode: row.work_mode, shift: row.shift, duration_hours: row.duration_hours, allocated_hours:row.allocated_hours??null, count_in_manpower: row.count_in_manpower, vehicle_id: row.vehicle_id, note: row.note })), replace_all: 1, transport_only_update: transportOnlyUpdate ? 1 : 0, note: `Publikacja RAW · ${plan.name}` }];
       });
       if (items.length) awaitingApproval += createPlannerCrossProjectRequests({ target_project_id: projectId, items }, currentUser).awaiting_approval;
     }
     const changedDays = new Set(changes.map(change => `${change.user_id}:${change.plan_date}`));
     changedDays.forEach(key => { const [userId, planDate] = key.split(':'); syncPlannerOverlapReview(Number(userId), planDate, currentUser); });
+    for(const key of productionChangeKeys){const [userId,planDate]=key.split(':');recordPlannerDayChange(Number(userId),planDate,beforeStates.get(key),plannerDayState(Number(userId),planDate),currentUser);}
     if (Number(input.notify_users)) {
       const grouped = new Map(); changes.forEach(change => { if (!grouped.has(change.user_id)) grouped.set(change.user_id, []); grouped.get(change.user_id).push(change); });
       for (const [userId, rows] of grouped) createNotification(userId, 'automation', 'note', plan.id, `Zmiana planu pracy: ${plan.name}`, rows.map(row => `${row.plan_date} · ${row.project_label}: ${row.before} → ${row.after}`).join('\n'));
@@ -2478,23 +2800,27 @@ function createRepository(db, defaultProjectId) {
       };
     });
     const upsert = db.prepare(`INSERT INTO planner_cross_project_requests(
-      source_project_id,target_project_id,user_id,plan_date,work_mode,shift,count_in_manpower,note,status,requested_by
-    ) VALUES(?,?,?,?,?,?,?,?,'pending',?) ON CONFLICT(source_project_id,target_project_id,user_id,plan_date) DO UPDATE SET
+      source_project_id,target_project_id,user_id,plan_date,work_mode,shift,count_in_manpower,note,entries_json,status,requested_by
+    ) VALUES(?,?,?,?,?,?,?,?,?,'pending',?) ON CONFLICT(source_project_id,target_project_id,user_id,plan_date) DO UPDATE SET
       work_mode=excluded.work_mode,shift=excluded.shift,count_in_manpower=excluded.count_in_manpower,note=excluded.note,
+      entries_json=excluded.entries_json,
       status='pending',requested_by=excluded.requested_by,decided_by=NULL,decided_at=NULL,linked_entry_id=NULL,
       updated_at=CURRENT_TIMESTAMP`);
-    const insertEntry = db.prepare(`INSERT INTO planner_entries(project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,count_in_manpower,vehicle_id,note,cross_project_request_id,created_by)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    const insertEntry = db.prepare(`INSERT INTO planner_entries(project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,allocated_hours,count_in_manpower,vehicle_id,note,cross_project_request_id,created_by)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     let awaitingApproval = 0; let directlySaved = 0;
     db.exec('BEGIN IMMEDIATE');
     try {
       prepared.forEach(item => {
         const workEntries = item.normalized.filter(entry => entry.activityType === 'work');
         const transportEntries = item.normalized.filter(entry => entry.activityType === 'transport');
-        const insert = (entry, requestId = null) => Number(insertEntry.run(targetProjectId, item.userId, item.planDate, entry.shift, entry.groupId, entry.workMode, entry.transportMode, entry.durationHours, entry.countInManpower, entry.vehicleId, entry.note, requestId, currentUser.id).lastInsertRowid);
+        validatePlannerWorkMode(item.userId, item.planDate, targetProjectId, workEntries);
+        if(!item.transportOnlyUpdate) validatePlannerAllocatedHours(item.userId,item.planDate,targetProjectId,workEntries);
+        const insert = (entry, requestId = null, storageProjectId = targetProjectId) => Number(insertEntry.run(storageProjectId, item.userId, item.planDate, entry.shift, entry.groupId, entry.workMode, entry.transportMode, entry.durationHours, entry.allocatedHours, entry.countInManpower, entry.vehicleId, entry.note, requestId, currentUser.id).lastInsertRowid);
         if (item.transportOnlyUpdate) {
-          db.prepare("DELETE FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=? AND transport_mode='transport_only'").run(targetProjectId, item.userId, item.planDate);
-          transportEntries.forEach(entry => insert(entry));
+          touchPlannerGlobalLock(item.userId, item.planDate, currentUser);
+          db.prepare("DELETE FROM planner_entries WHERE user_id=? AND plan_date=? AND transport_mode='transport_only'").run(item.userId, item.planDate);
+          transportEntries.forEach(entry => insert(entry, null, activeProjectId()));
           directlySaved += 1;
           syncPlannerOverlapReview(item.userId, item.planDate, currentUser);
           return;
@@ -2502,25 +2828,29 @@ function createRepository(db, defaultProjectId) {
         if (directlyManaged) {
           db.prepare("UPDATE planner_cross_project_requests SET status='rejected',decided_by=?,decided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE target_project_id=? AND user_id=? AND plan_date=? AND status='pending'")
             .run(currentUser.id, targetProjectId, item.userId, item.planDate);
-          db.prepare(`DELETE FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=? ${item.replaceAll ? '' : "AND transport_mode!='transport_only'"}`).run(targetProjectId, item.userId, item.planDate);
-          item.normalized.forEach(entry => insert(entry));
+          db.prepare("DELETE FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=? AND transport_mode!='transport_only'").run(targetProjectId, item.userId, item.planDate);
+          workEntries.forEach(entry => insert(entry));
+          if (item.replaceAll || transportEntries.length) {
+            touchPlannerGlobalLock(item.userId,item.planDate,currentUser);
+            db.prepare("DELETE FROM planner_entries WHERE user_id=? AND plan_date=? AND transport_mode='transport_only'").run(item.userId,item.planDate);
+            transportEntries.forEach(entry => insert(entry,null,activeProjectId()));
+          }
           directlySaved += 1;
           syncPlannerOverlapReview(item.userId, item.planDate, currentUser);
           return;
         }
-        // Praca managera spoza projektu docelowego jest widoczna od razu, ale
-        // oczekuje na potwierdzenie. Transport jest zawsze zapisywany bezpośrednio.
-        upsert.run(activeProjectId(), targetProjectId, item.userId, item.planDate, item.workMode, item.shift, item.countInManpower, item.note, currentUser.id);
+        // Oficjalny plan pozostaje aktywny do decyzji projektu docelowego.
+        // Ostatnia propozycja zastępuje poprzednią, a transport jest globalny i bezpośredni.
+        const proposalJson = JSON.stringify(workEntries.map(entry => ({ activity_type:'work',controller_group_id:entry.groupId,allow_without_area:entry.groupId?0:1,work_mode:entry.workMode,shift:entry.shift,allocated_hours:entry.allocatedHours,count_in_manpower:entry.countInManpower,note:entry.note })));
+        upsert.run(activeProjectId(), targetProjectId, item.userId, item.planDate, item.workMode, item.shift, item.countInManpower, item.note, proposalJson, currentUser.id);
         const requestId = Number(one(`SELECT id FROM planner_cross_project_requests WHERE source_project_id=? AND target_project_id=? AND user_id=? AND plan_date=?`, activeProjectId(), targetProjectId, item.userId, item.planDate).id);
         db.prepare("UPDATE planner_cross_project_requests SET status='rejected',decided_by=?,decided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE target_project_id=? AND user_id=? AND plan_date=? AND status='pending' AND id!=?")
           .run(currentUser.id, targetProjectId, item.userId, item.planDate, requestId || 0);
-        db.prepare("DELETE FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=? AND transport_mode!='transport_only'").run(targetProjectId, item.userId, item.planDate);
-        const entryIds = workEntries.map(entry => insert(entry, requestId));
-        if (item.replaceAll) {
-          db.prepare("DELETE FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=? AND transport_mode='transport_only'").run(targetProjectId, item.userId, item.planDate);
-          transportEntries.forEach(entry => insert(entry));
+        if (item.replaceAll || transportEntries.length) {
+          touchPlannerGlobalLock(item.userId,item.planDate,currentUser);
+          db.prepare("DELETE FROM planner_entries WHERE user_id=? AND plan_date=? AND transport_mode='transport_only'").run(item.userId,item.planDate);
+          transportEntries.forEach(entry => insert(entry,null,activeProjectId()));
         }
-        if (requestId) db.prepare('UPDATE planner_cross_project_requests SET linked_entry_id=? WHERE id=?').run(entryIds[0] || 0, requestId);
         awaitingApproval += 1;
         syncPlannerOverlapReview(item.userId, item.planDate, currentUser);
       });
@@ -2553,27 +2883,32 @@ function createRepository(db, defaultProjectId) {
     if (!one('SELECT 1 FROM users WHERE id=? AND active=1', request.user_id)) throw appError('Użytkownik nie jest już aktywny', 409);
     db.exec('BEGIN IMMEDIATE');
     try {
-      let entry = one('SELECT * FROM planner_entries WHERE cross_project_request_id=? ORDER BY id LIMIT 1', request.id);
-      // Zgodność z wpisami utworzonymi przez starszą wersję, w której plan powstawał dopiero po akceptacji.
-      if (!entry && Number(request.linked_entry_id) !== 0) {
-        const result = db.prepare(`INSERT INTO planner_entries(project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,count_in_manpower,vehicle_id,note,cross_project_request_id,created_by)
-          VALUES(?,?,?, ?,NULL,?,'none',0,?,NULL,?,?,?)`).run(activeProjectId(), request.user_id, request.plan_date, request.shift, request.work_mode, request.count_in_manpower, request.note, request.id, currentUser.id);
-        entry = one('SELECT * FROM planner_entries WHERE id=?', Number(result.lastInsertRowid));
-      }
+      const before = plannerDayState(request.user_id, request.plan_date, activeProjectId());
+      let proposal = [];
+      try { proposal = JSON.parse(request.entries_json || '[]'); } catch { proposal = []; }
+      if (!proposal.length) proposal = [{ activity_type:'work',controller_group_id:null,allow_without_area:1,work_mode:request.work_mode,shift:request.shift,count_in_manpower:request.count_in_manpower,note:request.note }];
+      const normalized = normalizePlannerEntries(proposal, activeProjectId()).filter(entry => entry.activityType === 'work');
+      validatePlannerWorkMode(request.user_id, request.plan_date, activeProjectId(), normalized);
+      db.prepare("DELETE FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=? AND transport_mode!='transport_only'").run(activeProjectId(),request.user_id,request.plan_date);
+      const insert = db.prepare(`INSERT INTO planner_entries(project_id,user_id,plan_date,shift,controller_group_id,work_mode,transport_mode,duration_hours,allocated_hours,count_in_manpower,vehicle_id,note,cross_project_request_id,created_by)
+        VALUES(?,?,?,?,?,?, 'none',0,?,?,?,?,?,?)`);
+      const entryIds = normalized.map(entry => Number(insert.run(activeProjectId(),request.user_id,request.plan_date,entry.shift,entry.groupId,entry.workMode,entry.allocatedHours,entry.countInManpower,null,entry.note,request.id,currentUser.id).lastInsertRowid));
       db.prepare("UPDATE planner_cross_project_requests SET status='approved',decided_by=?,linked_entry_id=?,decided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?")
-        .run(currentUser.id, entry.id, request.id);
+        .run(currentUser.id, entryIds[0] || null, request.id);
       syncPlannerOverlapReview(request.user_id, request.plan_date, currentUser);
       db.prepare(`UPDATE planner_overlap_reviews SET status='approved',decided_by=?,decided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP
         WHERE user_id=? AND plan_date=? AND project_id IN (?,?)`).run(currentUser.id, request.user_id, request.plan_date, request.source_project_id, request.target_project_id);
+      recordPlannerDayChange(request.user_id, request.plan_date, before, plannerDayState(request.user_id,request.plan_date,activeProjectId()), currentUser, activeProjectId());
       db.exec('COMMIT');
-      return { id: request.id, status: 'approved', entry_id: entry.id };
+      return { id: request.id, status: 'approved', entry_id: entryIds[0] || null };
     } catch (error) { db.exec('ROLLBACK'); throw error; }
   }
 
   function movePlannerEntry(input, currentUser) {
+    touchPlannerLock(currentUser);
     const entryIds = [...new Set((Array.isArray(input.entry_ids) ? input.entry_ids : [input.entry_id]).map(asId).filter(Boolean))].slice(0, 30);
     if (!entryIds.length) throw appError('Wybierz co najmniej jedną aktywność Plannera');
-    const entries = all(`SELECT * FROM planner_entries WHERE project_id=? AND id IN (${entryIds.map(() => '?').join(',')}) ORDER BY id`, activeProjectId(), ...entryIds);
+    const entries = all(`SELECT * FROM planner_entries WHERE (project_id=? OR transport_mode='transport_only') AND id IN (${entryIds.map(() => '?').join(',')}) ORDER BY id`, activeProjectId(), ...entryIds);
     if (entries.length !== entryIds.length) throw appError('Nie znaleziono jednego z zaznaczonych przypisań Plannera', 404);
     const entry = entries[0];
     if (entries.some(item => Number(item.user_id) !== Number(entry.user_id) || item.plan_date !== entry.plan_date)) throw appError('Przenoszone aktywności muszą pochodzić z jednego dnia i od jednego pracownika');
@@ -2583,16 +2918,20 @@ function createRepository(db, defaultProjectId) {
     validatePlannerUserDate(targetUserId, targetDate);
     if (one('SELECT 1 FROM system_absences WHERE user_id=? AND absence_date=?', targetUserId, targetDate)) throw appError('Nie można przenieść aktywności na dzień oznaczony jako urlop lub wolne');
     if (entry.user_id === targetUserId && entry.plan_date === targetDate) return plannerData(targetDate, targetDate, currentUser);
-    const sourceRows = all('SELECT * FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=? ORDER BY id', activeProjectId(), entry.user_id, entry.plan_date);
-    const targetRows = all('SELECT * FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=? ORDER BY id', activeProjectId(), targetUserId, targetDate);
+    const sourceBefore=plannerDayState(entry.user_id,entry.plan_date); const targetBefore=plannerDayState(targetUserId,targetDate);
+    const sourceRows = all("SELECT * FROM planner_entries WHERE user_id=? AND plan_date=? AND (project_id=? OR transport_mode='transport_only') ORDER BY id", entry.user_id, entry.plan_date, activeProjectId());
+    const targetRows = all("SELECT * FROM planner_entries WHERE user_id=? AND plan_date=? AND (project_id=? OR transport_mode='transport_only') ORDER BY id", targetUserId, targetDate, activeProjectId());
     const selectedIds = new Set(entries.map(item => Number(item.id)));
-    const moved = entries.map(item => ({ id: item.id, controller_group_id: item.controller_group_id, work_mode: item.work_mode, shift: item.shift, transport_mode: item.transport_mode, duration_hours: item.duration_hours, count_in_manpower: item.count_in_manpower, vehicle_id: item.vehicle_id, note: item.note }));
+    const moved = entries.map(item => ({ id: item.id, controller_group_id: item.controller_group_id, work_mode: item.work_mode, shift: item.shift, transport_mode: item.transport_mode, duration_hours: item.duration_hours, allocated_hours:item.allocated_hours, count_in_manpower: item.count_in_manpower, vehicle_id: item.vehicle_id, note: item.note }));
     const target = normalizePlannerEntries([...targetRows, ...moved]);
     const source = normalizePlannerEntries(sourceRows.filter(row => !selectedIds.has(Number(row.id))));
+    validatePlannerWorkMode(targetUserId,targetDate,activeProjectId(),target);
     db.exec('BEGIN IMMEDIATE');
     try {
       replacePlannerDay(targetUserId, targetDate, target, currentUser);
       if (!Number(input.copy)) replacePlannerDay(entry.user_id, entry.plan_date, source, currentUser);
+      recordPlannerDayChange(targetUserId,targetDate,targetBefore,plannerDayState(targetUserId,targetDate),currentUser);
+      if(!Number(input.copy)) recordPlannerDayChange(entry.user_id,entry.plan_date,sourceBefore,plannerDayState(entry.user_id,entry.plan_date),currentUser);
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
     const from = entry.plan_date < targetDate ? entry.plan_date : targetDate;
@@ -2601,20 +2940,27 @@ function createRepository(db, defaultProjectId) {
   }
 
   function deletePlannerEntry(id, currentUser) {
-    const entry = one('SELECT * FROM planner_entries WHERE id=? AND project_id=?', asId(id), activeProjectId());
+    touchPlannerLock(currentUser);
+    const entry = one("SELECT * FROM planner_entries WHERE id=? AND (project_id=? OR transport_mode='transport_only')", asId(id), activeProjectId());
     if (!entry) throw appError('Nie znaleziono aktywności Plannera', 404);
-    db.prepare('DELETE FROM planner_entries WHERE id=? AND project_id=?').run(entry.id, activeProjectId());
+    if(entry.transport_mode==='transport_only') touchPlannerGlobalLock(entry.user_id,entry.plan_date,currentUser);
+    const before=plannerDayState(entry.user_id,entry.plan_date);
+    db.prepare('DELETE FROM planner_entries WHERE id=?').run(entry.id);
     syncPlannerOverlapReview(entry.user_id, entry.plan_date, currentUser);
+    recordPlannerDayChange(entry.user_id,entry.plan_date,before,plannerDayState(entry.user_id,entry.plan_date),currentUser);
     return plannerData(entry.plan_date, entry.plan_date, currentUser);
   }
 
   function movePlannerDay(input, currentUser) {
+    touchPlannerLock(currentUser);
     const sourceUserId = asId(input.source_user_id); const targetUserId = asId(input.target_user_id);
     const sourceDate = nullableDate(input.source_date); const targetDate = nullableDate(input.target_date);
     if (!sourceUserId || !targetUserId || !sourceDate || !targetDate) throw appError('Dzień źródłowy i docelowy są wymagane');
     validatePlannerUserDate(sourceUserId, sourceDate); validatePlannerUserDate(targetUserId, targetDate);
     if (sourceUserId === targetUserId && sourceDate === targetDate) return plannerData(sourceDate, targetDate, currentUser);
+    const sourceBefore=plannerDayState(sourceUserId,sourceDate); const targetBefore=plannerDayState(targetUserId,targetDate);
     const entries = normalizePlannerEntries(all('SELECT * FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=? ORDER BY id', activeProjectId(), sourceUserId, sourceDate));
+    validatePlannerWorkMode(targetUserId,targetDate,activeProjectId(),entries);
     const absence = one('SELECT * FROM system_absences WHERE user_id=? AND absence_date=?', sourceUserId, sourceDate);
     const adjustment = one('SELECT * FROM planner_time_adjustments WHERE project_id=? AND user_id=? AND plan_date=?', activeProjectId(), sourceUserId, sourceDate);
     if (!entries.length && !absence && !adjustment) throw appError('Dzień źródłowy nie zawiera planu, urlopu ani korekty czasu');
@@ -2631,6 +2977,8 @@ function createRepository(db, defaultProjectId) {
         db.prepare('DELETE FROM system_absences WHERE user_id=? AND absence_date=?').run(sourceUserId, sourceDate);
         db.prepare('DELETE FROM planner_time_adjustments WHERE project_id=? AND user_id=? AND plan_date=?').run(activeProjectId(), sourceUserId, sourceDate);
       }
+      recordPlannerDayChange(targetUserId,targetDate,targetBefore,plannerDayState(targetUserId,targetDate),currentUser);
+      if(!Number(input.copy)) recordPlannerDayChange(sourceUserId,sourceDate,sourceBefore,plannerDayState(sourceUserId,sourceDate),currentUser);
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
     return plannerData(sourceDate < targetDate ? sourceDate : targetDate, sourceDate > targetDate ? sourceDate : targetDate, currentUser);
@@ -2640,15 +2988,47 @@ function createRepository(db, defaultProjectId) {
     const projectId = plannerRequirementTargetProject(input.project_id);
     const planDate = nullableDate(input.plan_date);
     const groupId = asId(input.controller_group_id);
-    if (!planDate || !groupId) throw appError('Dzień i obszar zapotrzebowania są wymagane');
+    if (!planDate) throw appError('Dzień zapotrzebowania jest wymagany');
+    if (!groupId || clean(input.scope) === 'project') return setPlannerProjectRequirement(projectId, planDate, input, currentUser);
     if (!one('SELECT 1 FROM controller_groups WHERE id=? AND project_id=? AND active=1', groupId, projectId)) throw appError('Wybrany obszar nie należy do projektu');
+    if (one('SELECT parent_id FROM controller_groups WHERE id=? AND project_id=?', groupId, projectId)?.parent_id) throw appError('Zapotrzebowanie można definiować tylko dla projektu i głównych obszarów');
     const values = { online: Math.max(0, Math.min(999, Number(input.online_required) || 0)), offline: Math.max(0, Math.min(999, Number(input.offline_required) || 0)) };
     db.exec('BEGIN IMMEDIATE');
-    try { writePlannerRequirement(groupId, planDate, values, clean(input.note), currentUser, projectId); enforcePlannerRequirementHierarchy([planDate], currentUser, projectId); db.exec('COMMIT'); }
+    try { writePlannerRequirement(groupId, planDate, values, clean(input.note), currentUser, projectId); ensurePlannerProjectRequirementMinimum(projectId, planDate, currentUser); db.exec('COMMIT'); }
     catch (error) { db.exec('ROLLBACK'); throw error; }
     const effective = Object.fromEntries(['online', 'offline'].map(mode => [mode, Number(one(`SELECT required_count FROM planner_requirements
       WHERE project_id=? AND controller_group_id=? AND plan_date=? AND work_mode=?`, projectId, groupId, planDate, mode)?.required_count || 0)]));
     return { project_id: projectId, plan_date: planDate, controller_group_id: groupId, online_required: effective.online, offline_required: effective.offline };
+  }
+
+  function plannerRootRequirementSums(projectId, planDate) {
+    const rows = all(`SELECT pr.work_mode,SUM(pr.required_count) required_count FROM planner_requirements pr
+      JOIN controller_groups cg ON cg.id=pr.controller_group_id AND cg.parent_id IS NULL
+      WHERE pr.project_id=? AND pr.plan_date=? GROUP BY pr.work_mode`, projectId, planDate);
+    return Object.fromEntries(['online','offline'].map(mode => [mode, Number(rows.find(row => row.work_mode === mode)?.required_count || 0)]));
+  }
+
+  function writePlannerProjectRequirement(projectId, planDate, mode, required, note, currentUser) {
+    db.prepare(`INSERT INTO planner_project_requirements(project_id,plan_date,work_mode,required_count,note,created_by)
+      VALUES(?,?,?,?,?,?) ON CONFLICT(project_id,plan_date,work_mode) DO UPDATE SET
+      required_count=excluded.required_count,note=excluded.note,created_by=excluded.created_by,updated_at=CURRENT_TIMESTAMP`)
+      .run(projectId,planDate,mode,required,note,currentUser.id);
+  }
+
+  function setPlannerProjectRequirement(projectId, planDate, input, currentUser) {
+    const values = { online: Math.max(0, Math.min(999, Number(input.online_required) || 0)), offline: Math.max(0, Math.min(999, Number(input.offline_required) || 0)) };
+    const minimum = plannerRootRequirementSums(projectId, planDate);
+    if (values.online < minimum.online || values.offline < minimum.offline) throw appError(`Zapotrzebowanie projektu nie może być niższe niż suma głównych obszarów (ON ${minimum.online}, OFF ${minimum.offline})`);
+    for (const mode of ['online','offline']) writePlannerProjectRequirement(projectId, planDate, mode, values[mode], clean(input.note), currentUser);
+    return { project_id: projectId, plan_date: planDate, scope: 'project', online_required: values.online, offline_required: values.offline };
+  }
+
+  function ensurePlannerProjectRequirementMinimum(projectId, planDate, currentUser) {
+    const minimum = plannerRootRequirementSums(projectId, planDate);
+    for (const mode of ['online','offline']) {
+      const current = Number(one('SELECT required_count FROM planner_project_requirements WHERE project_id=? AND plan_date=? AND work_mode=?', projectId, planDate, mode)?.required_count || 0);
+      if (current < minimum[mode]) writePlannerProjectRequirement(projectId, planDate, mode, minimum[mode], 'Automatycznie podniesione do sumy głównych obszarów', currentUser);
+    }
   }
 
   function plannerRequirementTargetProject(requestedProjectId) {
@@ -2667,7 +3047,7 @@ function createRepository(db, defaultProjectId) {
     const upsert = db.prepare(`INSERT INTO planner_requirements(
       project_id,controller_group_id,plan_date,work_mode,required_count,manual_required_count,note,created_by
     ) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(project_id,controller_group_id,plan_date,work_mode) DO UPDATE SET
-      manual_required_count=excluded.manual_required_count,note=excluded.note,created_by=excluded.created_by,updated_at=CURRENT_TIMESTAMP`);
+      required_count=excluded.required_count,manual_required_count=excluded.manual_required_count,note=excluded.note,created_by=excluded.created_by,updated_at=CURRENT_TIMESTAMP`);
     for (const mode of ['online', 'offline']) upsert.run(projectId, groupId, planDate, mode, values[mode], values[mode], note, currentUser.id);
   }
 
@@ -2694,12 +3074,15 @@ function createRepository(db, defaultProjectId) {
     if (!items.length) throw appError('Brak danych zapotrzebowania do zapisania');
     db.exec('BEGIN IMMEDIATE');
     try {
-      for (const item of items) {
+      for (const item of items.filter(item => asId(item.controller_group_id))) {
         const planDate = nullableDate(item.plan_date); const groupId = asId(item.controller_group_id);
         if (!planDate || !groupId || !one('SELECT 1 FROM controller_groups WHERE id=? AND project_id=? AND active=1', groupId, projectId)) throw appError('Dzień i obszar zapotrzebowania są wymagane');
+        if (one('SELECT parent_id FROM controller_groups WHERE id=? AND project_id=?', groupId, projectId)?.parent_id) throw appError('Zapotrzebowanie można definiować tylko dla głównych obszarów');
         writePlannerRequirement(groupId, planDate, { online: Math.max(0, Math.min(999, Number(item.online_required) || 0)), offline: Math.max(0, Math.min(999, Number(item.offline_required) || 0)) }, clean(item.note), currentUser, projectId);
       }
-      enforcePlannerRequirementHierarchy(items.map(item => nullableDate(item.plan_date)).filter(Boolean), currentUser, projectId);
+      const dates = [...new Set(items.map(item => nullableDate(item.plan_date)).filter(Boolean))];
+      for (const planDate of dates) ensurePlannerProjectRequirementMinimum(projectId, planDate, currentUser);
+      for (const item of items.filter(item => !asId(item.controller_group_id))) setPlannerProjectRequirement(projectId, nullableDate(item.plan_date), item, currentUser);
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
     return { saved: items.length, project_id: projectId };
@@ -2748,23 +3131,23 @@ function createRepository(db, defaultProjectId) {
     const registrationNumber = clean(input.registration_number).toLocaleUpperCase('pl-PL');
     if (!/^T[1-9]\d*$/.test(code)) throw appError('Kod auta musi mieć format T1, T2, T3 itd. Kod T jest zarezerwowany dla transportu bez wskazanego auta');
     if (!registrationNumber || registrationNumber.length > 32) throw appError('Numer rejestracyjny jest wymagany i może mieć maksymalnie 32 znaki');
-    const duplicate = one(`SELECT id FROM planner_vehicles WHERE project_id=? AND active=1 AND id!=? AND
-      (code=? COLLATE NOCASE OR registration_number=? COLLATE NOCASE)`, activeProjectId(), asId(id) || 0, code, registrationNumber);
+    const duplicate = one(`SELECT id FROM planner_vehicles WHERE active=1 AND id!=? AND
+      (code=? COLLATE NOCASE OR registration_number=? COLLATE NOCASE)`, asId(id) || 0, code, registrationNumber);
     if (duplicate) throw appError('Kod auta lub numer rejestracyjny jest już używany w tym projekcie');
     let vehicleId = asId(id);
     if (vehicleId) {
-      const result = db.prepare('UPDATE planner_vehicles SET code=?,registration_number=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND project_id=? AND active=1')
-        .run(code, registrationNumber, vehicleId, activeProjectId());
+      const result = db.prepare('UPDATE planner_vehicles SET code=?,registration_number=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND active=1')
+        .run(code, registrationNumber, vehicleId);
       if (!result.changes) throw appError('Nie znaleziono auta', 404);
     } else {
-      const sortOrder = one('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM planner_vehicles WHERE project_id=?', activeProjectId()).value;
+      const sortOrder = one('SELECT COALESCE(MAX(sort_order),-1)+1 value FROM planner_vehicles').value;
       vehicleId = insertRecord('planner_vehicles', { project_id: activeProjectId(), code, registration_number: registrationNumber, sort_order: sortOrder, active: 1 });
     }
-    return one('SELECT * FROM planner_vehicles WHERE id=? AND project_id=?', vehicleId, activeProjectId());
+    return one('SELECT * FROM planner_vehicles WHERE id=?', vehicleId);
   }
 
   function deletePlannerVehicle(id) {
-    const result = db.prepare('DELETE FROM planner_vehicles WHERE id=? AND project_id=?').run(asId(id), activeProjectId());
+    const result = db.prepare('DELETE FROM planner_vehicles WHERE id=?').run(asId(id));
     if (!result.changes) throw appError('Nie znaleziono auta', 404);
   }
 
@@ -5097,7 +5480,7 @@ function createRepository(db, defaultProjectId) {
         options: all('SELECT * FROM options WHERE project_id=? AND active=1 ORDER BY kind,sort_order,value', activeProjectId()),
         announcement_labels: all('SELECT * FROM announcement_labels WHERE project_id=? AND active=1 ORDER BY sort_order,name', activeProjectId()),
         planner_holidays: all('SELECT * FROM system_holidays ORDER BY holiday_date'),
-        planner_vehicles: all('SELECT * FROM planner_vehicles WHERE project_id=? AND active=1 ORDER BY sort_order,code,id', activeProjectId()),
+        planner_vehicles: all(`SELECT vehicle.* FROM planner_vehicles vehicle JOIN (SELECT MIN(id) id FROM planner_vehicles WHERE active=1 GROUP BY upper(code)) canonical ON canonical.id=vehicle.id ORDER BY vehicle.sort_order,vehicle.code,vehicle.id`),
         requirements: all('SELECT * FROM completion_requirements WHERE project_id=? AND active=1 ORDER BY sort_order,name', activeProjectId()),
         settings: Object.fromEntries([
           ...all('SELECT key,value FROM settings WHERE project_id=?', activeProjectId()).map(row => [row.key, row.value]),
@@ -5296,6 +5679,14 @@ function createRepository(db, defaultProjectId) {
     projectBackup,
     restoreProjectBackup,
     planner(from, to, currentUser) { return plannerData(from, to, currentUser); },
+    plannerLock(currentUser) { return plannerLock(currentUser); },
+    checkoutPlanner(currentUser) { return checkoutPlanner(currentUser); },
+    checkinPlanner(currentUser, force) { return checkinPlanner(currentUser, force); },
+    plannerDayHistory(userId, planDate) { return plannerDayHistory(userId, planDate); },
+    updatePlannerInformation(input, currentUser) { return updatePlannerInformation(input, currentUser); },
+    plannerSnapshots() { return plannerSnapshots(); },
+    createPlannerSnapshot(input, currentUser) { return createPlannerSnapshot(input, currentUser); },
+    restorePlannerSnapshot(id, input, currentUser) { return restorePlannerSnapshot(id, input, currentUser); },
     plannerRawPlans(currentUser) { return plannerRawPlans(currentUser); },
     createPlannerRawPlan(input, currentUser) { return createPlannerRawPlan(input, currentUser); },
     updatePlannerRawPlan(id, input, currentUser) { return updatePlannerRawPlan(id, input, currentUser); },

@@ -549,7 +549,7 @@ test('Planner supports optional manpower, configured vehicles and removes orphan
     repository.savePlannerDay({ user_id: worker.id, plan_date: date, entries: [{ activity_type: 'work', allow_without_area: 1, count_in_manpower: 0, work_mode: 'offline', shift: 'Dzień' }] }, admin);
     let plan = repository.planner(date, date, admin);
     assert.equal(plan.entries.find(item => item.user_id === worker.id).count_in_manpower, 0);
-    assert.equal(plan.summary.find(item => item.plan_date === date), undefined);
+    assert.equal(plan.summary.find(item => item.plan_date === date).headcount, 0);
 
     repository.savePlannerDay({ user_id: worker.id, plan_date: date, entries: [{ activity_type: 'work', allow_without_area: 1, count_in_manpower: 1, work_mode: 'offline', shift: 'Dzień' }] }, admin);
     plan = repository.planner(date, date, admin);
@@ -563,7 +563,7 @@ test('Planner supports optional manpower, configured vehicles and removes orphan
     ] }, admin);
     plan = repository.planner(date, date, admin);
     assert.ok(plan.entries.filter(item => item.user_id === worker.id).every(item => item.count_in_manpower === 0));
-    assert.equal(plan.summary.find(item => item.plan_date === date), undefined);
+    assert.equal(plan.summary.find(item => item.plan_date === date).headcount, 0);
     assert.ok(plan.area_summary.every(item => item.assignments === 0), 'wyłączony tick manpoweru powinien pomijać przypisania obszarowe');
 
     repository.savePlannerDay({ user_id: worker.id, plan_date: date, entries: [
@@ -1014,14 +1014,14 @@ test('V6 supports four-level display paths, safe manpower modes, calendar placem
       ] }, admin), /nadrzędnego/);
       repository.savePlannerDay({ user_id: workerA.id, plan_date: today, entries: [
         { controller_group_id: roots[0].id, work_mode: 'online', shift: 'Dzień', transport_mode: 'transport_work' },
-        { controller_group_id: roots[1].id, work_mode: 'offline', shift: 'Noc', transport_mode: 'none' }
+        { controller_group_id: roots[1].id, work_mode: 'online', shift: 'Noc', transport_mode: 'none' }
       ] }, admin);
       const planner = repository.planner(today, today);
       assert.equal(planner.users.some(item => item.id === admin.id), false);
-      assert.equal(planner.entries.filter(item => item.user_id === workerA.id && item.work_mode === 'online').length, 1);
-      assert.equal(planner.entries.filter(item => item.user_id === workerA.id && item.work_mode === 'offline').length, 1);
+      assert.equal(planner.entries.filter(item => item.user_id === workerA.id && item.work_mode === 'online').length, 2);
+      assert.equal(planner.entries.filter(item => item.user_id === workerA.id && item.work_mode === 'offline').length, 0);
       assert.ok(planner.mode_summary.today_online >= 1);
-      assert.ok(planner.mode_summary.today_offline >= 1);
+      assert.equal(planner.mode_summary.today_offline, 0);
       assert.ok(planner.area_summary.some(item => item.today_people >= 1));
 
       const task = repository.saveTask(null, { controller: firstController.code, title: 'V6 planned task', priority: 'High', due_date: tomorrow }, admin);
@@ -1208,7 +1208,7 @@ test('V8 supports announcements, aggregated KPI trends, unified Planner requirem
       repository.setPlannerEnabled(guest.id, { planner_enabled: 1 });
       repository.savePlannerDay({ user_id: guest.id, plan_date: today, entries: [
         { controller_group_id: roots[0].id, work_mode: 'online', shift: 'Dzień' },
-        { controller_group_id: roots[1].id, work_mode: 'offline', shift: 'Dzień' }
+        { controller_group_id: roots[1].id, work_mode: 'online', shift: 'Dzień' }
       ] }, admin);
       const selectedEntries = repository.planner(today, today, admin).entries.filter(item => item.user_id === guest.id);
       repository.movePlannerEntry({ entry_id: selectedEntries[0].id, entry_ids: selectedEntries.map(item => item.id), target_user_id: guest.id, target_date: tomorrow, copy: true }, admin);
@@ -1233,7 +1233,7 @@ test('V8 supports announcements, aggregated KPI trends, unified Planner requirem
   }
 });
 
-test('Planner shows cross-project work immediately, then confirms it, and excludes transport from ON/OFF headcount', () => {
+test('Planner preserves official cross-project work until approval and excludes transport from ON/OFF headcount', () => {
   const temporary = temporaryDatabase();
   const repository = openDatabase(temporary.path);
   try {
@@ -1258,11 +1258,12 @@ test('Planner shows cross-project work immediately, then confirms it, and exclud
       managerId = manager.id;
       repository.savePlannerDay({ user_id: workerId, plan_date: planDate, entries: [{ activity_type: 'transport', duration_hours: 1.5 }] }, admin);
       const transportOnly = repository.planner(planDate, planDate, admin);
-      assert.equal(transportOnly.summary[0].headcount, 1);
+      assert.equal(transportOnly.summary[0].headcount, 0);
       assert.equal(transportOnly.summary[0].online_headcount, 0);
       assert.equal(transportOnly.summary[0].offline_headcount, 0);
       assert.equal(transportOnly.mode_summary.range_online, 0);
       assert.equal(transportOnly.mode_summary.range_offline, 0);
+      repository.checkinPlanner(admin);
     });
     let targetGroupId;
     repository.withProject(targetProject.id, () => {
@@ -1282,8 +1283,9 @@ test('Planner shows cross-project work immediately, then confirms it, and exclud
       const admin = repository.me(account.id, targetProject.id);
       let planner = repository.planner(planDate, rejectedDate, admin);
       assert.equal(planner.incoming_cross_project_requests.length, 2);
-      assert.equal(planner.entries.filter(entry => entry.user_id === workerId).length, 2, 'pending assignments are visible immediately');
-      assert.ok(planner.entries.filter(entry => entry.user_id === workerId).every(entry => entry.cross_project_status === 'pending'));
+      assert.equal(planner.entries.filter(entry => entry.user_id === workerId).length, 1, 'global transport remains visible while work proposals wait');
+      assert.equal(planner.proposed_entries.filter(entry => entry.user_id === workerId).length, 2, 'work proposals are presented separately from the official plan');
+      assert.ok(planner.proposed_entries.every(entry => entry.cross_project_status === 'pending' && entry.is_proposal));
       const approved = planner.incoming_cross_project_requests.find(item => item.plan_date === planDate);
       const rejected = planner.incoming_cross_project_requests.find(item => item.plan_date === rejectedDate);
       repository.reviewPlannerCrossProjectRequest(approved.id, { action: 'approve' }, admin);
@@ -1308,7 +1310,7 @@ test('Planner shows cross-project work immediately, then confirms it, and exclud
       assert.equal(externalEntry.project_color, targetProject.planner_color);
       assert.equal(planner.summary.find(item => item.plan_date === planDate).online_headcount, 1, 'global headcount includes visible work from another project');
       assert.equal(planner.requirement_projects.find(project => Number(project.id) === Number(targetProject.id)).summary.find(item => item.plan_date === planDate).online_headcount, 1, 'project bar exposes its own visible headcount');
-      assert.equal(planner.requirement_projects.find(project => Number(project.id) === Number(sourceProjectId)).summary.find(item => item.plan_date === planDate).headcount, 1, 'source project bar includes transport headcount');
+      assert.equal(planner.requirement_projects.find(project => Number(project.id) === Number(sourceProjectId)).summary.find(item => item.plan_date === planDate).headcount, 0, 'transport does not increase source project headcount');
       const sourceDayTime = planner.time_details.details.find(item => item.user_id === workerId && item.date === planDate);
       assert.equal(sourceDayTime.actual_hours, 10.5);
       assert.equal(sourceDayTime.travel_hours, 1.5);
@@ -1329,14 +1331,15 @@ test('Planner shows cross-project work immediately, then confirms it, and exclud
       let planner = repository.planner(rejectedDate, rejectedDate, admin);
       const pending = planner.incoming_cross_project_requests[0];
       assert.equal(Number(pending.includes_transport), 0, 'transport never waits for approval');
-      assert.equal(Number(pending.linked_entry_count), 1);
-      assert.equal(planner.entries.filter(item => item.user_id === workerId && item.plan_date === rejectedDate).length, 2);
-      assert.equal(planner.entries.find(item => item.user_id === workerId && item.plan_date === rejectedDate && item.transport_mode === 'transport_only').cross_project_status, null);
-      assert.equal(planner.entries.find(item => item.user_id === workerId && item.plan_date === rejectedDate && item.transport_mode !== 'transport_only').cross_project_status, 'pending');
+      assert.equal(Number(pending.linked_entry_count), 0, 'proposed work is stored as a version, not as an active Planner entry');
+      assert.equal(planner.entries.filter(item => item.user_id === workerId && item.plan_date === rejectedDate).length, 1);
+      assert.equal(planner.proposed_entries.filter(item => item.user_id === workerId && item.plan_date === rejectedDate).length, 1);
+      assert.equal(planner.entries.find(item => item.user_id === workerId && item.plan_date === rejectedDate && item.transport_mode === 'transport_only').cross_project_status ?? null, null);
+      assert.equal(planner.proposed_entries.find(item => item.user_id === workerId && item.plan_date === rejectedDate).cross_project_status, 'pending');
       repository.reviewPlannerCrossProjectRequest(pending.id, { action: 'approve' }, admin);
       planner = repository.planner(rejectedDate, rejectedDate, admin);
       assert.equal(planner.entries.find(item => item.user_id === workerId && item.transport_mode !== 'transport_only').cross_project_status, 'approved');
-      assert.equal(planner.entries.find(item => item.user_id === workerId && item.transport_mode === 'transport_only').cross_project_status, null);
+      assert.equal(planner.entries.find(item => item.user_id === workerId && item.transport_mode === 'transport_only').cross_project_status ?? null, null);
       repository.saveUser(managerId, { project_role: 'moderator', project_active: 1, planner_enabled: 0, assignable: 1 });
       targetGroupId = repository.controllerGroups().find(item => !item.parent_id).id;
     });
@@ -1853,7 +1856,7 @@ test('V14 shares users across projects and exposes cross-project plans', () => {
 
       repository.savePlannerDay({
         user_id: worker.id, plan_date: planDate, entries: [
-          { activity_type: 'work', controller_group_id: area.id, work_mode: 'online', shift: 'Dzień', note: 'Praca V14' },
+          { activity_type: 'work', controller_group_id: area.id, work_mode: 'offline', shift: 'Dzień', note: 'Praca V14' },
           { activity_type: 'transport', controller_group_id: area.id, shift: 'Dzień', duration_hours: 1, note: 'Dojazd V14' }
         ]
       }, projectAdmin);
@@ -1924,26 +1927,31 @@ test('edit locks, hierarchical requirements and the refined status workflow are 
     const root = repository.saveControllerGroup(null, { name: 'SUMA-OBSZAR' });
     const child = repository.saveControllerGroup(null, { name: 'SUMA-PODOBSZAR-1', parent_id: root.id });
     const sibling = repository.saveControllerGroup(null, { name: 'SUMA-PODOBSZAR-2', parent_id: root.id });
+    assert.throws(() => repository.setPlannerRequirementsBatch({ items: [
+      { plan_date: '2027-01-15', controller_group_id: child.id, online_required: 2, offline_required: 1 }
+    ] }, admin), /tylko dla głównych obszarów/);
     repository.setPlannerRequirementsBatch({ items: [
-      { plan_date: '2027-01-15', controller_group_id: child.id, online_required: 2, offline_required: 1 },
-      { plan_date: '2027-01-15', controller_group_id: sibling.id, online_required: 3, offline_required: 2 },
-      { plan_date: '2027-01-15', controller_group_id: root.id, online_required: 1, offline_required: 0 }
+      { plan_date: '2027-01-15', controller_group_id: root.id, online_required: 5, offline_required: 3 },
+      { plan_date: '2027-01-15', controller_group_id: null, online_required: 7, offline_required: 4 }
     ] }, admin);
     const planner = repository.planner('2027-01-15', '2027-01-15', admin);
     const requirement = (groupId, mode) => planner.requirements.find(item => Number(item.controller_group_id) === Number(groupId) && item.work_mode === mode)?.required_count || 0;
-    assert.equal(requirement(child.id, 'online'), 2);
-    assert.equal(requirement(child.parent_id, 'online'), 5);
-    assert.equal(requirement(child.parent_id, 'offline'), 3);
-    assert.ok(requirement(root.id, 'online') >= 5);
-    assert.ok(planner.area_day_summary.find(item => item.id === root.id).days[0].online_required >= 5);
+    assert.equal(requirement(child.id, 'online'), 0);
+    assert.equal(requirement(root.id, 'online'), 5);
+    assert.equal(requirement(root.id, 'offline'), 3);
+    assert.equal(planner.project_requirements.find(item => item.work_mode === 'online').required_count, 7);
+    assert.equal(planner.project_requirements.find(item => item.work_mode === 'offline').required_count, 4);
+    assert.equal(planner.area_day_summary.find(item => item.id === root.id).days[0].online_required, 5);
+    assert.throws(() => repository.setPlannerRequirements({ plan_date: '2027-01-15', scope: 'project', online_required: 4, offline_required: 2 }, admin), /nie może być niższe/);
 
     repository.setPlannerRequirementsBatch({ items: [
-      { plan_date: '2027-01-15', controller_group_id: sibling.id, online_required: 0, offline_required: 0 }
+      { plan_date: '2027-01-15', controller_group_id: root.id, online_required: 2, offline_required: 1 }
     ] }, admin);
     const reducedPlanner = repository.planner('2027-01-15', '2027-01-15', admin);
     const reducedRequirement = (groupId, mode) => reducedPlanner.requirements.find(item => Number(item.controller_group_id) === Number(groupId) && item.work_mode === mode)?.required_count || 0;
     assert.equal(reducedRequirement(root.id, 'online'), 2);
     assert.equal(reducedRequirement(root.id, 'offline'), 1);
+    assert.equal(reducedPlanner.project_requirements.find(item => item.work_mode === 'online').required_count, 7, 'project total may remain higher than the sum of areas');
 
     let status = repository.saveStatus(null, { controller: controller.code, function_detail: 'Przepływ komentarzy statusu', category: 'General', status: 'Ready to test' }, admin);
     const comment = repository.addComment({ entity_type: 'status', entity_id: status.id, content: 'Komentarz w otwartej sesji edycji' }, admin);
@@ -2122,20 +2130,20 @@ test('Planner RAW plans stay private, compare changes and publish with personal 
     repository.withProject(foreignProject.id, () => {
       const foreignAdmin = repository.me(admin.id, foreignProject.id);
       repository.saveUser(worker.id, { project_active: 1, planner_enabled: 1, assignable: 1, project_role: 'user' });
-      repository.savePlannerDay({ user_id: worker.id, plan_date: planDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'offline', shift: 'Noc', note: 'Drugi projekt snapshot' }] }, foreignAdmin);
+      repository.savePlannerDay({ user_id: worker.id, plan_date: planDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'online', shift: 'Noc', note: 'Drugi projekt snapshot' }] }, foreignAdmin);
     });
     const raw = repository.createPlannerRawPlan({ name: 'Wariant A', from_date: planDate, to_date: absenceDate }, admin);
     assert.equal(raw.entry_count, 2);
 
     repository.savePlannerDay({ user_id: worker.id, plan_date: planDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'online', shift: 'Dzień', note: 'Późniejsza produkcja' }] }, admin);
     repository.savePlannerDay({ user_id: worker.id, plan_date: absenceDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'online', shift: 'Dzień', note: 'Produkcja zamiast urlopu' }] }, admin);
-    repository.withProject(foreignProject.id, () => repository.savePlannerDay({ user_id: worker.id, plan_date: planDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'offline', shift: 'Noc', note: 'Późniejsza zmiana obcego projektu' }] }, repository.me(admin.id, foreignProject.id)));
+    repository.withProject(foreignProject.id, () => repository.savePlannerDay({ user_id: worker.id, plan_date: planDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'online', shift: 'Noc', note: 'Późniejsza zmiana obcego projektu' }] }, repository.me(admin.id, foreignProject.id)));
     let snapshot = repository.plannerRawData(raw.id, planDate, absenceDate, admin);
     assert.equal(snapshot.entries.find(item => item.user_id === worker.id)?.note, 'Produkcja');
     assert.equal(snapshot.cross_project_entries.find(item => item.project_id === foreignProject.id)?.note, 'Drugi projekt snapshot');
     assert.equal(snapshot.absences.find(item => item.user_id === worker.id)?.note, 'Urlop snapshot');
 
-    repository.savePlannerRawDay(raw.id, { user_id: worker.id, plan_date: planDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'offline', shift: 'Noc', note: 'Wariant prywatny' }] }, admin);
+    repository.savePlannerRawDay(raw.id, { user_id: worker.id, plan_date: planDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'online', shift: 'Noc', note: 'Wariant prywatny' }] }, admin);
     repository.savePlannerRawDay(raw.id, { target_project_id: foreignProject.id, user_id: worker.id, plan_date: planDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'online', shift: 'Dzień', note: 'Obcy projekt RAW' }] }, admin);
     repository.savePlannerRawDay(raw.id, { user_id: worker.id, plan_date: absenceDate, entries: [], absence_type: 'time_off', absence_note: 'Wolne RAW' }, admin);
     repository.savePlannerDay({ user_id: worker.id, plan_date: extendedDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'online', shift: 'Dzień', note: 'Snapshot rozszerzenia' }] }, admin);
@@ -2182,7 +2190,7 @@ test('Planner limits a person to three projects and keeps vacation exclusive glo
       repository.withProject(project.id, () => {
         const projectAdmin = repository.me(admin.id, project.id);
         repository.saveUser(worker.id, { project_active: 1, planner_enabled: 1, assignable: 1, project_role: 'user' });
-        const save = () => repository.savePlannerDay({ user_id: worker.id, plan_date: planDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'offline', shift: 'Noc' }] }, projectAdmin);
+        const save = () => repository.savePlannerDay({ user_id: worker.id, plan_date: planDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'online', shift: 'Noc' }] }, projectAdmin);
         if (index < 4) { save(); assignedProjects.push(project.id); }
         else assert.throws(save, /maksymalnie do 3 projektów/);
       });
@@ -2214,12 +2222,13 @@ test('publishing RAW sends unmanaged project changes to manager approval', () =>
     });
     const moderator = repository.me(moderatorRecord.id, 1);
     const raw = repository.createPlannerRawPlan({ name: 'RAW do akceptacji', from_date: '2027-04-05', to_date: '2027-04-05' }, moderator);
-    repository.savePlannerRawDay(raw.id, { target_project_id: target.id, user_id: worker.id, plan_date: '2027-04-05', entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'offline', shift: 'Noc', note: 'Zmiana oczekująca' }] }, moderator);
+    repository.savePlannerRawDay(raw.id, { target_project_id: target.id, user_id: worker.id, plan_date: '2027-04-05', entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'online', shift: 'Noc', note: 'Zmiana oczekująca' }] }, moderator);
     const published = repository.publishPlannerRawPlan(raw.id, { notify_users: 0 }, moderator);
     assert.equal(published.awaiting_approval, 1);
     repository.withProject(target.id, () => {
       const targetAdmin = repository.me(admin.id, target.id); const targetPlanner = repository.planner('2027-04-05', '2027-04-05', targetAdmin);
-      assert.equal(targetPlanner.entries.find(item => item.user_id === worker.id)?.note, 'Zmiana oczekująca');
+      assert.equal(targetPlanner.entries.find(item => item.user_id === worker.id)?.note, 'Plan docelowy przed RAW');
+      assert.equal(targetPlanner.proposed_entries.find(item => item.user_id === worker.id)?.note, 'Zmiana oczekująca');
       assert.ok(targetPlanner.incoming_cross_project_requests.some(item => item.user_id === worker.id && item.status === 'pending'));
     });
   } finally {

@@ -376,6 +376,15 @@ async function handleProjectApi(request, response, url, user) {
     if (method === 'DELETE') { repository.deleteAutomationRule(automationRuleId); response.writeHead(204); return response.end(); }
   }
   if (method === 'GET' && path === '/api/planner') return json(response, 200, repository.planner(url.searchParams.get('from'), url.searchParams.get('to'), user));
+  if (method === 'GET' && path === '/api/planner/lock') { requireRole(user, 'moderator'); return json(response, 200, repository.plannerLock(user)); }
+  if (method === 'POST' && path === '/api/planner/checkout') { requireRole(user, 'moderator'); return json(response, 200, repository.checkoutPlanner(user)); }
+  if (method === 'POST' && path === '/api/planner/checkin') { requireRole(user, 'moderator'); const body=await readJson(request); return json(response, 200, repository.checkinPlanner(user, Boolean(body.force))); }
+  if (method === 'GET' && path === '/api/planner/history') return json(response, 200, repository.plannerDayHistory(url.searchParams.get('user_id'), url.searchParams.get('plan_date')));
+  if (method === 'POST' && path === '/api/planner/information') { requireRole(user, 'moderator'); return json(response, 200, repository.updatePlannerInformation(await readJson(request), user)); }
+  if (method === 'GET' && path === '/api/planner/snapshots') { requireRole(user, 'moderator'); return json(response, 200, repository.plannerSnapshots()); }
+  if (method === 'POST' && path === '/api/planner/snapshots') { requireRole(user, 'moderator'); return json(response, 201, repository.createPlannerSnapshot(await readJson(request), user)); }
+  const plannerSnapshotRestore = path.match(/^\/api\/planner\/snapshots\/(\d+)\/restore$/);
+  if (plannerSnapshotRestore && method === 'POST') { requireRole(user, 'moderator'); return json(response, 200, repository.restorePlannerSnapshot(Number(plannerSnapshotRestore[1]), await readJson(request), user)); }
   if (method === 'GET' && path === '/api/planner/raw-plans') { requireRole(user, 'moderator'); return json(response, 200, repository.plannerRawPlans(user)); }
   if (method === 'POST' && path === '/api/planner/raw-plans') { requireRole(user, 'moderator'); return json(response, 201, repository.createPlannerRawPlan(await readJson(request), user)); }
   const plannerRawDay = path.match(/^\/api\/planner\/raw-plans\/(\d+)\/day$/);
@@ -408,10 +417,10 @@ async function handleProjectApi(request, response, url, user) {
     if (method === 'PATCH') return json(response, 200, repository.savePlannerHoliday(holidayId, await readJson(request), user));
     if (method === 'DELETE') { repository.deletePlannerHoliday(holidayId); response.writeHead(204); return response.end(); }
   }
-  if (method === 'POST' && path === '/api/planner/vehicles') { requireRole(user, 'moderator'); return json(response, 201, repository.savePlannerVehicle(null, await readJson(request))); }
+  if (method === 'POST' && path === '/api/planner/vehicles') { requireRole(user, 'project_admin'); return json(response, 201, repository.savePlannerVehicle(null, await readJson(request))); }
   const vehicleId = numericId(path, '/api/planner/vehicles');
   if (vehicleId !== null) {
-    requireRole(user, 'moderator');
+    requireRole(user, 'project_admin');
     if (method === 'PATCH') return json(response, 200, repository.savePlannerVehicle(vehicleId, await readJson(request)));
     if (method === 'DELETE') { repository.deletePlannerVehicle(vehicleId); response.writeHead(204); return response.end(); }
   }

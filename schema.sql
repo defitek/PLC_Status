@@ -540,6 +540,7 @@ CREATE TABLE IF NOT EXISTS planner_entries (
   work_mode TEXT NOT NULL DEFAULT 'online' CHECK(work_mode IN ('online','offline')),
   transport_mode TEXT NOT NULL DEFAULT 'none' CHECK(transport_mode IN ('none','transport_work','transport_only')),
   duration_hours REAL NOT NULL DEFAULT 0 CHECK(duration_hours >= 0),
+  allocated_hours REAL CHECK(allocated_hours IS NULL OR allocated_hours >= 0),
   count_in_manpower INTEGER NOT NULL DEFAULT 1 CHECK(count_in_manpower IN (0,1)),
   vehicle_id INTEGER REFERENCES planner_vehicles(id) ON DELETE SET NULL,
   note TEXT NOT NULL DEFAULT '',
@@ -573,6 +574,7 @@ CREATE TABLE IF NOT EXISTS planner_raw_entries (
   work_mode TEXT NOT NULL DEFAULT 'online' CHECK(work_mode IN ('online','offline')),
   transport_mode TEXT NOT NULL DEFAULT 'none' CHECK(transport_mode IN ('none','transport_work','transport_only')),
   duration_hours REAL NOT NULL DEFAULT 0 CHECK(duration_hours >= 0),
+  allocated_hours REAL CHECK(allocated_hours IS NULL OR allocated_hours >= 0),
   count_in_manpower INTEGER NOT NULL DEFAULT 1 CHECK(count_in_manpower IN (0,1)),
   vehicle_id INTEGER REFERENCES planner_vehicles(id) ON DELETE SET NULL,
   note TEXT NOT NULL DEFAULT '',
@@ -612,6 +614,7 @@ CREATE TABLE IF NOT EXISTS planner_cross_project_requests (
   shift TEXT NOT NULL DEFAULT 'Dzień',
   count_in_manpower INTEGER NOT NULL DEFAULT 1 CHECK(count_in_manpower IN (0,1)),
   note TEXT NOT NULL DEFAULT '',
+  entries_json TEXT NOT NULL DEFAULT '[]',
   status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),
   requested_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   decided_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -621,6 +624,82 @@ CREATE TABLE IF NOT EXISTS planner_cross_project_requests (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CHECK(source_project_id!=target_project_id),
   UNIQUE(source_project_id,target_project_id,user_id,plan_date)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS planner_project_requirements (
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  plan_date TEXT NOT NULL,
+  work_mode TEXT NOT NULL CHECK(work_mode IN ('online','offline')),
+  required_count INTEGER NOT NULL DEFAULT 0 CHECK(required_count >= 0),
+  note TEXT NOT NULL DEFAULT '',
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(project_id,plan_date,work_mode)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS planner_day_comments (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  plan_date TEXT NOT NULL,
+  comment TEXT NOT NULL DEFAULT '',
+  updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(user_id,plan_date)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS planner_project_locks (
+  project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  locked_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  locked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_activity_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS planner_global_locks (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  plan_date TEXT NOT NULL,
+  locked_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  locked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_activity_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(user_id,plan_date)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS planner_day_history (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  plan_date TEXT NOT NULL,
+  action TEXT NOT NULL DEFAULT 'update',
+  before_json TEXT NOT NULL DEFAULT '{}',
+  after_json TEXT NOT NULL DEFAULT '{}',
+  changes_json TEXT NOT NULL DEFAULT '[]',
+  changed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS planner_information_queue (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  plan_date TEXT NOT NULL,
+  history_id INTEGER REFERENCES planner_day_history(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','informed')),
+  informed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  informed_at TEXT,
+  informed_note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS planner_snapshots (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  year INTEGER NOT NULL CHECK(year BETWEEN 2026 AND 2040),
+  quarter INTEGER NOT NULL CHECK(quarter BETWEEN 1 AND 4),
+  name TEXT NOT NULL,
+  snapshot_json TEXT NOT NULL,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS planner_requirements (
@@ -1137,6 +1216,9 @@ CREATE INDEX IF NOT EXISTS idx_planner_raw_entries_date ON planner_raw_entries(r
 CREATE INDEX IF NOT EXISTS idx_planner_raw_absences_date ON planner_raw_absences(raw_plan_id,absence_date,user_id);
 CREATE INDEX IF NOT EXISTS idx_planner_cross_project_target ON planner_cross_project_requests(target_project_id,status,plan_date,user_id);
 CREATE INDEX IF NOT EXISTS idx_planner_cross_project_source ON planner_cross_project_requests(source_project_id,status,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_planner_history_day ON planner_day_history(project_id,user_id,plan_date,created_at);
+CREATE INDEX IF NOT EXISTS idx_planner_information_pending ON planner_information_queue(project_id,status,plan_date,user_id);
+CREATE INDEX IF NOT EXISTS idx_planner_snapshots_quarter ON planner_snapshots(project_id,year,quarter,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_planner_requirements_date ON planner_requirements(project_id,plan_date,controller_group_id);
 CREATE INDEX IF NOT EXISTS idx_announcements_project ON announcements(project_id,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_announcement_labels_project ON announcement_labels(project_id,sort_order,name);
