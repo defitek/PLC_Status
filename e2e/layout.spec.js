@@ -211,10 +211,12 @@ test('Planner ma zwarte wiersze, osobne oznaczenia widoku i rozwijane filtry wie
   const userHeaders = page.locator('.planner-table tbody [data-planner-user-header]');
   const userCount = await userHeaders.count();
   expect(userCount).toBeGreaterThan(0);
-  await userHeaders.nth(0).evaluate(element => element.click());
+  await expect(page.locator('.planner-person-heading')).toBeVisible();
+  await expect(page.locator('.planner-person-heading')).toHaveText('Pracownik');
+  await userHeaders.nth(0).click();
   await expect(page.locator('.planner-table tbody tr.visual-highlight')).toHaveCount(1);
   if (userCount > 1) {
-    await userHeaders.nth(1).evaluate(element => element.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true })));
+    await userHeaders.nth(1).click({ modifiers: ['Control'] });
     await expect(page.locator('.planner-table tbody tr.visual-highlight')).toHaveCount(2);
   }
   await expect(page.locator('.planner-table tbody .multi-selected')).toHaveCount(0);
@@ -232,6 +234,14 @@ test('Planner ma zwarte wiersze, osobne oznaczenia widoku i rozwijane filtry wie
   expect(dimensions.row).toBeLessThanOrEqual(27);
   expect(dimensions.person).toBeLessThanOrEqual(170);
   expect(dimensions.cell).toBeLessThanOrEqual(90);
+
+  const totalLayout = await page.locator('.total-headcount-row td').evaluateAll(cells => ({
+    displays: cells.map(cell => getComputedStyle(cell).display),
+    tops: cells.map(cell => Math.round(cell.getBoundingClientRect().top))
+  }));
+  expect(totalLayout.displays.every(display => display === 'table-cell')).toBe(true);
+  expect(new Set(totalLayout.tops).size).toBe(1);
+  await expect(page.locator('.total-headcount-row td')).toHaveCount(await dayHeaders.count());
 
   const currentRow = page.locator('.planner-table tbody tr.planner-current-user');
   if (await currentRow.count()) {

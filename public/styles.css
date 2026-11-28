@@ -1933,9 +1933,10 @@ input:is([type=checkbox],[type=radio]) { accent-color:var(--blue); cursor:pointe
 /* Jednolity rytm typografii podsumowań ogólnych i projektowych. */
 .planner-unified .total-headcount-row td,
 .planner-unified .project-total-cell>button { min-height:31px; align-content:center; justify-items:center; grid-template-columns:1fr; grid-template-rows:13px 13px; gap:1px; padding:1px 2px; line-height:1; }
-.planner-unified .total-headcount-row td { display:grid; }
+.planner-unified .total-headcount-row td { display:table-cell; height:31px; text-align:center; vertical-align:middle; }
 .planner-unified .total-headcount-row td>b,
 .planner-unified .project-total-cell>button>b { font-size:10px; font-weight:600; line-height:13px; }
+.planner-unified .total-headcount-row td>b { display:block; }
 .planner-unified .total-headcount-row td>small,
 .planner-unified .project-total-cell>button>small { display:flex!important; min-height:13px; gap:4px; align-items:center; justify-content:center; margin:0; font-size:8px; line-height:13px; }
 .planner-unified .total-headcount-row .person-col,
