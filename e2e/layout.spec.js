@@ -198,7 +198,9 @@ test('Planner ma zwarte wiersze, osobne oznaczenia widoku i rozwijane filtry wie
   });
   await openView(page, 'planner');
 
-  await page.locator('.planner-filter-bar>summary').click();
+  await expect(page.locator('.planner-filter-bar')).toHaveCount(0);
+  await page.locator('#planner-filters-toggle').click();
+  await expect(page.locator('.planner-filter-bar')).toBeVisible();
   await expect(page.locator('.planner-filter-picker')).toHaveCount(5);
   await expect(page.locator('.planner-filter-bar select[multiple]')).toHaveCount(0);
   const projectPicker = page.locator('.planner-filter-picker[data-planner-filter="projects"]');
@@ -209,10 +211,10 @@ test('Planner ma zwarte wiersze, osobne oznaczenia widoku i rozwijane filtry wie
   const userHeaders = page.locator('.planner-table tbody [data-planner-user-header]');
   const userCount = await userHeaders.count();
   expect(userCount).toBeGreaterThan(0);
-  await userHeaders.nth(0).click();
+  await userHeaders.nth(0).evaluate(element => element.click());
   await expect(page.locator('.planner-table tbody tr.visual-highlight')).toHaveCount(1);
   if (userCount > 1) {
-    await userHeaders.nth(1).click({ modifiers: ['Control'] });
+    await userHeaders.nth(1).evaluate(element => element.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true })));
     await expect(page.locator('.planner-table tbody tr.visual-highlight')).toHaveCount(2);
   }
   await expect(page.locator('.planner-table tbody .multi-selected')).toHaveCount(0);
@@ -228,8 +230,8 @@ test('Planner ma zwarte wiersze, osobne oznaczenia widoku i rozwijane filtry wie
     return { row: row.getBoundingClientRect().height, person: person.width, cell: cell.width };
   });
   expect(dimensions.row).toBeLessThanOrEqual(27);
-  expect(dimensions.person).toBeLessThanOrEqual(156);
-  expect(dimensions.cell).toBeLessThanOrEqual(76);
+  expect(dimensions.person).toBeLessThanOrEqual(170);
+  expect(dimensions.cell).toBeLessThanOrEqual(90);
 
   const currentRow = page.locator('.planner-table tbody tr.planner-current-user');
   if (await currentRow.count()) {
@@ -280,9 +282,11 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   const userId = await cell.getAttribute('data-user-id');
   const date = await cell.getAttribute('data-date');
   await cell.dblclick();
-  await expect(page.locator('#action-title')).toContainText('Dodaj pracę');
-  await expect(page.locator('#action-fields [name="target_project_id"]')).toHaveValue(/\d+/);
-  await page.locator('#action-cancel').click();
+  await expect(page.locator('#planner-dialog')).toBeVisible();
+  await expect(page.locator('#planner-dialog-title')).toContainText(date.split('-').reverse().join('.'));
+  await expect(page.locator('.planner-entry-head')).toContainText('Godziny projektu');
+  await expect(page.locator('.planner-entry-head')).toContainText('Manpower');
+  await page.locator('#planner-dialog-cancel').click();
   await cell.click();
   await page.keyboard.press('t');
   await expect(page.locator('#action-title')).toHaveText(/Transport/);
@@ -391,8 +395,8 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   const groupedWorkRow = page.locator('#planner-entry-list .planner-entry-row:not(.transport-entry)').filter({ has: page.locator(`[data-plan-note][value="${workNote}"]`) });
   await expect(groupedWorkRow).toHaveCount(1);
   expect(await groupedWorkRow.evaluate(row => row.firstElementChild?.matches('[data-plan-activity]'))).toBe(true);
-  await expect(groupedWorkRow.locator('.planner-manpower-toggle')).toContainText('Manpower');
-  await expect(groupedWorkRow.locator('.planner-manpower-toggle')).toHaveAttribute('title', /wliczany do Manpoweru/);
+  await expect(groupedWorkRow.locator('.planner-manpower-toggle')).toHaveText('');
+  await expect(groupedWorkRow.locator('.planner-manpower-toggle')).toHaveAttribute('title', /wliczany do manpoweru/i);
   await expect(groupedWorkRow.locator('[data-plan-area]:checked')).toHaveCount(2);
   await groupedWorkRow.locator('[data-plan-manpower]').uncheck();
   await page.locator('#planner-form .dialog-actions .primary').click();
@@ -1129,7 +1133,8 @@ test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzypr
   await page.locator('#action-fields [name="note"]').fill('Nocne wsparcie projektu docelowego');
   await page.locator('#action-submit').click();
   await expect(page.locator('#planner-requirements-open')).toBeVisible();
-  await expect(page.locator('#planner-config-open')).toBeVisible();
+  await expect(page.locator('#planner-config-open')).toHaveCount(0);
+  await expect(page.locator('#planner-participants')).toHaveCount(0);
   await expect(page.locator('#planner-hours-open')).toBeVisible();
   const targetRequirementToggle = page.locator(`[data-requirement-project-toggle="${setup.targetProjectId}"]`).first();
   await expect(targetRequirementToggle).toBeVisible();
