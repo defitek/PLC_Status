@@ -188,6 +188,69 @@ test('zakładki Priorytetów są spójne, a samotna akcja mieści się w belce z
   expect(Math.abs(operationsStyle.height - workspaceStyle.height)).toBeLessThanOrEqual(2);
 });
 
+test('Planner ma zwarte wiersze, osobne oznaczenia widoku i rozwijane filtry wielokrotne', async ({ page }) => {
+  await page.evaluate(async () => {
+    const users = await fetch('/api/users').then(response => response.json());
+    const participant = users.find(user => user.system_role !== 'system_admin') || users[0];
+    if (!participant) throw new Error('Brak użytkownika do testu Plannera');
+    const response = await fetch(`/api/users/${participant.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project_active: 1, planner_enabled: 1 }) });
+    if (!response.ok) throw new Error((await response.json()).error || 'Nie udało się włączyć uczestnika Plannera');
+  });
+  await openView(page, 'planner');
+
+  await page.locator('.planner-filter-bar>summary').click();
+  await expect(page.locator('.planner-filter-picker')).toHaveCount(5);
+  await expect(page.locator('.planner-filter-bar select[multiple]')).toHaveCount(0);
+  const projectPicker = page.locator('.planner-filter-picker[data-planner-filter="projects"]');
+  await projectPicker.locator('summary').click();
+  await expect(projectPicker.locator('[data-planner-filter-option]').first()).toBeVisible();
+  await expect(projectPicker.locator('[data-planner-filter-apply]')).toBeVisible();
+
+  const userHeaders = page.locator('.planner-table tbody [data-planner-user-header]');
+  const userCount = await userHeaders.count();
+  expect(userCount).toBeGreaterThan(0);
+  await userHeaders.nth(0).click();
+  await expect(page.locator('.planner-table tbody tr.visual-highlight')).toHaveCount(1);
+  if (userCount > 1) {
+    await userHeaders.nth(1).click({ modifiers: ['Control'] });
+    await expect(page.locator('.planner-table tbody tr.visual-highlight')).toHaveCount(2);
+  }
+  await expect(page.locator('.planner-table tbody .multi-selected')).toHaveCount(0);
+
+  const dayHeaders = page.locator('.planner-table thead tr:nth-child(3) [data-planner-date-header]');
+  await dayHeaders.nth(0).evaluate(element => element.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  await dayHeaders.nth(1).evaluate(element => element.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true })));
+  await expect(page.locator('.planner-table thead tr:nth-child(3) th.visual-highlight')).toHaveCount(2);
+
+  const dimensions = await page.locator('.planner-table tbody tr:has([data-planner-user-header])').first().evaluate(row => {
+    const person = row.querySelector('.person-col').getBoundingClientRect();
+    const cell = row.querySelector('.planner-cell').getBoundingClientRect();
+    return { row: row.getBoundingClientRect().height, person: person.width, cell: cell.width };
+  });
+  expect(dimensions.row).toBeLessThanOrEqual(27);
+  expect(dimensions.person).toBeLessThanOrEqual(156);
+  expect(dimensions.cell).toBeLessThanOrEqual(76);
+
+  const currentRow = page.locator('.planner-table tbody tr.planner-current-user');
+  if (await currentRow.count()) {
+    await expect(currentRow.locator('.person-col')).not.toContainText('· Ty');
+    const currentStyle = await currentRow.locator('.person-col').evaluate(element => ({
+      borderTop: getComputedStyle(element).borderTopWidth,
+      marker: getComputedStyle(element.querySelector('b'), '::before').content
+    }));
+    expect(currentStyle.borderTop).not.toBe('2px');
+    expect(currentStyle.marker).toBe('none');
+  }
+
+  await expect(page.locator('.requirement-values-key')).toContainText('online');
+  await expect(page.locator('.requirement-values-key')).toContainText('offline');
+  const total = page.locator('.total-headcount-row td').first();
+  await expect(total.locator('small')).not.toContainText(/ON|OFF/);
+  const projectRow = page.locator('.requirement-project-row').first();
+  if (await projectRow.count()) await expect(projectRow.locator('.person-col')).not.toContainText(/obsada razem/i);
+  await expectViewportContained(page);
+});
+
 test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kontekstowym', async ({ page }) => {
   const transportCode = await page.evaluate(async () => {
     const users = await fetch('/api/users').then(response => response.json());
@@ -941,11 +1004,19 @@ test('Planner sortuje kafelki i scala obszary jednego projektu', async ({ page }
 });
 
 test('Planner RAW porównuje prywatny wariant i publikuje go dopiero na żądanie', async ({ page }) => {
+  await page.evaluate(async () => {
+    const users = await fetch('/api/users').then(response => response.json());
+    const participant = users.find(user => user.system_role !== 'system_admin') || users[0];
+    if (!participant) throw new Error('Brak użytkownika do testu RAW Plannera');
+    const response = await fetch(`/api/users/${participant.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project_active: 1, planner_enabled: 1 }) });
+    if (!response.ok) throw new Error((await response.json()).error || 'Nie udało się włączyć uczestnika Plannera');
+  });
   await openView(page, 'planner');
   const cell = page.locator('.planner-cell[data-editable="1"]:not(.planned):not(.absent)').first();
   const userId = Number(await cell.getAttribute('data-user-id'));
   const date = await cell.getAttribute('data-date');
   const name = `RAW E2E ${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+  const rawNote = `Prywatna zmiana RAW E2E ${Date.now()}-${Math.floor(Math.random() * 10000)}`;
   await page.locator('#planner-raw-new').click();
   await page.locator('#action-fields [name="name"]').fill(name);
   await page.locator('#action-fields [name="from_date"]').fill(date);
@@ -960,15 +1031,16 @@ test('Planner RAW porównuje prywatny wariant i publikuje go dopiero na żądani
   await page.locator('#action-submit').click();
   await expect(page.locator('.planner-raw-banner')).toContainText(name);
 
-  await page.evaluate(async ({ rawPlanId, userId, date }) => {
-    const response = await fetch(`/api/planner/raw-plans/${rawPlanId}/day`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: userId, plan_date: date, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'offline', shift: 'Noc', note: 'Prywatna zmiana RAW E2E' }] }) });
+  await page.evaluate(async ({ rawPlanId, userId, date, rawNote }) => {
+    const response = await fetch(`/api/planner/raw-plans/${rawPlanId}/day`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: userId, plan_date: date, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'offline', shift: 'Noc', note: rawNote }] }) });
     if (!response.ok) throw new Error((await response.json()).error || 'Nie udało się zmienić RAW');
     const production = await fetch(`/api/planner?from=${date}&to=${date}`).then(item => item.json());
     if (production.entries.some(entry => Number(entry.user_id) === userId)) throw new Error('RAW zmienił plan produkcyjny przed publikacją');
-  }, { rawPlanId, userId, date });
+  }, { rawPlanId, userId, date, rawNote });
   await page.locator('[data-view="planner"]').evaluate(button => button.click());
+  await expect(page.locator('.planner-raw-banner')).toContainText('Zmiany: 1');
   await page.locator('#planner-raw-compare').click();
-  await expect(page.locator('#action-fields [name="changes"]')).toHaveValue(/Prywatna zmiana RAW E2E/);
+  await expect(page.locator('#action-fields [name="changes"]')).toHaveValue(new RegExp(rawNote));
   await page.locator('#action-submit').click();
 
   await page.locator('#planner-raw-publish').click();
@@ -978,7 +1050,7 @@ test('Planner RAW porównuje prywatny wariant i publikuje go dopiero na żądani
   await expect.poll(() => page.evaluate(async ({ userId, date }) => {
     const production = await fetch(`/api/planner?from=${date}&to=${date}`).then(item => item.json());
     return production.entries.find(entry => Number(entry.user_id) === userId)?.note || '';
-  }, { userId, date })).toBe('Prywatna zmiana RAW E2E');
+  }, { userId, date })).toBe(rawNote);
 
   await page.evaluate(async ({ rawPlanId, userId, date }) => {
     await fetch(`/api/planner/raw-plans/${rawPlanId}`, { method: 'DELETE' });
@@ -1070,7 +1142,7 @@ test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzypr
   await expect(directSourceChip).not.toHaveClass(/approval-pending/);
   const targetProjectTotal = page.locator(`[data-requirement-project-bar="${setup.targetProjectId}"] [data-project-total-date="${planDate}"]`);
   expect(Number(await targetProjectTotal.locator(':scope > button > b').textContent())).toBeGreaterThanOrEqual(1);
-  expect(Number((await targetProjectTotal.locator('.off-tag').textContent()).match(/OFF\s+(\d+)/)?.[1] || 0)).toBeGreaterThanOrEqual(1);
+  expect(Number((await targetProjectTotal.locator('.off-tag').textContent()).split('/')[0] || 0)).toBeGreaterThanOrEqual(1);
   const globalTotal = page.locator(`.total-headcount-row [data-total-date="${planDate}"]`);
   expect(Number(await globalTotal.locator(':scope > b').textContent())).toBeGreaterThanOrEqual(1);
   expect(Number((await globalTotal.locator('.off-tag').textContent()).replace(/\D/g, ''))).toBeGreaterThanOrEqual(1);
