@@ -235,6 +235,13 @@ test('Planner ma zwarte wiersze, osobne oznaczenia widoku i rozwijane filtry wie
   expect(dimensions.person).toBeLessThanOrEqual(170);
   expect(dimensions.cell).toBeLessThanOrEqual(90);
 
+  await page.locator('#planner-detail-toggle').check();
+  await expect(page.locator('#planner-show-hours')).toBeVisible();
+  await expect(page.locator('#planner-show-areas')).toBeVisible();
+  const detailOnlyHeight = await page.locator('.planner-table tbody tr:has([data-planner-user-header])').first().evaluate(row => Math.round(row.getBoundingClientRect().height));
+  expect(detailOnlyHeight).toBeLessThanOrEqual(27);
+  await page.locator('#planner-detail-toggle').uncheck();
+
   const totalLayout = await page.locator('.total-headcount-row td').evaluateAll(cells => ({
     displays: cells.map(cell => getComputedStyle(cell).display),
     tops: cells.map(cell => Math.round(cell.getBoundingClientRect().top))
@@ -260,6 +267,15 @@ test('Planner ma zwarte wiersze, osobne oznaczenia widoku i rozwijane filtry wie
   await expect(total.locator('small')).not.toContainText(/ON|OFF/);
   const projectRow = page.locator('.requirement-project-row').first();
   if (await projectRow.count()) await expect(projectRow.locator('.person-col')).not.toContainText(/obsada razem/i);
+  await page.locator('#planner-requirements-open').click();
+  const requirementInput = page.locator('.requirement-grid-input').first();
+  const requirementBefore = await requirementInput.inputValue();
+  await requirementInput.fill(requirementBefore === '1/0' ? '2/0' : '1/0');
+  await expect(page.locator('#planner-requirements-cancel-inline')).toBeEnabled();
+  await page.locator('#planner-requirements-cancel-inline').click();
+  await expect(page.locator('.requirement-grid-input').first()).toHaveValue(requirementBefore);
+  await expect(page.locator('#planner-requirements-cancel-inline')).toBeDisabled();
+  await page.locator('#planner-requirements-open').click();
   await expectViewportContained(page);
 });
 
@@ -381,8 +397,8 @@ test('Planner udostępnia transport, wolne i urlop w narzędziach oraz menu kont
   await page.locator('#planner-selection-clear').click();
   const tileHeights = await Promise.all([transportChip, freeCell.locator('.absence-chip.time_off'), vacationCell.locator('.absence-chip.vacation'), mergedWorkChip].map(locator => locator.evaluate(element => Math.round(element.getBoundingClientRect().height))));
   expect(new Set(tileHeights).size).toBe(1);
-  const fixedColors = await Promise.all([transportChip, freeCell.locator('.absence-chip.time_off'), vacationCell.locator('.absence-chip.vacation')].map(locator => locator.evaluate(element => getComputedStyle(element).backgroundColor)));
-  expect(new Set(fixedColors).size).toBe(3);
+  const fixedLabelColors = await Promise.all([transportChip, freeCell.locator('.absence-chip.time_off'), vacationCell.locator('.absence-chip.vacation')].map(locator => locator.evaluate(element => getComputedStyle(element.querySelector(':scope > .mode-label, :scope > b')).backgroundColor)));
+  expect(new Set(fixedLabelColors).size).toBe(3);
   const tileDesigns = await Promise.all([transportChip, freeCell.locator('.absence-chip.time_off'), vacationCell.locator('.absence-chip.vacation'), mergedWorkChip].map(locator => locator.evaluate(element => {
     const label = element.querySelector(':scope > .mode-label, :scope > b');
     const outer = getComputedStyle(element); const inner = getComputedStyle(label);
@@ -1199,7 +1215,7 @@ test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzypr
   await expect(externalNightChip).not.toContainText(/\b(?:ON|OFF|D|N)\b/);
   await expect(externalNightChip).toHaveAttribute('style', new RegExp(`--project-color:${setup.targetProjectColor}`, 'i'));
   expect(await externalNightChip.evaluate(element => getComputedStyle(element).backgroundImage)).toBe('none');
-  expect(await externalNightChip.locator('.mode-label').evaluate(element => getComputedStyle(element).backgroundImage)).toContain('repeating-linear-gradient');
+  expect(await externalNightChip.locator('.combined-plan-segment.project').evaluate(element => getComputedStyle(element).backgroundImage)).toContain('repeating-linear-gradient');
   await page.locator('.planner-scroll').evaluate(element => { element.scrollLeft = 0; });
   await expect(externalNightChip).toHaveAttribute('draggable', 'true');
   await externalNightChip.dispatchEvent('pointerdown', { button: 0, buttons: 1 });
@@ -1219,6 +1235,7 @@ test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzypr
   await transportRow.locator('[data-plan-note]').fill('Transport edytowany z projektu źródłowego');
   await page.locator('#planner-form footer .primary').click();
   await expect(page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"] .plan-chip.other-project.approval-pending`)).toHaveCount(0);
+  await page.locator('#planner-show-areas').click();
 
   const copyDate = await rowCells.nth(1).getAttribute('data-date');
   const moveDate = await rowCells.nth(2).getAttribute('data-date');
@@ -1258,6 +1275,7 @@ test('Planner zachowuje scroll, zaznacza prostokąty i zatwierdza plan międzypr
   await page.reload();
   await openView(page, 'planner');
   await page.locator('#planner-detail-toggle').check();
+  await page.locator('#planner-show-areas').click();
   await expect(page.locator('.planner-cross-project-row.incoming', { hasText: setup.workerName })).toHaveCount(0);
   await expect(page.locator(`.planner-cell[data-user-id="${setup.workerId}"][data-date="${planDate}"] .plan-chip.transport-only`)).toBeVisible();
   await page.evaluate(async ({ workerId, planDate }) => {

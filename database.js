@@ -1867,7 +1867,19 @@ function createRepository(db, defaultProjectId) {
     const action = !(before.entries?.length || before.absence || before.day_comment) ? 'create' : !(after.entries?.length || after.absence || after.day_comment) ? 'delete' : 'update';
     const historyId = Number(db.prepare(`INSERT INTO planner_day_history(project_id,user_id,plan_date,action,before_json,after_json,changes_json,changed_by)
       VALUES(?,?,?,?,?,?,?,?)`).run(projectId,userId,planDate,action,JSON.stringify(before),JSON.stringify(after),JSON.stringify(changes),currentUser.id).lastInsertRowid);
-    db.prepare(`INSERT INTO planner_information_queue(project_id,user_id,plan_date,history_id,status)
+    const pending = all(`SELECT queue.id,history.before_json FROM planner_information_queue queue
+      LEFT JOIN planner_day_history history ON history.id=queue.history_id
+      WHERE queue.project_id=? AND queue.user_id=? AND queue.plan_date=? AND queue.status='pending'
+      ORDER BY queue.created_at,queue.id`, projectId, userId, planDate);
+    if (pending.length) {
+      const baseline = parseJson(pending[0].before_json, before);
+      if (!plannerStateChanges(baseline, after).length) {
+        db.prepare("DELETE FROM planner_information_queue WHERE project_id=? AND user_id=? AND plan_date=? AND status='pending'").run(projectId,userId,planDate);
+      } else {
+        db.prepare('UPDATE planner_information_queue SET updated_at=CURRENT_TIMESTAMP WHERE id=?').run(pending[0].id);
+        if (pending.length > 1) db.prepare(`DELETE FROM planner_information_queue WHERE id IN (${pending.slice(1).map(()=>'?').join(',')})`).run(...pending.slice(1).map(row=>row.id));
+      }
+    } else db.prepare(`INSERT INTO planner_information_queue(project_id,user_id,plan_date,history_id,status)
       VALUES(?,?,?,?,'pending')`).run(projectId,userId,planDate,historyId);
     return historyId;
   }
@@ -2176,11 +2188,13 @@ function createRepository(db, defaultProjectId) {
       WHERE pe.plan_date=? AND pe.transport_mode!='transport_only' ORDER BY pe.user_id`, previousDateValue.toISOString().slice(0, 10)).map(row => Number(row.user_id));
     const dayComments = all(`SELECT comment.* FROM planner_day_comments comment JOIN project_memberships pm ON pm.user_id=comment.user_id
       WHERE pm.project_id=? AND pm.active=1 AND pm.planner_enabled=1 AND comment.plan_date BETWEEN ? AND ?`, activeProjectId(), range.from, range.to);
+    const historyVisibility = canManageRequirements ? { sql:'',params:[] } : { sql:'AND user_id=?',params:[Number(currentUser?.id||0)] };
     const historyCounts = all(`SELECT user_id,plan_date,COUNT(*) history_count FROM planner_day_history
-      WHERE project_id=? AND plan_date BETWEEN ? AND ? GROUP BY user_id,plan_date`, activeProjectId(), range.from, range.to);
+      WHERE project_id=? AND plan_date BETWEEN ? AND ? ${historyVisibility.sql} GROUP BY user_id,plan_date`, activeProjectId(), range.from, range.to,...historyVisibility.params);
     const informationQueue = canManageRequirements ? all(`SELECT queue.*,u.display_name,actor.display_name informed_by_name FROM planner_information_queue queue
       JOIN users u ON u.id=queue.user_id LEFT JOIN users actor ON actor.id=queue.informed_by
-      WHERE queue.project_id=? AND queue.plan_date BETWEEN ? AND ? ORDER BY queue.status,queue.plan_date,u.sort_order,queue.id`, activeProjectId(), range.from, range.to) : [];
+      WHERE queue.project_id=? AND (queue.status='pending' OR queue.plan_date BETWEEN ? AND ?)
+      ORDER BY queue.status,queue.plan_date,u.sort_order,queue.id`, activeProjectId(), range.from, range.to) : [];
     const defaultWorkHours = {
       online: Number(one("SELECT value FROM system_settings WHERE key='planner_online_hours'")?.value || 10.5),
       offline: Number(one("SELECT value FROM system_settings WHERE key='planner_offline_hours'")?.value || 8)
@@ -2382,14 +2396,27 @@ function createRepository(db, defaultProjectId) {
     return plannerData(planDate, planDate, currentUser);
   }
 
-  function plannerDayHistory(userId, planDate) {
+  function plannerDayHistory(userId, planDate, currentUser) {
     const normalizedUserId = asId(userId); const normalizedDate = nullableDate(planDate);
     if (!normalizedUserId || !normalizedDate) throw appError('Pracownik i dzień są wymagane');
+    const manager = ['system_admin','project_admin','moderator'].includes(currentUser?.role);
+    if (!manager && Number(normalizedUserId) !== Number(currentUser?.id)) throw appError('Możesz przeglądać tylko historię własnego planu',403);
+    if (!one('SELECT 1 FROM project_memberships WHERE project_id=? AND user_id=? AND active=1',activeProjectId(),normalizedUserId)) throw appError('Pracownik nie należy do tego projektu',404);
     return all(`SELECT history.*,actor.display_name changed_by_name FROM planner_day_history history
       LEFT JOIN users actor ON actor.id=history.changed_by WHERE history.project_id=? AND history.user_id=? AND history.plan_date=?
       ORDER BY history.created_at DESC,history.id DESC`, activeProjectId(), normalizedUserId, normalizedDate).map(row => ({
         ...row,before:JSON.parse(row.before_json||'{}'),after:JSON.parse(row.after_json||'{}'),changes:JSON.parse(row.changes_json||'[]')
       }));
+  }
+
+  function plannerHistoryEntry(id,currentUser) {
+    const row=one(`SELECT history.id,history.user_id,history.plan_date,history.project_id,u.display_name
+      FROM planner_day_history history JOIN users u ON u.id=history.user_id
+      WHERE history.id=? AND history.project_id=?`,asId(id),activeProjectId());
+    if(!row) throw appError('Powiązana zmiana planu nie jest już dostępna',404);
+    const manager=['system_admin','project_admin','moderator'].includes(currentUser?.role);
+    if(!manager&&Number(row.user_id)!==Number(currentUser?.id)) throw appError('Nie możesz otworzyć historii innego pracownika',403);
+    return row;
   }
 
   function updatePlannerInformation(input, currentUser) {
@@ -2404,7 +2431,8 @@ function createRepository(db, defaultProjectId) {
     rows.forEach(row => update.run(currentUser.id,note,row.id,activeProjectId()));
     if (notify) for (const [userId,userRows] of [...new Map(rows.map(row=>[Number(row.user_id),[]])).keys()].map(userId=>[userId,rows.filter(row=>Number(row.user_id)===userId)])) {
       const dates=[...new Set(userRows.map(row=>row.plan_date))].sort();
-      createNotification(userId,'automation','note',userRows.at(-1).history_id || userRows.at(-1).id,'Zmiany w Twoim planie',`Zaktualizowano plan na ${dates.length} ${dates.length===1?'dzień':'dni'} (${dates[0]}${dates.length>1?` – ${dates.at(-1)}`:''}).${note?` ${note}`:''}`);
+      const dateLabel=dates.length===1?dates[0]:`${dates[0]} – ${dates.at(-1)}`;
+      createNotification(userId,'automation','note',userRows.at(-1).history_id || userRows.at(-1).id,`Zmiany w Twoim planie · ${dateLabel}`,`Zaktualizowano plan na ${dates.length} ${dates.length===1?'dzień':'dni'} (${dateLabel}).${note?` ${note}`:''}`);
     }
     return { updated:rows.length,notified_users:notify?new Set(rows.map(row=>row.user_id)).size:0 };
   }
@@ -5699,7 +5727,8 @@ function createRepository(db, defaultProjectId) {
     plannerLock(currentUser) { return plannerLock(currentUser); },
     checkoutPlanner(currentUser) { return checkoutPlanner(currentUser); },
     checkinPlanner(currentUser, force) { return checkinPlanner(currentUser, force); },
-    plannerDayHistory(userId, planDate) { return plannerDayHistory(userId, planDate); },
+    plannerDayHistory(userId, planDate, currentUser) { return plannerDayHistory(userId, planDate, currentUser); },
+    plannerHistoryEntry(id, currentUser) { return plannerHistoryEntry(id, currentUser); },
     updatePlannerInformation(input, currentUser) { return updatePlannerInformation(input, currentUser); },
     plannerSnapshots() { return plannerSnapshots(); },
     createPlannerSnapshot(input, currentUser) { return createPlannerSnapshot(input, currentUser); },

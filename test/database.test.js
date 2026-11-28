@@ -1370,6 +1370,41 @@ test('Planner preserves official cross-project work until approval and excludes 
   }
 });
 
+test('Planner reconciles undone changes, secures day history and links information notifications to the planned date', () => {
+  const temporary = temporaryDatabase();
+  const repository = openDatabase(temporary.path);
+  try {
+    const account = repository.authenticate('admin');
+    const projectId = 1; const planDate = '2031-05-03';
+    repository.withProject(projectId, () => {
+      const admin = repository.me(account.id, projectId);
+      const worker = repository.saveUser(null, { username: 'planner.history.worker', display_name: 'Planner History Worker', password: 'secret123', project_role: 'user', planner_enabled: 1 });
+      const observer = repository.saveUser(null, { username: 'planner.history.observer', display_name: 'Planner History Observer', password: 'secret123', project_role: 'user', planner_enabled: 1 });
+      repository.savePlannerDay({ user_id: worker.id, plan_date: planDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'online', shift: 'Dzień', note: 'Zmiana do cofnięcia' }] }, admin);
+      let planner = repository.planner(planDate, planDate, admin);
+      assert.equal(planner.information_queue.filter(item => item.status === 'pending').length, 1);
+      repository.savePlannerDay({ user_id: worker.id, plan_date: planDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'online', shift: 'Dzień', note: 'Druga zmiana przed cofnięciem' }] }, admin);
+      assert.equal(repository.planner(planDate, planDate, admin).information_queue.filter(item => item.status === 'pending').length, 1, 'multiple edits of one day remain one information item');
+      repository.savePlannerDay({ user_id: worker.id, plan_date: planDate, entries: [] }, admin);
+      planner = repository.planner(planDate, planDate, admin);
+      assert.equal(planner.information_queue.filter(item => item.status === 'pending').length, 0, 'undo to the pending baseline removes the information item');
+      assert.equal(repository.plannerDayHistory(worker.id, planDate, admin).length, 3, 'the audit trail still records all changes and their reversal');
+
+      repository.savePlannerDay({ user_id: worker.id, plan_date: planDate, entries: [{ activity_type: 'work', allow_without_area: 1, work_mode: 'online', shift: 'Dzień', note: 'Plan przekazany pracownikowi' }] }, admin);
+      planner = repository.planner('2031-01-01', '2031-01-02', admin);
+      const pending = planner.information_queue.filter(item => item.status === 'pending');
+      assert.equal(pending.length, 1, 'pending changes remain visible outside the currently displayed Planner range');
+      assert.equal(pending[0].plan_date, planDate);
+      repository.updatePlannerInformation({ from: planDate, to: planDate, notify_users: 1 }, admin);
+      const notification = repository.notifications(repository.me(worker.id, projectId)).find(item => item.title.startsWith('Zmiany w Twoim planie'));
+      assert.ok(notification.title.includes(planDate));
+      assert.equal(repository.plannerHistoryEntry(notification.entity_id, repository.me(worker.id, projectId)).plan_date, planDate);
+      assert.throws(() => repository.plannerDayHistory(worker.id, planDate, repository.me(observer.id, projectId)), /tylko historię własnego planu/);
+      assert.equal(repository.plannerDayHistory(worker.id, planDate, repository.me(worker.id, projectId)).length, 4);
+    });
+  } finally { repository.close(); rmSync(temporary.directory, { recursive: true, force: true }); }
+});
+
 test('V9 supports guarded duplication, comments, pushes, calendar ranges and work-time calculation', () => {
   const temporary = temporaryDatabase();
   const repository = openDatabase(temporary.path);

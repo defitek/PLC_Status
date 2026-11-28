@@ -2032,15 +2032,15 @@ input:is([type=checkbox],[type=radio]) { accent-color:var(--blue); cursor:pointe
 .planner-table .combined-plan-segment.project { background-color:var(--project-color,#2563eb); background-image:none; }
 .planner-table .plan-chip.project-work.offline-work .mode-label,
 .planner-table .combined-plan-segment.project.offline-work {
-  background-image:repeating-linear-gradient(0deg,transparent 0 3px,color-mix(in srgb,#fff 34%,transparent) 3px 4px),repeating-linear-gradient(90deg,transparent 0 3px,color-mix(in srgb,#fff 34%,transparent) 3px 4px);
+  background-image:repeating-linear-gradient(0deg,transparent 0 4px,color-mix(in srgb,#fff 18%,transparent) 4px 5px),repeating-linear-gradient(90deg,transparent 0 4px,color-mix(in srgb,#fff 18%,transparent) 4px 5px);
 }
 .planner-table .plan-chip.project-work.night-shift .mode-label,
 .planner-table .combined-plan-segment.project.night-shift {
-  background-image:repeating-linear-gradient(135deg,transparent 0 4px,color-mix(in srgb,#fff 42%,transparent) 4px 5px);
+  background-image:repeating-linear-gradient(135deg,transparent 0 5px,color-mix(in srgb,#fff 22%,transparent) 5px 6px);
 }
 .planner-table .plan-chip.project-work.offline-work.night-shift .mode-label,
 .planner-table .combined-plan-segment.project.offline-work.night-shift {
-  background-image:repeating-linear-gradient(135deg,transparent 0 4px,color-mix(in srgb,#fff 48%,transparent) 4px 5px),repeating-linear-gradient(0deg,transparent 0 3px,color-mix(in srgb,#fff 26%,transparent) 3px 4px),repeating-linear-gradient(90deg,transparent 0 3px,color-mix(in srgb,#fff 26%,transparent) 3px 4px);
+  background-image:repeating-linear-gradient(135deg,transparent 0 5px,color-mix(in srgb,#fff 24%,transparent) 5px 6px),repeating-linear-gradient(0deg,transparent 0 4px,color-mix(in srgb,#fff 14%,transparent) 4px 5px),repeating-linear-gradient(90deg,transparent 0 4px,color-mix(in srgb,#fff 14%,transparent) 4px 5px);
 }
 
 /* Planner: pełnoszeroki edytor z osobnymi wierszami pracy i transportu. */
@@ -2067,6 +2067,19 @@ input:is([type=checkbox],[type=radio]) { accent-color:var(--blue); cursor:pointe
 .planner-entry-table>footer small { flex:1 1 360px; }
 #planner-entry-add-work,#planner-entry-add-transport { margin:0; }
 .requirement-project-toggle:disabled { opacity:1; cursor:default; }
+.planner-unified .planner-table .absence-chip { background:var(--surface); }
+.planner-unified .planner-table .absence-chip>b { padding:2px 5px; color:#fff; border-radius:3px; text-align:center; }
+.planner-unified .planner-table .absence-chip.vacation>b { background:#7c3aed; }
+.planner-unified .planner-table .absence-chip.time_off>b { background:#ea580c; }
+.planner-staffing-legend { display:block; margin-top:2px; color:var(--muted); font-size:7px!important; font-weight:400; white-space:normal!important; }
+.planner-staffing-legend i { font-style:normal; font-weight:650; }
+.planner-information-preview { display:grid; grid-template-columns:repeat(auto-fit,minmax(145px,1fr)); gap:4px; max-height:150px; overflow:auto; }
+.planner-information-preview>span { display:flex; gap:6px; justify-content:space-between; padding:5px 7px; background:var(--panel-alt); border:1px solid var(--line); border-radius:5px; }
+.planner-information-preview b { min-width:0; overflow:hidden; font-size:9px; font-weight:550; text-overflow:ellipsis; white-space:nowrap; }
+.planner-information-preview small { flex:0 0 auto; color:var(--muted); font-size:8px; }
+.planner-information-preview em { color:var(--muted); font-size:8px; font-style:normal; }
+.offline-texture-key { background-image:repeating-linear-gradient(0deg,transparent 0 4px,color-mix(in srgb,currentColor 16%,transparent) 4px 5px),repeating-linear-gradient(90deg,transparent 0 4px,color-mix(in srgb,currentColor 16%,transparent) 4px 5px)!important; }
+.night-shift-key { background-image:repeating-linear-gradient(135deg,var(--blue-soft) 0 5px,color-mix(in srgb,var(--blue) 18%,var(--blue-soft)) 5px 6px)!important; }
 
 @media(max-width:760px) {
   .planner-entry-row,.planner-entry-row.transport-entry { grid-template-columns:minmax(0,1fr) 30px; }

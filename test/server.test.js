@@ -137,6 +137,8 @@ test('API protects manager data, project directory and account sessions', async 
   assert.ok(workerPlanner.cross_project_entries.every(entry => [worker.id, manager.id].includes(entry.user_id)));
   assert.equal(workerPlanner.cross_project_entries.some(entry => entry.user_id === hidden.id), false);
   assert.equal(workerPlanner.absences.some(absence => absence.user_id === hidden.id), false);
+  assert.equal((await request(baseUrl, `/api/planner/history?user_id=${worker.id}&plan_date=${planDate}`, { cookie: workerLogin.cookie })).status, 200);
+  assert.equal((await request(baseUrl, `/api/planner/history?user_id=${manager.id}&plan_date=${planDate}`, { cookie: workerLogin.cookie })).status, 403);
   for (const privatePath of ['/api/operations', '/api/automation-rules', '/api/backup']) {
     const response = await request(baseUrl, privatePath, { cookie: workerLogin.cookie });
     assert.equal(response.status, 403, privatePath);

@@ -379,7 +379,8 @@ async function handleProjectApi(request, response, url, user) {
   if (method === 'GET' && path === '/api/planner/lock') { requireRole(user, 'moderator'); return json(response, 200, repository.plannerLock(user)); }
   if (method === 'POST' && path === '/api/planner/checkout') { requireRole(user, 'moderator'); return json(response, 200, repository.checkoutPlanner(user)); }
   if (method === 'POST' && path === '/api/planner/checkin') { requireRole(user, 'moderator'); const body=await readJson(request); return json(response, 200, repository.checkinPlanner(user, Boolean(body.force))); }
-  if (method === 'GET' && path === '/api/planner/history') return json(response, 200, repository.plannerDayHistory(url.searchParams.get('user_id'), url.searchParams.get('plan_date')));
+  if (method === 'GET' && path === '/api/planner/history') return json(response, 200, repository.plannerDayHistory(url.searchParams.get('user_id'), url.searchParams.get('plan_date'), user));
+  if (method === 'GET' && path === '/api/planner/history-entry') return json(response, 200, repository.plannerHistoryEntry(url.searchParams.get('id'), user));
   if (method === 'POST' && path === '/api/planner/information') { requireRole(user, 'moderator'); return json(response, 200, repository.updatePlannerInformation(await readJson(request), user)); }
   if (method === 'GET' && path === '/api/planner/snapshots') { requireRole(user, 'moderator'); return json(response, 200, repository.plannerSnapshots()); }
   if (method === 'POST' && path === '/api/planner/snapshots') { requireRole(user, 'moderator'); return json(response, 201, repository.createPlannerSnapshot(await readJson(request), user)); }
