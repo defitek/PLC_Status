@@ -1790,7 +1790,16 @@ function createRepository(db, defaultProjectId) {
     if (modes.size > 1) throw appError('Nie można łączyć pracy ON i OFF u jednego pracownika tego samego dnia, również pomiędzy projektami');
   }
 
-  function validatePlannerAllocatedHours(userId, planDate, projectId, normalized) {
+  function plannerTimeRangeHours(startValue, endValue) {
+    const start = nullableTime(startValue); const end = nullableTime(endValue);
+    if (!start || !end) return null;
+    const [startHour, startMinute] = start.split(':').map(Number); const [endHour, endMinute] = end.split(':').map(Number);
+    let minutes = (endHour * 60 + endMinute) - (startHour * 60 + startMinute);
+    if (minutes <= 0) minutes += 24 * 60;
+    return minutes / 60;
+  }
+
+  function validatePlannerAllocatedHours(userId, planDate, projectId, normalized, dailyHoursOverride = null) {
     const targetWork=normalized.filter(entry=>entry.activityType==='work');
     const rows=all("SELECT project_id,work_mode,allocated_hours FROM planner_entries WHERE user_id=? AND plan_date=? AND project_id!=? AND transport_mode!='transport_only' ORDER BY project_id,id",userId,planDate,projectId);
     const projects=new Map();
@@ -1799,7 +1808,9 @@ function createRepository(db, defaultProjectId) {
     if(![...projects.values()].some(item=>item.values.size)) return;
     if([...projects.values()].some(item=>item.values.size>1)) throw appError('Projekt może mieć tylko jedną wartość przydzielonych godzin na osobę i dzień');
     const mode=[...projects.values()][0]?.mode||'offline';
-    const dailyHours=Number(one('SELECT value FROM system_settings WHERE key=?',mode==='online'?'planner_online_hours':'planner_offline_hours')?.value||8);
+    const savedTime=one('SELECT work_start_time,work_end_time FROM planner_time_adjustments WHERE project_id=? AND user_id=? AND plan_date=?',activeProjectId(),userId,planDate);
+    const customHours=Number.isFinite(Number(dailyHoursOverride))&&Number(dailyHoursOverride)>0?Number(dailyHoursOverride):plannerTimeRangeHours(savedTime?.work_start_time,savedTime?.work_end_time);
+    const dailyHours=customHours||Number(one('SELECT value FROM system_settings WHERE key=?',mode==='online'?'planner_online_hours':'planner_offline_hours')?.value||8);
     const explicit=[...projects.values()].filter(item=>item.values.size).map(item=>[...item.values][0]);
     const missing=projects.size-explicit.length; const total=explicit.reduce((sum,value)=>sum+value,0);
     if(total>dailyHours+0.01) throw appError(`Przydział godzin do projektów przekracza dzienny czas pracy (${dailyHours} h)`);
@@ -1892,9 +1903,10 @@ function createRepository(db, defaultProjectId) {
         const vehicle = vehicleMap.get(Number(entry.vehicle_id));
         return { ...entry, activity_type: entry.transport_mode === 'transport_only' ? 'transport' : 'work', transport_code: vehicle?.code || 'T', vehicle_registration: vehicle?.registration_number || '', project_code: currentProject?.code || '', project_short_code: currentProject?.planner_short_code || String(currentProject?.code || '').slice(0, 6), project_name: currentProject?.name || '', project_color: currentProject?.planner_color || '#2563eb', is_current_project: true, area_name: area?.name || '', area_path: area?.path_label || '', area_depth: area?.depth || 0, root_area_id: area?.root_group_id || null };
       });
-    const crossProjectVisibility = canManageRequirements
-      ? { sql: 'AND EXISTS(SELECT 1 FROM project_memberships current_pm WHERE current_pm.project_id=? AND current_pm.user_id=pe.user_id AND current_pm.active=1 AND current_pm.planner_enabled=1)', params: [activeProjectId()] }
-      : { sql: 'AND pe.user_id=?', params: [Number(currentUser?.id || 0)] };
+    const crossProjectVisibility = {
+      sql: 'AND EXISTS(SELECT 1 FROM project_memberships current_pm WHERE current_pm.project_id=? AND current_pm.user_id=pe.user_id AND current_pm.active=1 AND current_pm.planner_enabled=1)',
+      params: [activeProjectId()]
+    };
     const crossProjectEntries = all(`SELECT pe.*,u.display_name,creator.display_name created_by_name,p.code project_code,p.planner_short_code project_short_code,p.name project_name,p.planner_color project_color,
       COALESCE(pv.code,'T') transport_code,COALESCE(pv.registration_number,'') vehicle_registration,
       request.status cross_project_status,source.code cross_project_source_code
@@ -2043,13 +2055,14 @@ function createRepository(db, defaultProjectId) {
       JOIN project_memberships target_pm ON target_pm.user_id=current_pm.user_id AND target_pm.active=1 AND target_pm.planner_enabled=1
       JOIN projects target ON target.id=target_pm.project_id AND target.active=1
       WHERE current_pm.project_id=? AND current_pm.active=1 AND current_pm.planner_enabled=1
-      ORDER BY target_pm.project_id`, activeProjectId()).map(row => Number(row.id))])] : [activeProjectId()];
+      ORDER BY target_pm.project_id`, activeProjectId()).map(row => Number(row.id))])]
+      : [...new Set([activeProjectId(), ...visiblePlannerEntries.filter(entry => entry.transport_mode !== 'transport_only').map(entry => Number(entry.project_id)).filter(Boolean)])];
     const requirementProjectPlaceholders = relatedRequirementProjectIds.map(() => '?').join(',');
     const allRelatedRequirements = canManageRequirements && requirementProjectPlaceholders ? all(`SELECT pr.* FROM planner_requirements pr
       WHERE pr.project_id IN (${requirementProjectPlaceholders}) AND pr.plan_date BETWEEN ? AND ? ORDER BY pr.project_id,pr.plan_date,pr.controller_group_id,pr.work_mode`, ...relatedRequirementProjectIds, range.from, range.to) : requirements;
     const allRelatedEntries = canManageRequirements && requirementProjectPlaceholders ? all(`SELECT pe.* FROM planner_entries pe
       JOIN project_memberships pm ON pm.project_id=pe.project_id AND pm.user_id=pe.user_id AND pm.active=1 AND pm.planner_enabled=1
-      WHERE pe.project_id IN (${requirementProjectPlaceholders}) AND pe.plan_date BETWEEN ? AND ? ORDER BY pe.project_id,pe.plan_date,pe.user_id,pe.id`, ...relatedRequirementProjectIds, range.from, range.to) : entries;
+      WHERE pe.project_id IN (${requirementProjectPlaceholders}) AND pe.plan_date BETWEEN ? AND ? ORDER BY pe.project_id,pe.plan_date,pe.user_id,pe.id`, ...relatedRequirementProjectIds, range.from, range.to) : visiblePlannerEntries;
     const allRelatedProjectRequirements = canManageRequirements && requirementProjectPlaceholders ? all(`SELECT * FROM planner_project_requirements
       WHERE project_id IN (${requirementProjectPlaceholders}) AND plan_date BETWEEN ? AND ? ORDER BY project_id,plan_date,work_mode`, ...relatedRequirementProjectIds, range.from, range.to) : projectRequirements;
     const requirementProjects = relatedRequirementProjectIds.map(projectId => {
@@ -2087,7 +2100,7 @@ function createRepository(db, defaultProjectId) {
         if (!projectSummary.some(day => day.plan_date === value) && projectTotals.some(row => row.plan_date === value)) projectSummary.push({ plan_date:value,headcount:0,online_headcount:0,offline_headcount:0,transport_only:0,transport_work:0,
           online_required:Number(projectTotals.find(row => row.plan_date===value && row.work_mode==='online')?.required_count||0),offline_required:Number(projectTotals.find(row => row.plan_date===value && row.work_mode==='offline')?.required_count||0) });
       }
-      return { ...project, planner_short_code: project?.planner_short_code || String(project?.code || '').slice(0, 6), shared_user_count: sharedUserCount, can_manage: canManagePlannerProject(currentUser, projectId), areas: projectHierarchy.groups, requirements: projectRequirements, project_requirements: projectTotals, area_day_summary: roots, summary: projectSummary.sort((a,b)=>a.plan_date.localeCompare(b.plan_date)) };
+      return { ...project, planner_short_code: project?.planner_short_code || String(project?.code || '').slice(0, 6), shared_user_count: sharedUserCount, can_manage: canManagePlannerProject(currentUser, projectId), areas: canManageRequirements ? projectHierarchy.groups : [], requirements: projectRequirements, project_requirements: projectTotals, area_day_summary: canManageRequirements ? roots : [], summary: projectSummary.sort((a,b)=>a.plan_date.localeCompare(b.plan_date)) };
     }).filter(project => project.id && (Number(project.id) === Number(activeProjectId()) || (project.summary || []).some(day => Number(day.headcount) > 0)));
     let timeDetails = null;
     if (canManageRequirements) {
@@ -2168,7 +2181,11 @@ function createRepository(db, defaultProjectId) {
     const informationQueue = canManageRequirements ? all(`SELECT queue.*,u.display_name,actor.display_name informed_by_name FROM planner_information_queue queue
       JOIN users u ON u.id=queue.user_id LEFT JOIN users actor ON actor.id=queue.informed_by
       WHERE queue.project_id=? AND queue.plan_date BETWEEN ? AND ? ORDER BY queue.status,queue.plan_date,u.sort_order,queue.id`, activeProjectId(), range.from, range.to) : [];
-    return { ...range, users, entries, cross_project_entries: crossProjectEntries, proposed_entries: proposedEntries, previous_project_user_ids: previousProjectUserIds, incoming_cross_project_requests: incomingCrossProjectRequests, outgoing_cross_project_requests: outgoingCrossProjectRequests, assignment_projects: assignmentProjects, requirement_projects: requirementProjects, absences, day_comments: dayComments, history_counts: historyCounts, information_queue: informationQueue, planner_lock: plannerLock(currentUser), holidays, annotations, overlap_reviews: overlapReviews, time_adjustments: canManageRequirements ? timeAdjustments : [], work, summary, area_summary, area_day_summary, shift_summary, mode_summary, areas: hierarchy.groups, vehicles, requirements, project_requirements: projectRequirements, time_details: timeDetails, can_manage_requirements: canManageRequirements, can_manage_time: canManageRequirements };
+    const defaultWorkHours = {
+      online: Number(one("SELECT value FROM system_settings WHERE key='planner_online_hours'")?.value || 10.5),
+      offline: Number(one("SELECT value FROM system_settings WHERE key='planner_offline_hours'")?.value || 8)
+    };
+    return { ...range, users, entries, cross_project_entries: crossProjectEntries, proposed_entries: proposedEntries, previous_project_user_ids: previousProjectUserIds, incoming_cross_project_requests: incomingCrossProjectRequests, outgoing_cross_project_requests: outgoingCrossProjectRequests, assignment_projects: assignmentProjects, requirement_projects: requirementProjects, absences, day_comments: dayComments, history_counts: historyCounts, information_queue: informationQueue, planner_lock: plannerLock(currentUser), holidays, annotations, overlap_reviews: overlapReviews, time_adjustments: canManageRequirements ? timeAdjustments : [], work, summary, area_summary, area_day_summary, shift_summary, mode_summary, areas: hierarchy.groups, vehicles, requirements, project_requirements: projectRequirements, time_details: timeDetails, default_work_hours: defaultWorkHours, can_manage_requirements: canManageRequirements, can_manage_time: canManageRequirements };
   }
 
   function plannerTimeCalculation(range, users, entries, absences, holidays, adjustments = [], visibleRange = range) {
@@ -2320,7 +2337,7 @@ function createRepository(db, defaultProjectId) {
     touchPlannerLock(currentUser);
     if (absenceType || normalized.some(entry => entry.activityType === 'transport')) touchPlannerGlobalLock(userId, planDate, currentUser);
     validatePlannerWorkMode(userId, planDate, activeProjectId(), normalized);
-    validatePlannerAllocatedHours(userId, planDate, activeProjectId(), normalized);
+    validatePlannerAllocatedHours(userId, planDate, activeProjectId(), normalized, plannerTimeRangeHours(input.work_start_time,input.work_end_time));
     validatePlannerProjectLimit(userId, planDate, activeProjectId(), normalized.some(entry => entry.activityType === 'work'));
     const before = plannerDayState(userId, planDate);
     db.exec('BEGIN IMMEDIATE');
@@ -2830,7 +2847,7 @@ function createRepository(db, defaultProjectId) {
             .run(currentUser.id, targetProjectId, item.userId, item.planDate);
           db.prepare("DELETE FROM planner_entries WHERE project_id=? AND user_id=? AND plan_date=? AND transport_mode!='transport_only'").run(targetProjectId, item.userId, item.planDate);
           workEntries.forEach(entry => insert(entry));
-          if (item.replaceAll || transportEntries.length) {
+          if (transportEntries.length) {
             touchPlannerGlobalLock(item.userId,item.planDate,currentUser);
             db.prepare("DELETE FROM planner_entries WHERE user_id=? AND plan_date=? AND transport_mode='transport_only'").run(item.userId,item.planDate);
             transportEntries.forEach(entry => insert(entry,null,activeProjectId()));
@@ -2846,7 +2863,7 @@ function createRepository(db, defaultProjectId) {
         const requestId = Number(one(`SELECT id FROM planner_cross_project_requests WHERE source_project_id=? AND target_project_id=? AND user_id=? AND plan_date=?`, activeProjectId(), targetProjectId, item.userId, item.planDate).id);
         db.prepare("UPDATE planner_cross_project_requests SET status='rejected',decided_by=?,decided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE target_project_id=? AND user_id=? AND plan_date=? AND status='pending' AND id!=?")
           .run(currentUser.id, targetProjectId, item.userId, item.planDate, requestId || 0);
-        if (item.replaceAll || transportEntries.length) {
+        if (transportEntries.length) {
           touchPlannerGlobalLock(item.userId,item.planDate,currentUser);
           db.prepare("DELETE FROM planner_entries WHERE user_id=? AND plan_date=? AND transport_mode='transport_only'").run(item.userId,item.planDate);
           transportEntries.forEach(entry => insert(entry,null,activeProjectId()));

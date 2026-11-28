@@ -2024,3 +2024,52 @@ input:is([type=checkbox],[type=radio]) { accent-color:var(--blue); cursor:pointe
   .planner-entry-row>.remove-plan-entry,.planner-entry-row.transport-entry>.remove-plan-entry { grid-column:2; grid-row:1/8; align-self:stretch; }
   .planner-entry-table>footer { align-items:flex-start; flex-direction:column; }
 }
+
+/* Planner 28.11: pełne kolory również w trybie tylko do odczytu; tekstury wyłącznie na etykiecie projektu. */
+.planner-unified .planner-cell.read-only { opacity:1; }
+.planner-table .plan-chip.project-work { background-color:var(--surface); background-image:none!important; }
+.planner-table .plan-chip.project-work .mode-label,
+.planner-table .combined-plan-segment.project { background-color:var(--project-color,#2563eb); background-image:none; }
+.planner-table .plan-chip.project-work.offline-work .mode-label,
+.planner-table .combined-plan-segment.project.offline-work {
+  background-image:repeating-linear-gradient(0deg,transparent 0 3px,color-mix(in srgb,#fff 34%,transparent) 3px 4px),repeating-linear-gradient(90deg,transparent 0 3px,color-mix(in srgb,#fff 34%,transparent) 3px 4px);
+}
+.planner-table .plan-chip.project-work.night-shift .mode-label,
+.planner-table .combined-plan-segment.project.night-shift {
+  background-image:repeating-linear-gradient(135deg,transparent 0 4px,color-mix(in srgb,#fff 42%,transparent) 4px 5px);
+}
+.planner-table .plan-chip.project-work.offline-work.night-shift .mode-label,
+.planner-table .combined-plan-segment.project.offline-work.night-shift {
+  background-image:repeating-linear-gradient(135deg,transparent 0 4px,color-mix(in srgb,#fff 48%,transparent) 4px 5px),repeating-linear-gradient(0deg,transparent 0 3px,color-mix(in srgb,#fff 26%,transparent) 3px 4px),repeating-linear-gradient(90deg,transparent 0 3px,color-mix(in srgb,#fff 26%,transparent) 3px 4px);
+}
+
+/* Planner: pełnoszeroki edytor z osobnymi wierszami pracy i transportu. */
+#planner-dialog { width:min(1380px,calc(100% - 24px)); }
+.planner-entry-table { width:auto; }
+.planner-entry-head,.planner-entry-row,.planner-entry-row.transport-entry {
+  grid-template-columns:minmax(120px,.9fr) minmax(150px,1.35fr) 76px 82px 48px 48px 58px minmax(150px,1.15fr) 30px;
+}
+.planner-entry-row>[data-plan-project] { grid-column:1; }
+.planner-entry-row>.planner-area-picker { grid-column:2; }
+.planner-entry-row>[data-plan-shift] { grid-column:3; }
+.planner-entry-row>[data-plan-mode] { grid-column:4; }
+.planner-entry-row>[data-plan-allocated-hours] { grid-column:5; text-align:center; }
+.planner-entry-row>[data-plan-allocated-minutes] { grid-column:6; text-align:center; }
+.planner-entry-row>.planner-manpower-toggle { grid-column:7; }
+.planner-entry-row>[data-plan-note] { grid-column:8; }
+.planner-entry-row>.remove-plan-entry { grid-column:9; }
+.planner-entry-row.transport-entry>[data-plan-vehicle] { grid-column:1/3; }
+.planner-entry-row.transport-entry>.planner-entry-mode { grid-column:3/5; width:112px; justify-self:start; }
+.planner-entry-row.transport-entry>[data-plan-note] { grid-column:5/9; }
+.planner-entry-row.transport-entry>.remove-plan-entry { grid-column:9; }
+.planner-entry-row.transport-entry .planner-transport-duration { grid-template-columns:1fr 1fr; }
+.planner-entry-table>footer { flex-wrap:wrap; }
+.planner-entry-table>footer small { flex:1 1 360px; }
+#planner-entry-add-work,#planner-entry-add-transport { margin:0; }
+.requirement-project-toggle:disabled { opacity:1; cursor:default; }
+
+@media(max-width:760px) {
+  .planner-entry-row,.planner-entry-row.transport-entry { grid-template-columns:minmax(0,1fr) 30px; }
+  .planner-entry-row>*:not(.remove-plan-entry),.planner-entry-row.transport-entry>*:not(.remove-plan-entry) { grid-column:1; }
+  .planner-entry-row>.remove-plan-entry,.planner-entry-row.transport-entry>.remove-plan-entry { grid-column:2; grid-row:1/10; }
+}

@@ -1249,13 +1249,14 @@ test('Planner preserves official cross-project work until approval and excludes 
     assert.notEqual(sourceProject.planner_color, targetProject.planner_color);
     const planDate = '2031-04-14';
     const rejectedDate = '2031-04-15';
-    let workerId; let managerId;
+    let workerId; let managerId; let observerId;
     repository.withProject(sourceProjectId, () => {
       const admin = repository.me(account.id, sourceProjectId);
       const worker = repository.saveUser(null, { username: 'cross.project.worker', display_name: 'Cross Project Worker', password: 'secret123', project_role: 'user', planner_enabled: 1 });
       workerId = worker.id;
       const manager = repository.saveUser(null, { username: 'cross.project.manager', display_name: 'Cross Project Manager', password: 'secret123', project_role: 'moderator', planner_enabled: 1 });
       managerId = manager.id;
+      observerId = repository.saveUser(null, { username: 'cross.project.observer', display_name: 'Cross Project Observer', password: 'secret123', project_role: 'user', planner_enabled: 1 }).id;
       repository.savePlannerDay({ user_id: workerId, plan_date: planDate, entries: [{ activity_type: 'transport', duration_hours: 1.5 }] }, admin);
       const transportOnly = repository.planner(planDate, planDate, admin);
       assert.equal(transportOnly.summary[0].headcount, 0);
@@ -1311,6 +1312,13 @@ test('Planner preserves official cross-project work until approval and excludes 
       assert.equal(planner.summary.find(item => item.plan_date === planDate).online_headcount, 1, 'global headcount includes visible work from another project');
       assert.equal(planner.requirement_projects.find(project => Number(project.id) === Number(targetProject.id)).summary.find(item => item.plan_date === planDate).online_headcount, 1, 'project bar exposes its own visible headcount');
       assert.equal(planner.requirement_projects.find(project => Number(project.id) === Number(sourceProjectId)).summary.find(item => item.plan_date === planDate).headcount, 0, 'transport does not increase source project headcount');
+      const observer = repository.me(observerId, sourceProjectId);
+      const observerPlanner = repository.planner(planDate, planDate, observer);
+      assert.ok(observerPlanner.cross_project_entries.some(entry => entry.user_id === workerId && entry.project_id === targetProject.id), 'ordinary project participant sees other participants work in related projects');
+      const observerTargetSummary = observerPlanner.requirement_projects.find(project => Number(project.id) === Number(targetProject.id));
+      assert.equal(observerTargetSummary.summary.find(item => item.plan_date === planDate).online_headcount, 1, 'ordinary participant sees staffing per related project');
+      assert.deepEqual(observerTargetSummary.area_day_summary, [], 'ordinary participant does not receive area staffing details');
+      assert.deepEqual(observerTargetSummary.requirements, [], 'ordinary participant does not receive requirement comparisons');
       const sourceDayTime = planner.time_details.details.find(item => item.user_id === workerId && item.date === planDate);
       assert.equal(sourceDayTime.actual_hours, 10.5);
       assert.equal(sourceDayTime.travel_hours, 1.5);
